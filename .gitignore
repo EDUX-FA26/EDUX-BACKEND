@@ -19,6 +19,8 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+seaweedfs/s3.json
+docker-compose.yml
 
 # ============================================
 # LOGS
