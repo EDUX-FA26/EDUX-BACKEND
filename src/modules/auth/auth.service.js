@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const authRepository = require("./auth.repository");
 const { redis } = require("../../config/redis.config");
 
@@ -146,6 +147,49 @@ class AuthService {
     // 4. Thu hồi Refresh Token cũ bắt buộc login lại
     await redis.del(`refresh_token:${userId}`);
     
+    return { success: true };
+  }
+
+  async forgotPassword(email) {
+    const user = await authRepository.findUserByEmail(email);
+    // Luôn trả về thành công dù user có tồn tại hay không để tránh enumerate email
+    if (!user || !user.is_active) {
+      return { success: true };
+    }
+
+    // Sinh token ngẫu nhiên
+    const resetToken = crypto.randomBytes(32).toString("hex");
+
+    // Lưu vào Redis (TTL 15 phút)
+    await redis.set(`password_reset:${resetToken}`, user.id, {
+      EX: 900
+    });
+
+    // Theo yêu cầu của user, in mock ra console thay vì gửi email thật
+    console.log(`\n[MOCK EMAIL] Reset Token for user (${email}): ${resetToken}\n`);
+
+    return { success: true };
+  }
+
+  async resetPassword(token, newPassword) {
+    // 1. Kiểm tra token trong Redis
+    const userId = await redis.get(`password_reset:${token}`);
+    if (!userId) {
+      const error = new Error("Invalid or expired reset token");
+      error.status = 400;
+      throw error;
+    }
+
+    // 2. Hash mật khẩu mới
+    const newHash = await bcrypt.hash(newPassword, 10);
+
+    // 3. Cập nhật password
+    await authRepository.updatePassword(userId, newHash);
+
+    // 4. Xóa token reset và refresh token để bắt đăng nhập lại
+    await redis.del(`password_reset:${token}`);
+    await redis.del(`refresh_token:${userId}`);
+
     return { success: true };
   }
 

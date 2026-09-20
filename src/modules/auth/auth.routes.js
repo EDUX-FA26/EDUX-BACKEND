@@ -8,15 +8,19 @@ const {
   registerSchema, 
   loginSchema, 
   refreshTokenSchema, 
-  changePasswordSchema 
+  changePasswordSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema
 } = require("./auth.validation");
 
 router.post("/register", validate(registerSchema), authController.register);
 router.post("/login", validate(loginSchema), authController.login);
 router.post("/refresh-token", validate(refreshTokenSchema), authController.refreshToken);
 
+router.post("/forgot-password", validate(forgotPasswordSchema), authController.forgotPassword);
+router.post("/reset-password", validate(resetPasswordSchema), authController.resetPassword);
+
 router.post("/logout", authenticate, authController.logout);
-router.get("/me", authenticate, authController.getMe);
-router.put("/change-password", authenticate, validate(changePasswordSchema), authController.changePassword);
+router.patch("/change-password", authenticate, validate(changePasswordSchema), authController.changePassword);
 
 module.exports = router;

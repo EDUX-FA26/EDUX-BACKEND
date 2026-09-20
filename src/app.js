@@ -3,7 +3,7 @@ const cors = require("cors");
 
 const app = express();
 
-//const userRoutes = require("./routes/user.routes");
+const userRoutes = require("./modules/users/users.routes");
 const authRoutes = require("./modules/auth/auth.routes");
 
 
@@ -29,7 +29,7 @@ app.use(express.urlencoded({ extended: true }));
 // =========================
 
 // API routes
-//app.use("/api/users", userRoutes);
+app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 
 app.get("/health", (req, res) => {

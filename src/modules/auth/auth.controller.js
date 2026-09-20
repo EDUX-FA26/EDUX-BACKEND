@@ -64,24 +64,26 @@ class AuthController {
     }
   }
 
-  async getMe(req, res, next) {
+  async forgotPassword(req, res, next) {
     try {
-      const userId = req.user.id;
-      const user = await authRepository.findUserByIdWithProfile(userId);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "User not found",
-        });
-      }
-      
-      // Xoá password_hash nếu vô tình bị rò rỉ (mặc định truy vấn đã không chọn password_hash, nhưng clear cho chắc)
-      delete user.password_hash;
-
+      const { email } = req.body;
+      await authService.forgotPassword(email);
       res.status(200).json({
         success: true,
-        message: "User profile fetched successfully",
-        data: user,
+        message: "If your email is registered, you will receive reset instructions",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async resetPassword(req, res, next) {
+    try {
+      const { token, new_password } = req.body;
+      await authService.resetPassword(token, new_password);
+      res.status(200).json({
+        success: true,
+        message: "Password has been reset successfully",
       });
     } catch (error) {
       next(error);

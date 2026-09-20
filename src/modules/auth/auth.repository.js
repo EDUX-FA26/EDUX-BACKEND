@@ -56,6 +56,19 @@ class AuthRepository {
   }
 
   /**
+   * Tìm user bằng email (cho forgot password)
+   */
+  async findUserByEmail(email) {
+    const query = `
+      SELECT id, email, is_active
+      FROM users
+      WHERE email = $1
+    `;
+    const result = await pool.query(query, [email]);
+    return result.rows[0] || null;
+  }
+
+  /**
    * Cập nhật thời gian đăng nhập cuối
    */
   async updateLastLogin(userId) {

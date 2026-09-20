@@ -24,9 +24,20 @@ const changePasswordSchema = z.object({
   new_password: z.string().min(6, "New password must be at least 6 characters"),
 });
 
+const forgotPasswordSchema = z.object({
+  email: z.string().email("Định dạng email không hợp lệ"),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(1, "Token is required"),
+  new_password: z.string().min(6, "New password must be at least 6 characters"),
+});
+
 module.exports = {
   registerSchema,
   loginSchema,
   refreshTokenSchema,
   changePasswordSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
 };
