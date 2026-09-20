@@ -1,7 +1,7 @@
-const validate = (schema) => {
+const validate = (schema, target = 'body') => {
   return (req, res, next) => {
     try {
-      req.body = schema.parse(req.body);
+      req[target] = schema.parse(req[target]);
       next();
     } catch (error) {
       console.error("Zod Validation Error Caught:", error);

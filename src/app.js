@@ -5,6 +5,7 @@ const app = express();
 
 const userRoutes = require("./modules/users/users.routes");
 const authRoutes = require("./modules/auth/auth.routes");
+const classesRoutes = require("./modules/classes/classes.routes");
 
 
 
@@ -31,6 +32,7 @@ app.use(express.urlencoded({ extended: true }));
 // API routes
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/classes", classesRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
