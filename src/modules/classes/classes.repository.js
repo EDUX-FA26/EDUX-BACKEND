@@ -5,6 +5,8 @@ const ClassesRepository = {
    * Lấy danh sách lớp học có phân trang và filter
    */
   async findClasses({ page, limit, search, include_inactive, role, userId }) {
+    page = Number(page) || 1;
+    limit = Number(limit) || 10;
     const offset = (page - 1) * limit;
     const params = [];
     let query = `

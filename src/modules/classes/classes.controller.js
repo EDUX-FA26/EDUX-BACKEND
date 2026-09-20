@@ -9,7 +9,7 @@ const ClassesController = {
       // Assuming a generic validate middleware was used, or we do it here if missing. 
       // We will assume route handles validation and data is in req.query.
       
-      const { page, limit, search, include_inactive } = req.query;
+      const { page = 1, limit = 10, search, include_inactive } = req.query;
       
       const result = await ClassesService.getClasses({ page, limit, search, include_inactive }, req.user);
       
