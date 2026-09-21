@@ -130,11 +130,12 @@ const SubmissionRepository = {
     const subQuery = `
       SELECT 
         s.*, 
-        u.full_name as student_name,
+        up.full_name as student_name,
         u.email as student_email,
         a.title as assignment_title
       FROM submissions s
       JOIN users u ON s.student_id = u.id
+      LEFT JOIN user_profiles up ON u.id = up.user_id
       JOIN assignments a ON s.assignment_id = a.id
       WHERE s.id = $1
     `;
@@ -206,12 +207,13 @@ const SubmissionRepository = {
     const query = `
       SELECT 
         s.*,
-        u.full_name as student_name,
+        up.full_name as student_name,
         u.email as student_email,
         sv.files as latest_files,
         sv.note as latest_note
       FROM submissions s
       JOIN users u ON s.student_id = u.id
+      LEFT JOIN user_profiles up ON u.id = up.user_id
       LEFT JOIN submission_versions sv ON s.id = sv.submission_id AND sv.is_latest = TRUE
       ${whereString}
       ORDER BY s.submitted_at DESC
