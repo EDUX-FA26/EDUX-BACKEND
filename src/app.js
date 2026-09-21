@@ -10,10 +10,9 @@ const notificationsRoutes = require("./modules/notifications/notifications.route
 const dashboardRoutes = require("./modules/dashboards/dashboard.routes");
 const flashcardsRoutes = require("./modules/flashcards/flashcards.routes");
 const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRouter } = require("./modules/class-materials/classMaterial.routes");
+const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
 const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
-
-
 
 // =========================
 // Middleware
@@ -48,6 +47,8 @@ app.use("/api/flashcards", flashcardsRoutes);
 app.use("/api/classes/:classId/materials", classMaterialsRouter);
 app.use("/api/materials/classes", materialClassesRouter);
 
+// B. Assignments & Assignment Materials
+app.use("/api/assignments", assignmentsRoutes);
 // B. Assignment Materials
 app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
 

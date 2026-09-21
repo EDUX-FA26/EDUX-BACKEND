@@ -59,14 +59,14 @@ const AssignmentMaterialRepository = {
   /**
    * Tạo mới tài liệu assignment
    */
-  async create({ assignment_id, description, file_name, file_key, file_type, file_size, uploaded_by }) {
+  async create({ assignment_id, description, file_name, file_key, file_type, file_size, uploaded_by }, client = pool) {
     const query = `
       INSERT INTO assignment_materials
         (assignment_id, description, file_name, file_key, file_type, file_size, uploaded_by)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *
     `;
-    const { rows } = await pool.query(query, [
+    const { rows } = await client.query(query, [
       assignment_id, description, file_name, file_key, file_type, file_size, uploaded_by
     ]);
     return rows[0];
