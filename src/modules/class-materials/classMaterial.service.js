@@ -7,7 +7,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const ClassMaterialRepository = require('./classMaterial.repository');
-const crypto = require('crypto');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Kiểm tra quyền truy cập vào lớp học.
@@ -67,7 +67,7 @@ const ClassMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `class-materials/${classId}/${crypto.randomUUID()}_${file.originalname}`;
+    const fileKey = `class-materials/${classId}/${uuidv4()}_${file.originalname}`;
 
     await s3.send(
       new PutObjectCommand({
