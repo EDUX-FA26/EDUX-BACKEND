@@ -6,6 +6,9 @@ const app = express();
 const userRoutes = require("./modules/users/users.routes");
 const authRoutes = require("./modules/auth/auth.routes");
 const classesRoutes = require("./modules/classes/classes.routes");
+const notificationsRoutes = require("./modules/notifications/notifications.routes");
+const dashboardRoutes = require("./modules/dashboards/dashboard.routes");
+const flashcardsRoutes = require("./modules/flashcards/flashcards.routes");
 
 
 
@@ -33,6 +36,9 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/classes", classesRoutes);
+app.use("/api/notifications", notificationsRoutes);
+app.use("/api/dashboards", dashboardRoutes);
+app.use("/api/flashcards", flashcardsRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
