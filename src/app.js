@@ -13,6 +13,7 @@ const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRo
 const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
 const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
+const submissionsRoutes = require("./modules/submissions/submission.routes");
 
 // =========================
 // Middleware
@@ -55,6 +56,9 @@ app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
 // Module 10 — Grades
 app.use("/api/grades", gradesRouter);
 app.use("/api/gradebooks", gradebooksRouter);
+
+// Module 9 - Submissions
+app.use("/api/submissions", submissionsRoutes);
 
 app.get("/health", (req, res) => {
   res.json({

@@ -328,6 +328,7 @@ async function runSeed() {
         console.log("✅ Đã tạo Assignment 1 - Draft Specs.");
       }
 
+      let assign2Id;
       const checkAssign2 = await client.query(`SELECT id FROM assignments WHERE class_id = $1 AND title = 'Assignment 2 - Final Capstone'`, [classId]);
       if (checkAssign2.rowCount === 0) {
         const assign2Query = `
@@ -339,10 +340,42 @@ async function runSeed() {
             $1, $2, $3, $4, NOW() + INTERVAL '14 days', 10, 30, 
             TRUE, 2, 10, 
             'published', NOW(), $5
-          )
+          ) RETURNING id
         `;
-        await client.query(assign2Query, [crypto.randomUUID(), classId, 'Assignment 2 - Final Capstone', 'Capstone project with AI requirements', lecturerId]);
+        const a2Result = await client.query(assign2Query, [crypto.randomUUID(), classId, 'Assignment 2 - Final Capstone', 'Capstone project with AI requirements', lecturerId]);
+        assign2Id = a2Result.rows[0].id;
         console.log("✅ Đã tạo Assignment 2 - Final Capstone.");
+      } else {
+        assign2Id = checkAssign2.rows[0].id;
+      }
+
+      // 11. Seed Submission cho Assignment 2
+      const checkSubmission = await client.query(`SELECT id FROM submissions WHERE assignment_id = $1 AND student_id = $2`, [assign2Id, student1Id]);
+      if (checkSubmission.rowCount === 0) {
+        const insertSubQuery = `
+          INSERT INTO submissions (uuid, assignment_id, student_id, latest_version_no, status, submitted_at, last_submitted_at)
+          VALUES ($1, $2, $3, 1, 'submitted', NOW(), NOW())
+          RETURNING id
+        `;
+        const subResult = await client.query(insertSubQuery, [crypto.randomUUID(), assign2Id, student1Id]);
+        const submissionId = subResult.rows[0].id;
+
+        const insertVersionQuery = `
+          INSERT INTO submission_versions (submission_id, assignment_id, student_id, version_no, files, note, is_latest, submitted_at)
+          VALUES ($1, $2, $3, 1, $4, 'First submission note', TRUE, NOW())
+        `;
+        const sampleFiles = JSON.stringify([
+          {
+            id: crypto.randomUUID(),
+            name: 'capstone_report.pdf',
+            key: `submissions/${assign2Id}/${student1Id}/capstone_report.pdf`,
+            type: 'application/pdf',
+            size: 102400,
+            uploaded_at: new Date().toISOString()
+          }
+        ]);
+        await client.query(insertVersionQuery, [submissionId, assign2Id, student1Id, sampleFiles]);
+        console.log("✅ Đã tạo Submission mẫu cho Student 1 trong Assignment 2.");
       }
     });
 
