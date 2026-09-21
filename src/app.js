@@ -6,6 +6,9 @@ const app = express();
 const userRoutes = require("./modules/users/users.routes");
 const authRoutes = require("./modules/auth/auth.routes");
 const classesRoutes = require("./modules/classes/classes.routes");
+const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRouter } = require("./modules/class-materials/classMaterial.routes");
+const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
+const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
 
 
 
@@ -33,6 +36,18 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/classes", classesRoutes);
+
+// Module 7 — Learning Materials
+// A. Class Materials
+app.use("/api/classes/:classId/materials", classMaterialsRouter);
+app.use("/api/materials/classes", materialClassesRouter);
+
+// B. Assignment Materials
+app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
+
+// Module 10 — Grades
+app.use("/api/grades", gradesRouter);
+app.use("/api/gradebooks", gradebooksRouter);
 
 app.get("/health", (req, res) => {
   res.json({
