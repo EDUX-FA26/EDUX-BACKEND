@@ -11,10 +11,7 @@ const dashboardRoutes = require("./modules/dashboards/dashboard.routes");
 const flashcardsRoutes = require("./modules/flashcards/flashcards.routes");
 const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRouter } = require("./modules/class-materials/classMaterial.routes");
 const assignmentsRoutes = require("./modules/assignments/assignment.routes");
-<<<<<<< HEAD
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
-=======
->>>>>>> 1a17eda (feat(assignment): add assignment module)
 const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
 
 // =========================
@@ -52,10 +49,7 @@ app.use("/api/materials/classes", materialClassesRouter);
 
 // B. Assignments & Assignment Materials
 app.use("/api/assignments", assignmentsRoutes);
-<<<<<<< HEAD
 app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
-=======
->>>>>>> 1a17eda (feat(assignment): add assignment module)
 
 // Module 10 — Grades
 app.use("/api/grades", gradesRouter);
