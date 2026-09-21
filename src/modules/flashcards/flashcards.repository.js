@@ -106,7 +106,7 @@ const FlashcardsRepository = {
     if (!deckResult.rows[0]) return null;
 
     const cardsResult = await pool.query(
-      `SELECT id, question, answer, explanation, difficulty, position, is_active, created_at, updated_at
+      `SELECT id, type, question, options, answer, explanation, difficulty, position, is_active, created_at, updated_at
        FROM flashcards
        WHERE deck_id = $1 AND is_active = true
        ORDER BY position ASC, created_at ASC`,
@@ -200,12 +200,21 @@ const FlashcardsRepository = {
   /**
    * Tạo card mới
    */
-  async createCard({ deck_id, question, answer, explanation, difficulty, position }) {
+  async createCard({ deck_id, type, question, options, answer, explanation, difficulty, position }) {
     const { rows } = await pool.query(
-      `INSERT INTO flashcards (deck_id, question, answer, explanation, difficulty, position)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [deck_id, question, answer, explanation || '', difficulty || 'medium', position]
+      [
+        deck_id,
+        type || 'essay',
+        question,
+        JSON.stringify(options || []),
+        answer,
+        explanation || '',
+        difficulty || 'medium',
+        position,
+      ]
     );
     return rows[0];
   },
@@ -218,11 +227,11 @@ const FlashcardsRepository = {
     const values = [];
     let idx = 1;
 
-    const allowed = ['question', 'answer', 'explanation', 'difficulty', 'position', 'is_active'];
+    const allowed = ['type', 'question', 'options', 'answer', 'explanation', 'difficulty', 'position', 'is_active'];
     for (const key of allowed) {
       if (data[key] !== undefined) {
         fields.push(`${key} = $${idx++}`);
-        values.push(data[key]);
+        values.push(key === 'options' ? JSON.stringify(data[key]) : data[key]);
       }
     }
     if (fields.length === 0) return null;
