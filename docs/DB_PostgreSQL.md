@@ -214,3 +214,258 @@ reflection_text TEXT NOT NULL,
 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 13. AI Evaluations Table (Đánh giá mức độ minh bạch AI)
+CREATE TABLE IF NOT EXISTS ai_evaluations (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+submission_version_id UUID UNIQUE NOT NULL REFERENCES submission_versions(id) ON DELETE CASCADE,
+assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+pattern VARCHAR(100) NOT NULL CHECK (pattern IN ('critical_engagement', 'collaborative_usage', 'passive_usage', 'high_dependency')),
+risk_level VARCHAR(50) DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+transparency_score NUMERIC(5,2) DEFAULT 0 CHECK (transparency_score BETWEEN 0 AND 100),
+prompt_quality_score NUMERIC(5,2) DEFAULT 0 CHECK (prompt_quality_score BETWEEN 0 AND 100),
+reflection_quality_score NUMERIC(5,2) DEFAULT 0 CHECK (reflection_quality_score BETWEEN 0 AND 100),
+critical_thinking_score NUMERIC(5,2) DEFAULT 0 CHECK (critical_thinking_score BETWEEN 0 AND 100),
+ai_dependency_score NUMERIC(5,2) DEFAULT 0 CHECK (ai_dependency_score BETWEEN 0 AND 100),
+summary TEXT DEFAULT '',
+evaluated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 14. Submission Flags Table (Cờ cảnh báo hành vi AI bất thường - Đã loại bỏ subject_head)
+CREATE TABLE IF NOT EXISTS submission_flags (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+submission_version_id UUID REFERENCES submission_versions(id) ON DELETE SET NULL,
+assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+flag_type VARCHAR(100) NOT NULL CHECK (flag_type IN ('low_quality_prompt', 'high_ai_dependency', 'weak_reflection', 'all_responses_accepted', 'missing_ai_interactions', 'suspicious_declaration', 'manual')),
+description TEXT DEFAULT '',
+flagged_by VARCHAR(50) NOT NULL CHECK (flagged_by IN ('system', 'lecturer')),
+flagged_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+suspect_level VARCHAR(50) DEFAULT 'low' CHECK (suspect_level IN ('low', 'medium', 'high')),
+status VARCHAR(50) DEFAULT 'open' CHECK (status IN ('open', 'reviewed', 'resolved', 'dismissed')),
+resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+resolved_at TIMESTAMP WITH TIME ZONE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 15. Submission Reviews Table (Giảng viên review bài nộp)
+CREATE TABLE IF NOT EXISTS submission_reviews (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+submission_id UUID NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+submission_version_id UUID REFERENCES submission_versions(id) ON DELETE SET NULL,
+lecturer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+review_status VARCHAR(50) DEFAULT 'pending' CHECK (review_status IN ('pending', 'reviewed', 'needs_revision', 'flagged')),
+comment TEXT DEFAULT '',
+reviewed_at TIMESTAMP WITH TIME ZONE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 16. Grades Table (Điểm số học thuật)
+CREATE TABLE IF NOT EXISTS grades (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+submission_id UUID UNIQUE NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
+assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+score NUMERIC(5,2) NOT NULL CHECK (score >= 0),
+max_score NUMERIC(5,2) DEFAULT 10 CHECK (max_score >= 0),
+feedback TEXT DEFAULT '',
+graded_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+graded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+CONSTRAINT uk_grade_assignment_student UNIQUE (assignment_id, student_id)
+);
+
+-- 17. Final Results Table (Điểm tổng kết môn)
+CREATE TABLE IF NOT EXISTS final_results (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+semester_id UUID NOT NULL REFERENCES semesters(id) ON DELETE CASCADE,
+subject_id UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+final_score NUMERIC(5,2) NOT NULL CHECK (final_score BETWEEN 0 AND 10),
+classification VARCHAR(50) NOT NULL CHECK (classification IN ('poor', 'average', 'good', 'very_good', 'excellent')),
+calculated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+CONSTRAINT uk_final_result_student_class UNIQUE (student_id, class_id)
+);
+
+-- 18. Notifications Table (Thông báo hệ thống)
+CREATE TABLE IF NOT EXISTS notifications (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+title VARCHAR(255) NOT NULL,
+message TEXT NOT NULL,
+type VARCHAR(100) NOT NULL CHECK (type IN ('assignment_created', 'assignment_updated', 'deadline_reminder', 'submission_success', 'submission_reviewed', 'flag_created', 'grade_published', 'final_result_released', 'chat_message', 'system_announcement')),
+related_entity_type VARCHAR(100),
+related_entity_id UUID,
+is_read BOOLEAN DEFAULT FALSE,
+read_at TIMESTAMP WITH TIME ZONE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 19. Email Logs Table (Lịch sử gửi email)
+CREATE TABLE IF NOT EXISTS email_logs (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+to_email VARCHAR(255) NOT NULL,
+subject VARCHAR(255) NOT NULL,
+body TEXT NOT NULL,
+type VARCHAR(100) NOT NULL CHECK (type IN ('assignment_created', 'deadline_reminder', 'submission_success', 'grade_published', 'password_reset', 'system')),
+status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+error_message TEXT DEFAULT '',
+sent_at TIMESTAMP WITH TIME ZONE,
+related_entity_type VARCHAR(100),
+related_entity_id UUID,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 20. Chat Rooms Table (Phòng chat realtime - Đã loại bỏ các type liên quan subject_head)
+CREATE TABLE IF NOT EXISTS chat_rooms (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+type VARCHAR(100) NOT NULL CHECK (type IN ('student_lecturer', 'student_student', 'group')),
+name VARCHAR(255) DEFAULT '',
+class_id UUID REFERENCES classes(id) ON DELETE SET NULL,
+subject_id UUID REFERENCES subjects(id) ON DELETE SET NULL,
+semester_id UUID REFERENCES semesters(id) ON DELETE SET NULL,
+created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+last_message_at TIMESTAMP WITH TIME ZONE,
+is_active BOOLEAN DEFAULT TRUE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 21. Chat Members Table (Thành viên phòng chat - Đã loại bỏ subject_head)
+CREATE TABLE IF NOT EXISTS chat_members (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+role_at_room VARCHAR(50) NOT NULL CHECK (role_at_room IN ('student', 'lecturer', 'admin')),
+joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+last_read_at TIMESTAMP WITH TIME ZONE,
+is_muted BOOLEAN DEFAULT FALSE,
+is_active BOOLEAN DEFAULT TRUE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+CONSTRAINT uk_chat_room_user UNIQUE (room_id, user_id)
+);
+
+-- 22. Chat Messages Table (Tin nhắn chat)
+CREATE TABLE IF NOT EXISTS chat_messages (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+room_id UUID NOT NULL REFERENCES chat_rooms(id) ON DELETE CASCADE,
+sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+message_type VARCHAR(50) DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'file')),
+content TEXT DEFAULT '',
+attachments JSONB DEFAULT '[]'::jsonb,
+is_deleted BOOLEAN DEFAULT FALSE,
+deleted_at TIMESTAMP WITH TIME ZONE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 23. Refresh Tokens Table (Xác thực JWT Refresh Token)
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+token_hash VARCHAR(255) UNIQUE NOT NULL,
+expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+revoked_at TIMESTAMP WITH TIME ZONE,
+user_agent TEXT DEFAULT '',
+ip_address VARCHAR(100) DEFAULT '',
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 24. Password Reset Tokens Table (Token đổi mật khẩu)
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+token_hash VARCHAR(255) UNIQUE NOT NULL,
+expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+used_at TIMESTAMP WITH TIME ZONE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 25. News Table (Bảng tin / Thông báo chung)
+CREATE TABLE IF NOT EXISTS news (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+uuid VARCHAR(255) UNIQUE NOT NULL,
+title VARCHAR(255) NOT NULL,
+content TEXT NOT NULL,
+cover_image_url TEXT,
+author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+target_role VARCHAR(50) DEFAULT 'LECTURER_ONLY' CHECK (target_role IN ('LECTURER_ONLY', 'ALL')),
+is_published BOOLEAN DEFAULT TRUE,
+published_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 26. Tests Table (Định nghĩa bài kiểm tra / Quiz)
+CREATE TABLE IF NOT EXISTS tests (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+uuid VARCHAR(255) UNIQUE NOT NULL,
+parent_test_id UUID REFERENCES tests(id) ON DELETE SET NULL,
+class_id UUID REFERENCES classes(id) ON DELETE CASCADE,
+subject_id UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+title VARCHAR(255) NOT NULL,
+description TEXT DEFAULT '',
+duration_minutes INT NOT NULL CHECK (duration_minutes > 0),
+show_results_to_students BOOLEAN DEFAULT TRUE,
+is_active BOOLEAN DEFAULT TRUE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 27. Test Questions Table
+CREATE TABLE IF NOT EXISTS test_questions (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+type VARCHAR(50) NOT NULL CHECK (type IN ('MULTIPLE_CHOICE', 'CHECKBOX', 'TRUE_FALSE')),
+content TEXT NOT NULL,
+options JSONB DEFAULT '[]'::jsonb,
+correct_answers JSONB DEFAULT '[]'::jsonb,
+points NUMERIC(5,2) DEFAULT 1 CHECK (points >= 0),
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 28. Test Attempts Table (Lượt làm bài của sinh viên)
+CREATE TABLE IF NOT EXISTS test_attempts (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+submitted_at TIMESTAMP WITH TIME ZONE,
+is_completed BOOLEAN DEFAULT FALSE,
+score NUMERIC(5,2) DEFAULT 0,
+max_score NUMERIC(5,2) DEFAULT 0,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 29. Test Attempt Answers Table
+CREATE TABLE IF NOT EXISTS test_attempt_answers (
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+attempt_id UUID NOT NULL REFERENCES test_attempts(id) ON DELETE CASCADE,
+question_id UUID NOT NULL REFERENCES test_questions(id) ON DELETE CASCADE,
+selected_options JSONB DEFAULT '[]'::jsonb,
+is_correct BOOLEAN DEFAULT FALSE,
+created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+CONSTRAINT uk_attempt_question UNIQUE (attempt_id, question_id)
+);
