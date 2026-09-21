@@ -21,3 +21,7 @@ All routes require a Bearer token. Semesters and Subjects require the `admin` ro
 Search `type` may be `assignment`, `material`, `class`, or `flashcard`. Omit `type` to search all four. Flashcard search returns decks. Results are restricted to classes, assignments, materials, and decks the caller may access. Student assignment results include only published assignments.
 
 Semester create requires `code`, `name`, `academic_year`, `start_date`, and `end_date` (ISO timestamps). Subject create requires `code` and `name`; optional fields are `description`, `department_id`, and `credits`.
+
+## Verification
+
+Run `npm run test:modules` for route and validation tests. To include all 13 endpoint integration checks, run it with `TEST_DB_PASSWORD` set to the password of the local PostgreSQL container on port 5433. The integration test creates an isolated schema in `myapp_db`, verifies CRUD, status changes and role-filtered search, then removes that schema.
