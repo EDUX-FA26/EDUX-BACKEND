@@ -91,6 +91,38 @@ async function runSeed() {
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT uk_class_student UNIQUE (class_id, student_id)
         );
+
+        CREATE TABLE IF NOT EXISTS assignments (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            uuid VARCHAR(255) UNIQUE,
+            class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            session_id UUID,
+            title VARCHAR(255) NOT NULL,
+            description TEXT,
+            instructions TEXT,
+            deadline TIMESTAMP WITH TIME ZONE NOT NULL,
+            max_score DECIMAL(5,2) DEFAULT 10,
+            weight DECIMAL(5,2) DEFAULT 0,
+            ai_declaration_required BOOLEAN DEFAULT TRUE,
+            min_ai_interactions INT DEFAULT 1,
+            max_ai_interactions INT DEFAULT 20,
+            allow_late_submission BOOLEAN DEFAULT TRUE,
+            publish_status VARCHAR(50) DEFAULT 'draft' CHECK (publish_status IN ('draft', 'published', 'closed')),
+            published_at TIMESTAMP WITH TIME ZONE,
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS assignment_materials (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+            file_key TEXT NOT NULL,
+            file_name VARCHAR(255) NOT NULL,
+            file_size INT DEFAULT 0,
+            file_type VARCHAR(100),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
       `);
       console.log("✅ Database schema đã sẵn sàng.");
 
@@ -278,6 +310,36 @@ async function runSeed() {
       `;
       await client.query(memberQuery, [classId, student1Id]);
       console.log("✅ Đã gán Student 1 vào lớp SE1801.");
+
+      // 10. Seed Assignments cho lớp SE1801
+      const crypto = require("crypto");
+      
+      const checkAssign1 = await client.query(`SELECT id FROM assignments WHERE class_id = $1 AND title = 'Assignment 1 - Draft Specs'`, [classId]);
+      if (checkAssign1.rowCount === 0) {
+        const assign1Query = `
+          INSERT INTO assignments (uuid, class_id, title, description, deadline, max_score, weight, publish_status, created_by)
+          VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days', 10, 10, 'draft', $5)
+        `;
+        await client.query(assign1Query, [crypto.randomUUID(), classId, 'Assignment 1 - Draft Specs', 'This is a draft assignment', lecturerId]);
+        console.log("✅ Đã tạo Assignment 1 - Draft Specs.");
+      }
+
+      const checkAssign2 = await client.query(`SELECT id FROM assignments WHERE class_id = $1 AND title = 'Assignment 2 - Final Capstone'`, [classId]);
+      if (checkAssign2.rowCount === 0) {
+        const assign2Query = `
+          INSERT INTO assignments (
+            uuid, class_id, title, description, deadline, max_score, weight, 
+            ai_declaration_required, min_ai_interactions, max_ai_interactions, 
+            publish_status, published_at, created_by
+          ) VALUES (
+            $1, $2, $3, $4, NOW() + INTERVAL '14 days', 10, 30, 
+            TRUE, 2, 10, 
+            'published', NOW(), $5
+          )
+        `;
+        await client.query(assign2Query, [crypto.randomUUID(), classId, 'Assignment 2 - Final Capstone', 'Capstone project with AI requirements', lecturerId]);
+        console.log("✅ Đã tạo Assignment 2 - Final Capstone.");
+      }
     });
 
     console.log("🎉 Seed dữ liệu thành công!");

@@ -7,7 +7,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const AssignmentMaterialRepository = require('./assignmentMaterial.repository');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 /**
  * Lấy thông tin assignment + class, kiểm tra quyền truy cập.
@@ -77,7 +77,7 @@ const AssignmentMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${file.originalname}`;
+    const fileKey = `assignment-materials/${assignmentId}/${crypto.randomUUID()}_${file.originalname}`;
 
     await s3.send(
       new PutObjectCommand({

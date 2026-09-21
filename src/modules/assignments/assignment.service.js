@@ -1,4 +1,4 @@
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool, withTransaction } = require('../../config/db.config');
@@ -44,14 +44,14 @@ const AssignmentService = {
   async createAssignment(data, files = [], user) {
     await this.verifyClassAccess(data.class_id, user);
 
-    const assignmentId = uuidv4();
-    const assignmentUuid = uuidv4(); // Unique varchar uuid
+    const assignmentId = crypto.randomUUID();
+    const assignmentUuid = crypto.randomUUID(); // Unique varchar uuid
     const uploadedMaterials = [];
 
     // 1. Upload files to S3 first
     if (files.length > 0) {
       for (const file of files) {
-        const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${file.originalname}`;
+        const fileKey = `assignment-materials/${assignmentId}/${crypto.randomUUID()}_${file.originalname}`;
         
         await s3.send(
           new PutObjectCommand({

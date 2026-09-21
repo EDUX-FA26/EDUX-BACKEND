@@ -112,11 +112,12 @@ const AssignmentRepository = {
       SELECT 
         a.*, 
         c.class_code, 
-        c.subject_name,
         c.lecturer_id,
+        s.name as subject_name,
         u.full_name as creator_name
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
+      JOIN subjects s ON c.subject_id = s.id
       JOIN user_profiles u ON a.created_by = u.user_id
       WHERE a.id = $1
     `;
@@ -190,9 +191,10 @@ const AssignmentRepository = {
       SELECT 
         a.*,
         c.class_code,
-        c.subject_name
+        s.name as subject_name
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
+      JOIN subjects s ON c.subject_id = s.id
       ${whereString}
       ORDER BY a.created_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
