@@ -91,6 +91,8 @@ async function runSeed() {
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT uk_class_student UNIQUE (class_id, student_id)
         );
+        DROP TABLE IF EXISTS assignment_materials CASCADE;
+        DROP TABLE IF EXISTS assignments CASCADE;
 
         CREATE TABLE IF NOT EXISTS assignments (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -121,6 +123,8 @@ async function runSeed() {
             file_name VARCHAR(255) NOT NULL,
             file_size INT DEFAULT 0,
             file_type VARCHAR(100),
+            description TEXT,
+            uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
       `);
