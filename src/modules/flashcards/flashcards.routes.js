@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 
-const ctrl  = require('./flashcards.controller');
-const { authenticate }  = require('../../middlewares/auth.middleware');
-const { validate }      = require('../../middlewares/validate.middleware');
+const ctrl = require('./flashcards.controller');
+const { authenticate } = require('../../middlewares/auth.middleware');
+const { validate } = require('../../middlewares/validate.middleware');
 const {
   createDeck,
   updateDeck,

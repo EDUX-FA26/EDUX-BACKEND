@@ -35,7 +35,7 @@ const FlashcardsController = {
       res.status(200).json({ success: true, data: deck });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -55,7 +55,7 @@ const FlashcardsController = {
       res.status(200).json({ success: true, data: deck });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -66,7 +66,7 @@ const FlashcardsController = {
       res.status(200).json({ success: true, message: 'Deck deleted successfully' });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -81,7 +81,7 @@ const FlashcardsController = {
       res.status(201).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -92,7 +92,7 @@ const FlashcardsController = {
       res.status(200).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -103,7 +103,7 @@ const FlashcardsController = {
       res.status(200).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -114,7 +114,7 @@ const FlashcardsController = {
       res.status(200).json({ success: true, message: 'Card deleted successfully' });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -129,7 +129,7 @@ const FlashcardsController = {
       });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },

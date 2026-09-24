@@ -347,7 +347,7 @@ async function runSeed() {
 
       // 10. Seed Assignments cho lớp SE1801
       const crypto = require("crypto");
-      
+
       const checkAssign1 = await client.query(`SELECT id FROM assignments WHERE class_id = $1 AND title = 'Assignment 1 - Draft Specs'`, [classId]);
       if (checkAssign1.rowCount === 0) {
         const assign1Query = `
