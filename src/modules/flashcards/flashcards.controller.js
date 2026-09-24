@@ -84,6 +84,17 @@ const FlashcardsController = {
     }
   },
 
+  async completeDeck(req, res, next) {
+    try {
+      const result = await FlashcardsService.completeDeck(req.params.deckId, req.user);
+      res.status(200).json({ success: true, message: 'Deck completed', data: result });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      next(error);
+    }
+  },
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────

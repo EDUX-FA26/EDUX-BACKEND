@@ -1,4 +1,5 @@
 const FlashcardsRepository = require('./flashcards.repository');
+const LearningStreakService = require('../learning/learningStreak.service');
 
 class FlashcardsService {
 
@@ -74,6 +75,17 @@ class FlashcardsService {
     }
 
     return FlashcardsRepository.publishDeck(deckId);
+  }
+
+  /**
+   * Ghi nhận user hoàn thành deck → cập nhật learning streak theo môn học.
+   * Delegate hoàn toàn sang LearningStreakService để giữ logic streak ở 1 nơi.
+   */
+  async completeDeck(deckId, user) {
+    return LearningStreakService.recordFlashcardDeckCompletion({
+      userId: user.id,
+      deckId,
+    });
   }
 
   // ─────────────────────────────────────────────
