@@ -14,6 +14,10 @@ const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
 const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
 const submissionsRoutes = require("./modules/submissions/submission.routes");
+const semestersRoutes = require("./modules/semesters/semesters.routes");
+const subjectsRoutes = require("./modules/subjects/subjects.routes");
+const searchRoutes = require("./modules/search/search.routes");
+const learningRoutes = require("./modules/learning/learning.routes");
 
 // =========================
 // Middleware
@@ -56,9 +60,15 @@ app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
 // Module 10 — Grades
 app.use("/api/grades", gradesRouter);
 app.use("/api/gradebooks", gradebooksRouter);
+app.use("/api/semesters", semestersRoutes);
+app.use("/api/subjects", subjectsRoutes);
+app.use("/api/search", searchRoutes);
 
 // Module 9 - Submissions
 app.use("/api/submissions", submissionsRoutes);
+
+// Learning Activity & Learning Streak
+app.use("/api/learning", learningRoutes);
 
 app.get("/health", (req, res) => {
   res.json({

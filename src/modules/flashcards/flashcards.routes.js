@@ -49,6 +49,9 @@ router.delete('/decks/:deckId', authorizeWrite, ctrl.deleteDeck);
 // POST   /api/flashcards/decks/:deckId/cards — UC66 Tạo card
 router.post('/decks/:deckId/cards', authorizeWrite, validate(createCard), ctrl.createCard);
 
+// POST   /api/flashcards/decks/:deckId/complete — Hoàn thành flashcard deck (tăng streak)
+router.post('/decks/:deckId/complete', ctrl.completeDeck);
+
 // ─────────────────────────────────────────────
 // CARD routes
 // ─────────────────────────────────────────────
