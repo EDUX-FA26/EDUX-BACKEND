@@ -18,6 +18,7 @@ const semestersRoutes = require("./modules/semesters/semesters.routes");
 const subjectsRoutes = require("./modules/subjects/subjects.routes");
 const searchRoutes = require("./modules/search/search.routes");
 const learningRoutes = require("./modules/learning/learning.routes");
+const adminRoutes = require("./modules/admin/admin.routes");
 
 // =========================
 // Middleware
@@ -69,6 +70,8 @@ app.use("/api/submissions", submissionsRoutes);
 
 // Learning Activity & Learning Streak
 app.use("/api/learning", learningRoutes);
+// Admin Module
+app.use("/api/admin", adminRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
