@@ -44,3 +44,4 @@ CREATE TABLE IF NOT EXISTS subject_streak_activities (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_streak_activities_user_date ON subject_streak_activities(user_id, activity_date);
 CREATE INDEX IF NOT EXISTS idx_streak_activities_user_subject_date ON subject_streak_activities(user_id, subject_id, activity_date);
+

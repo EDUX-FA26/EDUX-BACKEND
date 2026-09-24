@@ -57,7 +57,7 @@ function emitStreakUpdated(userId, payload) {
 function formatDate(val) {
   if (!val) return null;
   if (val instanceof Date) {
-    return val.toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: VIETNAM_TIMEZONE }).format(val);
   }
   return String(val).slice(0, 10);
 }
@@ -187,6 +187,14 @@ const LearningStreakService = {
       const streakRow = await LearningRepository.lockStreakForUpdate(userId, subjectId, client);
 
       // Thêm activity vào subject_streak_activities (idempotent nhờ UNIQUE constraint)
+      const alreadyStudiedToday =
+        await LearningRepository.hasActivityToday(
+          userId,
+          subjectId,
+          today,
+          client
+        );
+
       const activity = await LearningRepository.insertActivity(
         userId,
         subjectId,
@@ -210,9 +218,7 @@ const LearningStreakService = {
       let longestStreak = streakRow.longest_streak || 0;
       const lastDateStr = formatDate(streakRow.last_activity_date);
 
-      if (!activity) {
-        // Đã hoàn thành 1 deck thuộc môn này trong ngày hôm nay rồi!
-        // Không cộng dồn streak thêm lần nữa.
+      if (alreadyStudiedToday || !activity) {
         socketPayload = {
           subjectId,
           currentStreak,
@@ -221,6 +227,7 @@ const LearningStreakService = {
           recoveryUsed,
           recoveryRemaining: Math.max(0, 3 - recoveryUsed),
         };
+
         return;
       }
 

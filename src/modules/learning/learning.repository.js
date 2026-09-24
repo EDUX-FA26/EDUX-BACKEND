@@ -76,16 +76,49 @@ const LearningRepository = {
     return rows[0];
   },
 
+
   /**
-   * Thêm bản ghi activity (idempotent nhờ UNIQUE constraint)
-   */
+ * Kiểm tra user đã có activity của môn trong ngày chưa
+ * Dùng để đảm bảo streak chỉ tăng 1 lần / subject / day
+ */
+
+  async hasActivityToday(userId, subjectId, activityDate, client = null) {
+    const q = client || pool;
+
+    const query = `
+    SELECT 1
+    FROM subject_streak_activities
+    WHERE user_id = $1
+      AND subject_id = $2
+      AND activity_date = $3
+    LIMIT 1
+  `;
+
+    const { rows } = await q.query(query, [
+      userId,
+      subjectId,
+      activityDate,
+    ]);
+
+    return rows.length > 0;
+  },
+
+  /**
+ * Thêm bản ghi activity (idempotent nhờ UNIQUE constraint)
+ */
+
   async insertActivity(userId, subjectId, deckId, activityDate, activityType, client) {
     const q = client || pool;
     const query = `
       INSERT INTO subject_streak_activities
         (user_id, subject_id, flashcard_deck_id, activity_date, activity_type)
       VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (user_id, subject_id, activity_date) DO NOTHING
+      ON CONFLICT (
+    user_id,
+    subject_id,
+    flashcard_deck_id,
+    activity_date
+) DO NOTHING
       RETURNING *
     `;
     const { rows } = await q.query(query, [
@@ -193,7 +226,10 @@ const LearningRepository = {
    */
   async findHeatmap(userId, { subjectId = null, startDate = null, endDate = null, year = null } = {}) {
     const params = [userId];
-    const where = [`ssa.user_id = $1`];
+    const where = [
+      `ssa.user_id = $1`,
+      `ssa.activity_type = 'flashcard_deck_completed'`,
+    ];
 
     if (subjectId) {
       params.push(subjectId);
@@ -222,7 +258,7 @@ const LearningRepository = {
         TO_CHAR(ssa.activity_date, 'YYYY-MM-DD') AS date,
         ssa.subject_id AS "subjectId",
         s.name AS "subjectName",
-        COUNT(*)::int AS count,
+        COUNT(DISTINCT ssa.flashcard_deck_id)::int AS count,
         true AS completed
       FROM subject_streak_activities ssa
       JOIN subjects s ON ssa.subject_id = s.id
@@ -271,3 +307,4 @@ const LearningRepository = {
 };
 
 module.exports = LearningRepository;
+
