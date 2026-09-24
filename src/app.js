@@ -14,6 +14,7 @@ const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
 const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
 const submissionsRoutes = require("./modules/submissions/submission.routes");
+const adminRoutes = require("./modules/admin/admin.routes");
 
 // =========================
 // Middleware
@@ -59,6 +60,9 @@ app.use("/api/gradebooks", gradebooksRouter);
 
 // Module 9 - Submissions
 app.use("/api/submissions", submissionsRoutes);
+
+// Admin Module
+app.use("/api/admin", adminRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
