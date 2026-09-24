@@ -71,6 +71,19 @@ const FlashcardsController = {
     }
   },
 
+  async publishDeck(req, res, next) {
+    try {
+      const deck = await FlashcardsService.publishDeck(req.params.deckId, req.user);
+      res.status(200).json({ success: true, message: 'Deck published successfully', data: deck });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND')   return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN')         return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'DECK_EMPTY')        return res.status(422).json({ success: false, message: 'Cannot publish an empty deck. Add at least one card first.' });
+      if (error.message === 'ALREADY_PUBLISHED') return res.status(409).json({ success: false, message: 'Deck is already published' });
+      next(error);
+    }
+  },
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────
@@ -114,6 +127,40 @@ const FlashcardsController = {
       res.status(200).json({ success: true, message: 'Card deleted successfully' });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
+      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      next(error);
+    }
+  },
+
+  // ─────────────────────────────────────────────
+  // REVIEW
+  // ─────────────────────────────────────────────
+
+  async submitReview(req, res, next) {
+    try {
+      const review = await FlashcardsService.submitReview(
+        req.params.cardId,
+        req.body.result,
+        req.user
+      );
+      res.status(201).json({ success: true, data: review });
+    } catch (error) {
+      if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      next(error);
+    }
+  },
+
+  async getDeckReviewStats(req, res, next) {
+    try {
+      const stats = await FlashcardsService.getDeckReviewStats(
+        req.params.deckId,
+        req.user
+      );
+      res.status(200).json({ success: true, data: stats });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
       if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }

@@ -167,6 +167,21 @@ const FlashcardsRepository = {
     return rows[0];
   },
 
+  /**
+   * Publish deck: đặt is_public = true
+   */
+  async publishDeck(id) {
+    const { rows } = await pool.query(
+      `UPDATE flashcard_decks
+       SET is_public = true, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, title, description, is_public, is_active,
+                 class_id, subject_id, created_by, created_at, updated_at`,
+      [id]
+    );
+    return rows[0];
+  },
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────
@@ -255,6 +270,83 @@ const FlashcardsRepository = {
       [id]
     );
     return rows[0];
+  },
+
+  // ─────────────────────────────────────────────
+  // REVIEW
+  // ─────────────────────────────────────────────
+
+  /**
+   * Ghi một lần review vào bảng flashcard_reviews
+   */
+  async createReview({ user_id, flashcard_id, result }) {
+    const { rows } = await pool.query(
+      `INSERT INTO flashcard_reviews (user_id, flashcard_id, result)
+       VALUES ($1, $2, $3)
+       RETURNING id, user_id, flashcard_id, result, reviewed_at`,
+      [user_id, flashcard_id, result]
+    );
+    return rows[0];
+  },
+
+  /**
+   * Thống kê tiến độ học của user trên toàn bộ cards trong 1 deck:
+   * - Tổng số card active trong deck
+   * - Số card đã được review ít nhất 1 lần
+   * - Tổng lượt review, số correct, số incorrect
+   * - Kết quả gần nhất (last_result) của từng card
+   */
+  async getDeckReviewStats(deckId, userId) {
+    // Tổng card active
+    const { rows: [{ total_cards }] } = await pool.query(
+      `SELECT COUNT(*)::int AS total_cards
+       FROM flashcards
+       WHERE deck_id = $1 AND is_active = true`,
+      [deckId]
+    );
+
+    // Tổng hợp review của user trong deck
+    const { rows: [agg] } = await pool.query(
+      `SELECT
+         COUNT(*)::int                                              AS total_reviews,
+         COUNT(*) FILTER (WHERE fr.result = 'correct')::int        AS correct,
+         COUNT(*) FILTER (WHERE fr.result = 'incorrect')::int      AS incorrect,
+         COUNT(DISTINCT fr.flashcard_id)::int                      AS reviewed_cards
+       FROM flashcard_reviews fr
+       JOIN flashcards fc ON fr.flashcard_id = fc.id
+       WHERE fc.deck_id = $1
+         AND fr.user_id = $2`,
+      [deckId, userId]
+    );
+
+    // Kết quả gần nhất của từng card (dùng cho UI hiển thị đúng/sai trên từng thẻ)
+    const { rows: cardResults } = await pool.query(
+      `SELECT DISTINCT ON (fr.flashcard_id)
+              fr.flashcard_id AS card_id,
+              fr.result       AS last_result,
+              fr.reviewed_at  AS last_reviewed_at
+       FROM flashcard_reviews fr
+       JOIN flashcards fc ON fr.flashcard_id = fc.id
+       WHERE fc.deck_id = $1
+         AND fr.user_id = $2
+       ORDER BY fr.flashcard_id, fr.reviewed_at DESC`,
+      [deckId, userId]
+    );
+
+    const accuracy = agg.total_reviews > 0
+      ? Math.round((agg.correct / agg.total_reviews) * 100)
+      : 0;
+
+    return {
+      total_cards,
+      reviewed_cards:   agg.reviewed_cards,
+      unreviewed_cards: total_cards - agg.reviewed_cards,
+      total_reviews:    agg.total_reviews,
+      correct:          agg.correct,
+      incorrect:        agg.incorrect,
+      accuracy,            // % chính xác (correct / total_reviews)
+      card_results:     cardResults,
+    };
   },
 };
 

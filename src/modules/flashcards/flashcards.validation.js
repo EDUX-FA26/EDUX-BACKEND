@@ -64,6 +64,15 @@ const flashcardsSchemas = {
     position:    z.number().int().min(0).optional(),
     is_active:   z.boolean().optional(),
   }),
+
+  // ── REVIEW ────────────────────────────────────────────────
+
+  // POST /api/flashcards/cards/:cardId/reviews
+  submitReview: z.object({
+    result: z.enum(['correct', 'incorrect'], {
+      errorMap: () => ({ message: "result phải là 'correct' hoặc 'incorrect'" }),
+    }),
+  }),
 };
 
 module.exports = flashcardsSchemas;

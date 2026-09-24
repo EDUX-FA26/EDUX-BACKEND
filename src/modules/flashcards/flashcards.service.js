@@ -54,6 +54,28 @@ class FlashcardsService {
     return FlashcardsRepository.deleteDeck(deckId);
   }
 
+  async publishDeck(deckId, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+
+    // Chỉ người tạo hoặc admin mới có quyền publish
+    if (user.role !== 'admin' && deck.created_by !== user.id) {
+      throw new Error('FORBIDDEN');
+    }
+
+    // Không thể publish deck rỗng (chưa có card nào)
+    if (!deck.cards || deck.cards.length === 0) {
+      throw new Error('DECK_EMPTY');
+    }
+
+    // Deck đã được publish rồi
+    if (deck.is_public) {
+      throw new Error('ALREADY_PUBLISHED');
+    }
+
+    return FlashcardsRepository.publishDeck(deckId);
+  }
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────
@@ -114,6 +136,43 @@ class FlashcardsService {
     }
 
     return FlashcardsRepository.deleteCard(cardId);
+  }
+
+  // ─────────────────────────────────────────────
+  // REVIEW
+  // ─────────────────────────────────────────────
+
+  /**
+   * Ghi kết quả học 1 card.
+   * - Mọi user đã đăng nhập đều có thể review (kể cả lecturer, admin).
+   * - Card phải tồn tại và deck chứa nó phải có quyền xem.
+   */
+  async submitReview(cardId, result, user) {
+    const card = await FlashcardsRepository.findCardById(cardId);
+    if (!card || !card.is_active) throw new Error('CARD_NOT_FOUND');
+
+    // Kiểm tra quyền xem deck chứa card
+    const deck = await FlashcardsRepository.findDeckById(card.deck_id);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+    this._checkViewAccess(deck, user);
+
+    return FlashcardsRepository.createReview({
+      user_id:      user.id,
+      flashcard_id: cardId,
+      result,
+    });
+  }
+
+  /**
+   * Lấy thống kê tiến độ học của user trên 1 deck.
+   * - User chỉ xem được stats của deck mình có quyền truy cập.
+   */
+  async getDeckReviewStats(deckId, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+    this._checkViewAccess(deck, user);
+
+    return FlashcardsRepository.getDeckReviewStats(deckId, user.id);
   }
 
   // ─────────────────────────────────────────────

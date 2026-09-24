@@ -10,6 +10,7 @@ const {
   getDecksQuery,
   createCard,
   updateCard,
+  submitReview,
 } = require('./flashcards.validation');
 
 // Toàn bộ routes yêu cầu đăng nhập
@@ -36,6 +37,9 @@ router.post('/decks', authorizeWrite, validate(createDeck), ctrl.createDeck);
 // GET  /api/flashcards/decks/:deckId  — Chi tiết deck + toàn bộ cards
 router.get('/decks/:deckId', ctrl.getDeckById);
 
+// PUT  /api/flashcards/decks/:deckId/publish — Publish deck (set is_public = true)
+router.put('/decks/:deckId/publish', authorizeWrite, ctrl.publishDeck);
+
 // put /api/flashcards/decks/:deckId — Sửa deck
 router.put('/decks/:deckId', authorizeWrite, validate(updateDeck), ctrl.updateDeck);
 
@@ -49,13 +53,23 @@ router.post('/decks/:deckId/cards', authorizeWrite, validate(createCard), ctrl.c
 // CARD routes
 // ─────────────────────────────────────────────
 
-// GET    /api/flashcards/:id                 — UC67 Xem card
-router.get('/:id', ctrl.getCardById);
+// GET    /api/flashcards/decks/:deckId/cards               — UC67 Xem card
+router.get('/decks/:deckId/cards', ctrl.getCardById);
 
 // put  /api/flashcards/:id                 — UC68 Sửa card
-router.put('/:id', authorizeWrite, validate(updateCard), ctrl.updateCard);
+router.put('/decks/:deckId/cards', authorizeWrite, validate(updateCard), ctrl.updateCard);
 
 // DELETE /api/flashcards/:id                 — UC69 Xóa card
-router.delete('/:id', authorizeWrite, ctrl.deleteCard);
+router.delete('/decks/:deckId/cards', authorizeWrite, ctrl.deleteCard);
+
+// ─────────────────────────────────────────────
+// REVIEW routes
+// ─────────────────────────────────────────────
+
+// POST /api/flashcards/cards/:cardId/reviews       — Ghi kết quả học 1 card (correct/incorrect)
+router.post('/cards/:cardId/reviews', validate(submitReview), ctrl.submitReview);
+
+// GET  /api/flashcards/decks/:deckId/reviews/stats — Thống kê tiến độ học của user trên deck
+router.get('/decks/:deckId/reviews/stats', ctrl.getDeckReviewStats);
 
 module.exports = router;
