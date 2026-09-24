@@ -16,6 +16,7 @@ const authenticate = (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = {
       id: decoded.userId,
+      userId: decoded.userId,
       role: decoded.role,
     };
     next();

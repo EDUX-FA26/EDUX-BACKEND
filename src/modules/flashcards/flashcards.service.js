@@ -54,6 +54,15 @@ class FlashcardsService {
     return FlashcardsRepository.deleteDeck(deckId);
   }
 
+  async completeDeck(deckId, user) {
+    const deck = await this.getDeckById(deckId, user);
+    const LearningStreakService = require('../learning/learningStreak.service');
+    return LearningStreakService.recordFlashcardDeckCompletion({
+      userId: user.userId || user.id,
+      deckId: deck.id,
+    });
+  }
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────
