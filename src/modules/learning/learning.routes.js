@@ -41,3 +41,4 @@ router.get('/heatmap', validate(getHeatmapQuery, 'query'), ctrl.getHeatmap);
 router.post('/activity', validate(postActivity), ctrl.recordActivity);
 
 module.exports = router;
+
