@@ -306,12 +306,17 @@ const FlashcardsRepository = {
     );
 
     // Tổng hợp review của user trong deck
+    // good + easy → "correct";  again + hard → "incorrect" (backward compat)
     const { rows: [agg] } = await pool.query(
       `SELECT
-         COUNT(*)::int                                              AS total_reviews,
-         COUNT(*) FILTER (WHERE fr.result = 'correct')::int        AS correct,
-         COUNT(*) FILTER (WHERE fr.result = 'incorrect')::int      AS incorrect,
-         COUNT(DISTINCT fr.flashcard_id)::int                      AS reviewed_cards
+         COUNT(*)::int                                                            AS total_reviews,
+         COUNT(*) FILTER (WHERE fr.result IN ('good', 'easy'))::int              AS correct,
+         COUNT(*) FILTER (WHERE fr.result IN ('again', 'hard'))::int             AS incorrect,
+         COUNT(*) FILTER (WHERE fr.result = 'again')::int                        AS again,
+         COUNT(*) FILTER (WHERE fr.result = 'hard')::int                         AS hard,
+         COUNT(*) FILTER (WHERE fr.result = 'good')::int                         AS good,
+         COUNT(*) FILTER (WHERE fr.result = 'easy')::int                         AS easy,
+         COUNT(DISTINCT fr.flashcard_id)::int                                    AS reviewed_cards
        FROM flashcard_reviews fr
        JOIN flashcards fc ON fr.flashcard_id = fc.id
        WHERE fc.deck_id = $1
@@ -319,7 +324,7 @@ const FlashcardsRepository = {
       [deckId, userId]
     );
 
-    // Kết quả gần nhất của từng card (dùng cho UI hiển thị đúng/sai trên từng thẻ)
+    // Kết quả gần nhất của từng card
     const { rows: cardResults } = await pool.query(
       `SELECT DISTINCT ON (fr.flashcard_id)
               fr.flashcard_id AS card_id,
@@ -342,11 +347,95 @@ const FlashcardsRepository = {
       reviewed_cards:   agg.reviewed_cards,
       unreviewed_cards: total_cards - agg.reviewed_cards,
       total_reviews:    agg.total_reviews,
-      correct:          agg.correct,
-      incorrect:        agg.incorrect,
-      accuracy,            // % chính xác (correct / total_reviews)
+      correct:          agg.correct,     // good + easy
+      incorrect:        agg.incorrect,   // again + hard
+      again:            agg.again,
+      hard:             agg.hard,
+      good:             agg.good,
+      easy:             agg.easy,
+      accuracy,
       card_results:     cardResults,
     };
+  },
+
+  // ─────────────────────────────────────────────
+  // SCHEDULE (SRS)
+  // ─────────────────────────────────────────────
+
+  /**
+   * Lấy schedule hiện tại của 1 card cho 1 user
+   */
+  async findSchedule(userId, flashcardId) {
+    const { rows } = await pool.query(
+      `SELECT * FROM flashcard_schedules
+       WHERE user_id = $1 AND flashcard_id = $2`,
+      [userId, flashcardId]
+    );
+    return rows[0] || null;
+  },
+
+  /**
+   * Tạo mới hoặc cập nhật schedule sau mỗi review
+   */
+  async upsertSchedule({ user_id, flashcard_id, ease_factor, interval_days, repetitions, due_date }) {
+    const { rows } = await pool.query(
+      `INSERT INTO flashcard_schedules
+         (user_id, flashcard_id, ease_factor, interval_days, repetitions, due_date, last_reviewed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (user_id, flashcard_id) DO UPDATE SET
+         ease_factor      = EXCLUDED.ease_factor,
+         interval_days    = EXCLUDED.interval_days,
+         repetitions      = EXCLUDED.repetitions,
+         due_date         = EXCLUDED.due_date,
+         last_reviewed_at = NOW()
+       RETURNING *`,
+      [user_id, flashcard_id, ease_factor, interval_days, repetitions, due_date]
+    );
+    return rows[0];
+  },
+
+  /**
+   * Lấy danh sách cards của deck được sắp xếp theo ưu tiên SRS:
+   *  1. due   — đến hạn hoặc quá hạn (những card đã học sai, cần ôn lại)
+   *  2. new   — chưa từng học
+   *  3. not_due — đã học đúng, chưa đến ngày review tiếp
+   */
+  async getStudyQueue(deckId, userId) {
+    const { rows } = await pool.query(
+      `SELECT
+         fc.id,
+         fc.type,
+         fc.question,
+         fc.options,
+         fc.answer,
+         fc.explanation,
+         fc.difficulty,
+         fc.position,
+         fs.ease_factor,
+         fs.interval_days,
+         fs.repetitions,
+         fs.due_date,
+         fs.last_reviewed_at,
+         CASE
+           WHEN fs.id IS NULL              THEN 'new'
+           WHEN fs.due_date <= CURRENT_DATE THEN 'due'
+           ELSE                                 'not_due'
+         END AS study_status
+       FROM flashcards fc
+       LEFT JOIN flashcard_schedules fs
+         ON fc.id = fs.flashcard_id AND fs.user_id = $2
+       WHERE fc.deck_id = $1 AND fc.is_active = true
+       ORDER BY
+         CASE
+           WHEN fs.id IS NULL               THEN 2
+           WHEN fs.due_date <= CURRENT_DATE  THEN 1
+           ELSE                                   3
+         END ASC,
+         fs.due_date  ASC NULLS LAST,
+         fc.position  ASC`,
+      [deckId, userId]
+    );
+    return rows;
   },
 };
 

@@ -69,8 +69,11 @@ router.delete('/decks/:deckId/cards', authorizeWrite, ctrl.deleteCard);
 // REVIEW routes
 // ─────────────────────────────────────────────
 
-// POST /api/flashcards/cards/:cardId/reviews       — Ghi kết quả học 1 card (correct/incorrect)
+// POST /api/flashcards/cards/:cardId/reviews       — Ghi kết quả học 1 card (again/hard/good/easy)
 router.post('/cards/:cardId/reviews', validate(submitReview), ctrl.submitReview);
+
+// GET  /api/flashcards/decks/:deckId/study         — Lấy hàng đợi học theo SRS (due → new → not_due)
+router.get('/decks/:deckId/study', ctrl.getStudyQueue);
 
 // GET  /api/flashcards/decks/:deckId/reviews/stats — Thống kê tiến độ học của user trên deck
 router.get('/decks/:deckId/reviews/stats', ctrl.getDeckReviewStats);

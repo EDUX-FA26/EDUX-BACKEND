@@ -69,8 +69,8 @@ const flashcardsSchemas = {
 
   // POST /api/flashcards/cards/:cardId/reviews
   submitReview: z.object({
-    result: z.enum(['correct', 'incorrect'], {
-      errorMap: () => ({ message: "result phải là 'correct' hoặc 'incorrect'" }),
+    result: z.enum(['again', 'hard', 'good', 'easy'], {
+      errorMap: () => ({ message: "result phải là 'again', 'hard', 'good' hoặc 'easy'" }),
     }),
   }),
 };

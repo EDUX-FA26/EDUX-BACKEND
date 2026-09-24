@@ -155,9 +155,8 @@ class FlashcardsService {
   // ─────────────────────────────────────────────
 
   /**
-   * Ghi kết quả học 1 card.
-   * - Mọi user đã đăng nhập đều có thể review (kể cả lecturer, admin).
-   * - Card phải tồn tại và deck chứa nó phải có quyền xem.
+   * Ghi kết quả học 1 card + cập nhật SRS schedule.
+   * grade: 'again' | 'hard' | 'good' | 'easy'
    */
   async submitReview(cardId, result, user) {
     const card = await FlashcardsRepository.findCardById(cardId);
@@ -168,16 +167,27 @@ class FlashcardsService {
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
     this._checkViewAccess(deck, user);
 
-    return FlashcardsRepository.createReview({
+    // Ghi lịch sử review
+    const review = await FlashcardsRepository.createReview({
       user_id:      user.id,
       flashcard_id: cardId,
       result,
     });
+
+    // Tính toán và lưu SRS schedule tiếp theo
+    const currentSchedule = await FlashcardsRepository.findSchedule(user.id, cardId);
+    const nextSchedule    = this._computeNextSchedule(currentSchedule, result);
+    const schedule        = await FlashcardsRepository.upsertSchedule({
+      user_id:      user.id,
+      flashcard_id: cardId,
+      ...nextSchedule,
+    });
+
+    return { review, schedule };
   }
 
   /**
    * Lấy thống kê tiến độ học của user trên 1 deck.
-   * - User chỉ xem được stats của deck mình có quyền truy cập.
    */
   async getDeckReviewStats(deckId, user) {
     const deck = await FlashcardsRepository.findDeckById(deckId);
@@ -187,9 +197,97 @@ class FlashcardsService {
     return FlashcardsRepository.getDeckReviewStats(deckId, user.id);
   }
 
+  /**
+   * Lấy hàng đợi học theo SRS:
+   * due → new → not_due
+   */
+  async getStudyQueue(deckId, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+    this._checkViewAccess(deck, user);
+
+    const cards = await FlashcardsRepository.getStudyQueue(deckId, user.id);
+
+    // Thống kê nhanh cho UI
+    const stats = cards.reduce(
+      (acc, c) => { acc[c.study_status]++; return acc; },
+      { due: 0, new: 0, not_due: 0 }
+    );
+
+    return {
+      deck_id: deckId,
+      cards,
+      stats: { total: cards.length, ...stats },
+    };
+  }
+
   // ─────────────────────────────────────────────
   // PRIVATE HELPERS
   // ─────────────────────────────────────────────
+
+  /**
+   * Thuật toán SM-2 đơn giản hóa.
+   * Input  : current schedule (null nếu card chưa từng học), grade của user
+   * Output : { ease_factor, interval_days, repetitions, due_date }
+   *
+   * Grade mapping:
+   *  again → reset (interval=1, reps=0, EF-=0.20)
+   *  hard  → interval ×1.2, EF-=0.15
+   *  good  → interval ×EF (standard SM-2)
+   *  easy  → interval ×EF×1.3, EF+=0.15
+   */
+  _computeNextSchedule(current, grade) {
+    let ef       = parseFloat(current?.ease_factor   ?? 2.5);
+    let interval = parseInt(current?.interval_days   ?? 0,  10);
+    let reps     = parseInt(current?.repetitions     ?? 0,  10);
+
+    let newInterval, newReps, newEf;
+
+    switch (grade) {
+      case 'again':
+        newInterval = 1;
+        newReps     = 0;
+        newEf       = Math.max(1.3, ef - 0.20);
+        break;
+
+      case 'hard':
+        newInterval = interval > 0 ? Math.max(1, Math.round(interval * 1.2)) : 1;
+        newReps     = reps + 1;
+        newEf       = Math.max(1.3, ef - 0.15);
+        break;
+
+      case 'good':
+        if      (reps === 0) newInterval = 1;
+        else if (reps === 1) newInterval = 6;
+        else                 newInterval = Math.max(1, Math.round(interval * ef));
+        newReps = reps + 1;
+        newEf   = ef;                          // giữ nguyên EF
+        break;
+
+      case 'easy':
+        if      (reps === 0) newInterval = 4;
+        else if (reps === 1) newInterval = 8;
+        else                 newInterval = Math.max(1, Math.round(interval * ef * 1.3));
+        newReps = reps + 1;
+        newEf   = Math.min(2.5, ef + 0.15);   // cấp tại 2.5
+        break;
+
+      default:
+        newInterval = 1; newReps = 0; newEf = ef;
+    }
+
+    // Tính ngày đến hạn tiếp theo (UTC)
+    const due = new Date();
+    due.setUTCDate(due.getUTCDate() + newInterval);
+    const dueDate = due.toISOString().slice(0, 10);
+
+    return {
+      ease_factor:   parseFloat(newEf.toFixed(2)),
+      interval_days: newInterval,
+      repetitions:   newReps,
+      due_date:      dueDate,
+    };
+  }
 
   /**
    * Kiểm tra quyền xem deck:
