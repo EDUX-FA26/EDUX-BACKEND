@@ -160,6 +160,22 @@ const AdminRepository = {
     const result = await pool.query(query);
     return result.rows;
   },
+
+  /**
+   * Lấy danh sách ID user theo target (phục vụ broadcast notification)
+   */
+  async findUserIdsByTarget(target) {
+    let query = `SELECT id FROM users WHERE is_active = true`;
+    const params = [];
+
+    if (target === "student" || target === "lecturer") {
+      query += ` AND role = $1`;
+      params.push(target);
+    }
+
+    const result = await pool.query(query, params);
+    return result.rows.map(row => row.id);
+  },
 };
 
 module.exports = AdminRepository;

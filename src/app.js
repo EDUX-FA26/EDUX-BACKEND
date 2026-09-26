@@ -19,6 +19,8 @@ const subjectsRoutes = require("./modules/subjects/subjects.routes");
 const searchRoutes = require("./modules/search/search.routes");
 const learningRoutes = require("./modules/learning/learning.routes");
 const adminRoutes = require("./modules/admin/admin.routes");
+const reportsRoutes = require("./modules/reports/reports.routes");
+const communicationsRoutes = require("./modules/communications/communications.routes");
 
 // =========================
 // Middleware
@@ -72,6 +74,10 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/learning", learningRoutes);
 // Admin Module
 app.use("/api/admin", adminRoutes);
+// Reports Module
+app.use("/api/reports", reportsRoutes);
+// Communications Module
+app.use("/api/communications", communicationsRoutes);
 
 app.get("/health", (req, res) => {
   res.json({

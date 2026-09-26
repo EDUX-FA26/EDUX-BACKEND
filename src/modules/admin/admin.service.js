@@ -1,6 +1,8 @@
 const bcrypt = require("bcryptjs");
 const adminRepository = require("./admin.repository");
 const authRepository = require("../auth/auth.repository");
+const notificationsRepository = require("../notifications/notifications.repository");
+const { getIO } = require("../../config/socket.config");
 
 const AdminService = {
   /**
@@ -107,6 +109,45 @@ const AdminService = {
    */
   async getAllUsers() {
     return await adminRepository.getAllUsers();
+  },
+
+  /**
+   * UC 90 — Broadcast Notification
+   */
+  async broadcastNotification(data) {
+    const { title, message, target } = data;
+
+    // 1. Lấy danh sách user IDs theo target
+    const userIds = await adminRepository.findUserIdsByTarget(target);
+    if (userIds.length === 0) return { success: true, count: 0 };
+
+    // 2. Format notifications for bulk insert
+    const notifications = userIds.map(userId => ({
+      userId,
+      title,
+      message,
+      type: "system_announcement",
+      related_entity_type: "admin_broadcast",
+      related_entity_id: null
+    }));
+
+    // 3. Bulk insert vào database
+    const createdNotifications = await notificationsRepository.bulkCreate(notifications);
+
+    // 4. Emit realtime event via Socket.IO
+    const io = getIO();
+    if (io) {
+      if (target === "all") {
+        io.emit("new_notification", { title, message, type: "system_announcement" });
+      } else {
+        // Emit tới từng user trong room của họ (mỗi user join room `user_${id}`)
+        userIds.forEach(userId => {
+          io.to(`user_${userId}`).emit("new_notification", { title, message, type: "system_announcement" });
+        });
+      }
+    }
+
+    return { success: true, count: createdNotifications.length };
   },
 };
 

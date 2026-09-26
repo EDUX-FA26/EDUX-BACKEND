@@ -5,7 +5,7 @@ const adminController = require("./admin.controller");
 const { authenticate } = require("../../middlewares/auth.middleware");
 const { authorize } = require("../../middlewares/role.middleware");
 const { validate } = require("../../middlewares/validate.middleware");
-const { createUserSchema, updateUserSchema } = require("./admin.validation");
+const { createUserSchema, updateUserSchema, broadcastNotificationSchema } = require("./admin.validation");
 
 // Tất cả routes admin đều phải xác thực và có role admin
 router.use(authenticate, authorize(["admin"]));
@@ -24,5 +24,8 @@ router.patch("/users/:id/suspend", adminController.suspendUser);
 
 // UC 89 — Kích hoạt lại tài khoản
 router.patch("/users/:id/activate", adminController.activateUser);
+
+// UC 90 — Broadcast Notification
+router.post("/notifications/broadcast", validate(broadcastNotificationSchema), adminController.broadcastNotification);
 
 module.exports = router;

@@ -100,6 +100,23 @@ const AdminController = {
       next(error);
     }
   },
+
+  /**
+   * UC 90 — POST /api/admin/notifications/broadcast
+   * Gửi thông báo đến toàn hệ thống hoặc theo role
+   */
+  async broadcastNotification(req, res, next) {
+    try {
+      const result = await adminService.broadcastNotification(req.body);
+      res.status(200).json({
+        success: true,
+        message: `Đã gửi thông báo thành công đến ${result.count} người dùng.`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
 
 module.exports = AdminController;
