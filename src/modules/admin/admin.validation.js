@@ -24,7 +24,16 @@ const updateUserSchema = z.object({
   department_id: z.string().uuid("ID khoa không hợp lệ").optional().nullable(),
 });
 
+const broadcastNotificationSchema = z.object({
+  title: z.string().min(1, "Tiêu đề không được để trống"),
+  message: z.string().min(1, "Nội dung không được để trống"),
+  target: z.enum(["all", "student", "lecturer"], {
+    errorMap: () => ({ message: "Target không hợp lệ. Chỉ chấp nhận: all, student, lecturer" }),
+  }),
+});
+
 module.exports = {
   createUserSchema,
   updateUserSchema,
+  broadcastNotificationSchema,
 };
