@@ -23,7 +23,7 @@ The system supports:
 - Lecturer review, grading, gradebook, final result, and classification.
 - Notifications and email logs.
 - Realtime chat between allowed academic users.
-- Reports and analytics for Lecturer, Subject Head, and Admin.
+- Reports and analytics for Lecturer, ., and Admin.
 
 The system does **not** perform:
 
@@ -319,9 +319,9 @@ Create request:
 
 | Method | Endpoint               | Role                                   | Description                 |
 | ------ | ---------------------- | -------------------------------------- | --------------------------- |
-| GET    | `/subjects`            | Student, Lecturer, Subject Head, Admin | List subjects               |
+| GET    | `/subjects`            | Student, Lecturer, ., Admin | List subjects               |
 | POST   | `/subjects`            | Admin                                  | Create subject              |
-| GET    | `/subjects/:id`        | Student, Lecturer, Subject Head, Admin | Get subject detail          |
+| GET    | `/subjects/:id`        | Student, Lecturer, ., Admin | Get subject detail          |
 | PUT    | `/subjects/:id`        | Admin                                  | Update subject              |
 | PATCH  | `/subjects/:id/status` | Admin                                  | Activate/deactivate subject |
 
@@ -348,9 +348,9 @@ Subject example:
 
 | Method | Endpoint                | Role                                   | Description                            |
 | ------ | ----------------------- | -------------------------------------- | -------------------------------------- |
-| GET    | `/classes`              | Lecturer, Subject Head, Admin          | List classes                           |
+| GET    | `/classes`              | Lecturer, ., Admin          | List classes                           |
 | POST   | `/classes`              | Admin                                  | Create class                           |
-| GET    | `/classes/:id`          | Student, Lecturer, Subject Head, Admin | Get class detail                       |
+| GET    | `/classes/:id`          | Student, Lecturer, ., Admin | Get class detail                       |
 | PUT    | `/classes/:id`          | Admin                                  | Update class                           |
 | DELETE | `/classes/:id`          | Admin                                  | Delete/deactivate class                |
 | GET    | `/students/me/classes`  | Student                                | Get classes of current student         |
@@ -387,7 +387,7 @@ Business rules:
 
 | Method | Endpoint                                | Role                          | Description                |
 | ------ | --------------------------------------- | ----------------------------- | -------------------------- |
-| GET    | `/classes/:classId/students`            | Lecturer, Subject Head, Admin | List students in class     |
+| GET    | `/classes/:classId/students`            | Lecturer, ., Admin | List students in class     |
 | POST   | `/classes/:classId/students`            | Admin, Lecturer               | Add one student to class   |
 | POST   | `/classes/:classId/students/import`     | Admin, Lecturer               | Import students into class |
 | DELETE | `/classes/:classId/students/:studentId` | Admin, Lecturer               | Remove student from class  |
@@ -441,9 +441,9 @@ A session represents a learning slot inside a class and subject.
 
 | Method | Endpoint                     | Role                            | Description              |
 | ------ | ---------------------------- | ------------------------------- | ------------------------ |
-| GET    | `/classes/:classId/sessions` | Student, Lecturer, Subject Head | List sessions of a class |
+| GET    | `/classes/:classId/sessions` | Student, Lecturer, . | List sessions of a class |
 | POST   | `/classes/:classId/sessions` | Lecturer, Admin                 | Create session           |
-| GET    | `/sessions/:id`              | Student, Lecturer, Subject Head | Get session detail       |
+| GET    | `/sessions/:id`              | Student, Lecturer, . | Get session detail       |
 | PUT    | `/sessions/:id`              | Lecturer, Admin                 | Update session           |
 | DELETE | `/sessions/:id`              | Lecturer, Admin                 | Delete session           |
 
@@ -502,11 +502,11 @@ GradeItem -> Assignment
 
 | Method | Endpoint                                  | Role                            | Description                                        |
 | ------ | ----------------------------------------- | ------------------------------- | -------------------------------------------------- |
-| GET    | `/classes/:classId/assignments`           | Student, Lecturer, Subject Head | List assignments in class                          |
-| GET    | `/sessions/:sessionId/assignments`        | Student, Lecturer, Subject Head | List assignments in session                        |
+| GET    | `/classes/:classId/assignments`           | Student, Lecturer, . | List assignments in class                          |
+| GET    | `/sessions/:sessionId/assignments`        | Student, Lecturer, . | List assignments in session                        |
 | POST   | `/sessions/:sessionId/assignments`        | Lecturer                        | Create assignment in session                       |
 | POST   | `/subjects/:subjectId/global-assignments` | Lecturer                        | Create global assignment cloned for multiple classes |
-| GET    | `/assignments/:id`                        | Student, Lecturer, Subject Head | Get assignment detail                              |
+| GET    | `/assignments/:id`                        | Student, Lecturer, . | Get assignment detail                              |
 | PUT    | `/assignments/:id`                        | Lecturer                        | Update assignment                                  |
 | DELETE | `/assignments/:id`                        | Lecturer                        | Delete assignment                                  |
 | PATCH  | `/assignments/:id/publish`                | Lecturer                        | Publish assignment                                 |
@@ -543,9 +543,9 @@ Business rules:
 
 | Method | Endpoint                               | Role                            | Description       |
 | ------ | -------------------------------------- | ------------------------------- | ----------------- |
-| GET    | `/assignments/:assignmentId/materials` | Student, Lecturer, Subject Head | List materials    |
+| GET    | `/assignments/:assignmentId/materials` | Student, Lecturer, . | List materials    |
 | POST   | `/assignments/:assignmentId/materials` | Lecturer                        | Upload material   |
-| GET    | `/materials/:id/download`              | Student, Lecturer, Subject Head | Download material |
+| GET    | `/materials/:id/download`              | Student, Lecturer, . | Download material |
 | DELETE | `/materials/:id`                       | Lecturer                        | Delete material   |
 
 Upload material request:
@@ -582,9 +582,9 @@ PDF, DOCX, PPTX, ZIP
 | POST   | `/assignments/:assignmentId/submissions`    | Student                         | Create/update draft submission         |
 | POST   | `/submissions/:id/finalize`                 | Student                         | Finalize draft submission              |
 | GET    | `/assignments/:assignmentId/submissions/my` | Student                         | Get my submission for assignment       |
-| GET    | `/assignments/:assignmentId/submissions`    | Lecturer, Subject Head          | List finalized assignment submissions  |
+| GET    | `/assignments/:assignmentId/submissions`    | Lecturer, .          | List finalized assignment submissions  |
 | GET    | `/students/me/submissions`                  | Student                         | Get all submissions of current student |
-| GET    | `/submissions/:id`                          | Student, Lecturer, Subject Head | Get submission detail                  |
+| GET    | `/submissions/:id`                          | Student, Lecturer, . | Get submission detail                  |
 | DELETE | `/submissions/:id`                          | Student, Lecturer               | Withdraw/delete submission if allowed  |
 
 Submission request:
@@ -620,7 +620,7 @@ Business rules:
   - AI declaration requirement is satisfied
 - If `aiDeclarationRequired = true` and the valid interaction count is below `minAiInteractions`, submission status remains `draft`.
 - Draft submissions are visible only to the owner student.
-- Lecturer and Subject Head cannot view draft submissions.
+- Lecturer and . cannot view draft submissions.
 - `GET /assignments/:assignmentId/submissions` must return only submissions with status `submitted` or `late`.
 - If a student resubmits, create a new submission version.
 - If finalized after deadline, status becomes `late`.
@@ -647,11 +647,11 @@ Finalize business rules:
 
 | Method | Endpoint                                   | Role                            | Description                     |
 | ------ | ------------------------------------------ | ------------------------------- | ------------------------------- |
-| GET    | `/submissions/:submissionId/versions`      | Student, Lecturer, Subject Head | List submission versions        |
+| GET    | `/submissions/:submissionId/versions`      | Student, Lecturer, . | List submission versions        |
 | POST   | `/submissions/:submissionId/versions`      | Student                         | Resubmit and create new version |
-| GET    | `/submission-versions/:versionId`          | Student, Lecturer, Subject Head | Get version detail              |
-| GET    | `/submission-versions/:versionId/download` | Student, Lecturer, Subject Head | Download submitted file         |
-| GET    | `/submissions/:submissionId/download`      | Student, Lecturer, Subject Head | Download latest version         |
+| GET    | `/submission-versions/:versionId`          | Student, Lecturer, . | Get version detail              |
+| GET    | `/submission-versions/:versionId/download` | Student, Lecturer, . | Download submitted file         |
+| GET    | `/submissions/:submissionId/download`      | Student, Lecturer, . | Download latest version         |
 
 Create new version request:
 
@@ -673,7 +673,7 @@ Business rules:
 - Latest version is active.
 - Resubmission creates or updates a draft version until the student finalizes it.
 - AI interactions should be linked to the active submission or active version depending on implementation.
-- Lecturer and Subject Head can view only finalized versions belonging to submissions with status `submitted` or `late`.
+- Lecturer and . can view only finalized versions belonging to submissions with status `submitted` or `late`.
 
 ---
 
@@ -685,9 +685,9 @@ Business rules:
 
 | Method | Endpoint                                              | Role                            | Description                  |
 | ------ | ----------------------------------------------------- | ------------------------------- | ---------------------------- |
-| GET    | `/submissions/:submissionId/ai-interactions`          | Student, Lecturer, Subject Head | List AI interactions         |
+| GET    | `/submissions/:submissionId/ai-interactions`          | Student, Lecturer, . | List AI interactions         |
 | POST   | `/submissions/:submissionId/ai-interactions`          | Student                         | Create AI interaction        |
-| GET    | `/ai-interactions/:id`                                | Student, Lecturer, Subject Head | Get AI interaction detail    |
+| GET    | `/ai-interactions/:id`                                | Student, Lecturer, . | Get AI interaction detail    |
 | PUT    | `/ai-interactions/:id`                                | Student                         | Update AI interaction        |
 | DELETE | `/ai-interactions/:id`                                | Student                         | Delete AI interaction        |
 | POST   | `/submissions/:submissionId/ai-interactions/validate` | Student                         | Validate min/max requirement |
@@ -745,10 +745,10 @@ Business rules:
 | Method | Endpoint                                               | Role                            | Description              |
 | ------ | ------------------------------------------------------ | ------------------------------- | ------------------------ |
 | POST   | `/submissions/:submissionId/ai-evaluation`             | Lecturer, System                | Evaluate AI usage        |
-| POST   | `/submissions/:submissionId/ai-evaluation/recalculate` | Lecturer, Subject Head, System  | Recalculate evaluation   |
-| GET    | `/submissions/:submissionId/ai-evaluation`             | Student, Lecturer, Subject Head | View evaluation          |
-| GET    | `/classes/:classId/ai-evaluations`                     | Lecturer, Subject Head          | View class evaluations   |
-| GET    | `/students/:studentId/ai-evaluations`                  | Lecturer, Subject Head          | View student evaluations |
+| POST   | `/submissions/:submissionId/ai-evaluation/recalculate` | Lecturer, ., System  | Recalculate evaluation   |
+| GET    | `/submissions/:submissionId/ai-evaluation`             | Student, Lecturer, . | View evaluation          |
+| GET    | `/classes/:classId/ai-evaluations`                     | Lecturer, .          | View class evaluations   |
+| GET    | `/students/:studentId/ai-evaluations`                  | Lecturer, .          | View student evaluations |
 
 Evaluation response:
 
@@ -792,7 +792,7 @@ Business rules:
 | Method | Endpoint                                         | Role                   | Description                         |
 | ------ | ------------------------------------------------ | ---------------------- | ----------------------------------- |
 | GET    | `/lecturer/classes/:classId/submission-overview` | Lecturer               | View finalized submissions in class |
-| GET    | `/submissions/:submissionId/review`              | Lecturer, Subject Head | Get review                          |
+| GET    | `/submissions/:submissionId/review`              | Lecturer, . | Get review                          |
 | POST   | `/submissions/:submissionId/review`              | Lecturer               | Create review                       |
 | PATCH  | `/submissions/:submissionId/review-status`       | Lecturer               | Update review status                |
 | POST   | `/submissions/:submissionId/comments`            | Lecturer               | Add review comment                  |
@@ -828,13 +828,13 @@ Create review request:
 | Method | Endpoint                                  | Role                            | Description            |
 | ------ | ----------------------------------------- | ------------------------------- | ---------------------- |
 | POST   | `/submissions/:submissionId/grade`        | Lecturer                        | Grade submission       |
-| GET    | `/submissions/:submissionId/grade`        | Student, Lecturer, Subject Head | View grade             |
+| GET    | `/submissions/:submissionId/grade`        | Student, Lecturer, . | View grade             |
 | PUT    | `/submissions/:submissionId/grade`        | Lecturer                        | Update grade           |
 | DELETE | `/submissions/:submissionId/grade`        | Lecturer                        | Delete grade           |
-| GET    | `/assignments/:assignmentId/grades`       | Lecturer, Subject Head          | View assignment grades |
-| GET    | `/classes/:classId/gradebook`             | Lecturer, Subject Head          | View class gradebook   |
+| GET    | `/assignments/:assignmentId/grades`       | Lecturer, .          | View assignment grades |
+| GET    | `/classes/:classId/gradebook`             | Lecturer, .          | View class gradebook   |
 | PATCH  | `/classes/:classId/gradebook/bulk-update` | Lecturer                        | Bulk update gradebook  |
-| GET    | `/classes/:classId/gradebook/export`      | Lecturer, Subject Head          | Export gradebook       |
+| GET    | `/classes/:classId/gradebook/export`      | Lecturer, .          | Export gradebook       |
 
 Create grade request:
 
@@ -863,10 +863,10 @@ Business rules:
 | Method | Endpoint                                             | Role                            | Description                    |
 | ------ | ---------------------------------------------------- | ------------------------------- | ------------------------------ |
 | POST   | `/classes/:classId/final-results/calculate`          | Lecturer                        | Calculate final results        |
-| GET    | `/classes/:classId/final-results`                    | Lecturer, Subject Head          | View final results             |
-| GET    | `/students/:studentId/classes/:classId/final-result` | Student, Lecturer, Subject Head | View one final result          |
+| GET    | `/classes/:classId/final-results`                    | Lecturer, .          | View final results             |
+| GET    | `/students/:studentId/classes/:classId/final-result` | Student, Lecturer, . | View one final result          |
 | GET    | `/students/me/results`                               | Student                         | View current student's results |
-| GET    | `/classes/:classId/final-results/export`             | Lecturer, Subject Head          | Export final results           |
+| GET    | `/classes/:classId/final-results/export`             | Lecturer, .          | Export final results           |
 
 Formula:
 
@@ -908,9 +908,9 @@ Classification rules:
 
 | Method | Endpoint                              | Role                            | Description                 |
 | ------ | ------------------------------------- | ------------------------------- | --------------------------- |
-| GET    | `/classes/:classId/classifications`   | Lecturer, Subject Head          | View classifications        |
-| GET    | `/classes/:classId/rankings`          | Lecturer, Subject Head          | View rankings               |
-| GET    | `/students/:studentId/classification` | Student, Lecturer, Subject Head | View student classification |
+| GET    | `/classes/:classId/classifications`   | Lecturer, .          | View classifications        |
+| GET    | `/classes/:classId/rankings`          | Lecturer, .          | View rankings               |
+| GET    | `/students/:studentId/classification` | Student, Lecturer, . | View student classification |
 
 ---
 
@@ -927,7 +927,7 @@ Classification rules:
 | PATCH  | `/notifications/:id/read`      | All                           | Mark notification as read         |
 | PATCH  | `/notifications/read-all`      | All                           | Mark all as read                  |
 | DELETE | `/notifications/:id`           | All                           | Delete notification               |
-| POST   | `/notifications/announcements` | Lecturer, Subject Head, Admin | Send announcement                 |
+| POST   | `/notifications/announcements` | Lecturer, ., Admin | Send announcement                 |
 
 Notification types:
 
@@ -973,11 +973,11 @@ Socket.IO is recommended for realtime message delivery. REST APIs are used for c
 
 | Method | Endpoint                      | Role                            | Description                    |
 | ------ | ----------------------------- | ------------------------------- | ------------------------------ |
-| GET    | `/chat/rooms`                 | Student, Lecturer, Subject Head | List my chat rooms             |
-| POST   | `/chat/rooms`                 | Student, Lecturer, Subject Head | Create or get direct chat room |
+| GET    | `/chat/rooms`                 | Student, Lecturer, . | List my chat rooms             |
+| POST   | `/chat/rooms`                 | Student, Lecturer, . | Create or get direct chat room |
 | GET    | `/chat/rooms/:roomId`         | Room Member                     | Get room detail                |
 | PATCH  | `/chat/rooms/:roomId/archive` | Room Member                     | Archive room                   |
-| GET    | `/chat/contacts`              | Student, Lecturer, Subject Head | List available contacts        |
+| GET    | `/chat/contacts`              | Student, Lecturer, . | List available contacts        |
 
 Create room request:
 
@@ -996,8 +996,8 @@ Business rules:
 - Student can chat with classmates in the same class.
 - Student can chat with lecturers who teach their classes.
 - Lecturer can chat with students in their classes.
-- Lecturer can chat with Subject Head in the same department/subject scope.
-- Subject Head can chat with lecturers and students within managed scope.
+- Lecturer can chat with . in the same department/subject scope.
+- . can chat with lecturers and students within managed scope.
 
 ## 11.2 Chat Message Endpoints
 
@@ -1007,7 +1007,7 @@ Business rules:
 | POST   | `/chat/rooms/:roomId/messages`   | Room Member                     | Send message         |
 | PATCH  | `/chat/messages/:messageId/read` | Room Member                     | Mark message as read |
 | DELETE | `/chat/messages/:messageId`      | Sender                          | Delete own message   |
-| GET    | `/chat/messages/search`          | Student, Lecturer, Subject Head | Search messages      |
+| GET    | `/chat/messages/search`          | Student, Lecturer, . | Search messages      |
 
 Send message request:
 
@@ -1104,16 +1104,16 @@ Metrics:
 - AI usage distribution.
 - Flagged submissions.
 
-### 12.1.3 Subject Head Analytics APIs
+### 12.1.3 . Analytics APIs
 
 | Method | Endpoint                                        | Role         | Description                       |
 | ------ | ----------------------------------------------- | ------------ | --------------------------------- |
-| GET    | `/subject-head/overview`                        | Subject Head | Overall managed scope analytics   |
-| GET    | `/subject-head/classes`                         | Subject Head | View classes in managed scope     |
-| GET    | `/subject-head/classes/:classId/analytics`      | Subject Head | Class analytics                   |
-| GET    | `/subject-head/subjects/:subjectId/analytics`   | Subject Head | Subject analytics                 |
-| GET    | `/subject-head/students/:studentId/detail`      | Subject Head | View detailed student information |
-| GET    | `/subject-head/lecturers/:lecturerId/analytics` | Subject Head | Lecturer activity analytics       |
+| GET    | `/subject-head/overview`                        | . | Overall managed scope analytics   |
+| GET    | `/subject-head/classes`                         | . | View classes in managed scope     |
+| GET    | `/subject-head/classes/:classId/analytics`      | . | Class analytics                   |
+| GET    | `/subject-head/subjects/:subjectId/analytics`   | . | Subject analytics                 |
+| GET    | `/subject-head/students/:studentId/detail`      | . | View detailed student information |
+| GET    | `/subject-head/lecturers/:lecturerId/analytics` | . | Lecturer activity analytics       |
 
 Metrics:
 
@@ -1153,27 +1153,27 @@ Metrics:
 
 | Method | Endpoint                                    | Role                   | Description           |
 | ------ | ------------------------------------------- | ---------------------- | --------------------- |
-| GET    | `/reports/classes/:classId/grade-summary`   | Lecturer, Subject Head | Grade summary         |
-| GET    | `/reports/classes/:classId/final-results`   | Lecturer, Subject Head | Final results report  |
-| GET    | `/reports/classes/:classId/rankings`        | Lecturer, Subject Head | Ranking report        |
-| GET    | `/reports/classes/:classId/classifications` | Lecturer, Subject Head | Classification report |
+| GET    | `/reports/classes/:classId/grade-summary`   | Lecturer, . | Grade summary         |
+| GET    | `/reports/classes/:classId/final-results`   | Lecturer, . | Final results report  |
+| GET    | `/reports/classes/:classId/rankings`        | Lecturer, . | Ranking report        |
+| GET    | `/reports/classes/:classId/classifications` | Lecturer, . | Classification report |
 
 ### 12.2.2 AI Usage Reports
 
 | Method | Endpoint                                  | Role                   | Description              |
 | ------ | ----------------------------------------- | ---------------------- | ------------------------ |
-| GET    | `/reports/classes/:classId/ai-usage`      | Lecturer, Subject Head | Class AI usage report    |
-| GET    | `/reports/subjects/:subjectId/ai-usage`   | Subject Head           | Subject AI usage report  |
-| GET    | `/reports/semesters/:semesterId/ai-usage` | Subject Head           | Semester AI usage report |
-| GET    | `/reports/suspicious-cases`               | Subject Head           | Suspicious cases report  |
+| GET    | `/reports/classes/:classId/ai-usage`      | Lecturer, . | Class AI usage report    |
+| GET    | `/reports/subjects/:subjectId/ai-usage`   | .           | Subject AI usage report  |
+| GET    | `/reports/semesters/:semesterId/ai-usage` | .           | Semester AI usage report |
+| GET    | `/reports/suspicious-cases`               | .           | Suspicious cases report  |
 
 ### 12.2.3 Export APIs
 
 | Method | Endpoint                                | Role                   | Description            |
 | ------ | --------------------------------------- | ---------------------- | ---------------------- |
-| GET    | `/reports/classes/:classId/export`      | Lecturer, Subject Head | Export class report    |
-| GET    | `/reports/subjects/:subjectId/export`   | Subject Head           | Export subject report  |
-| GET    | `/reports/semesters/:semesterId/export` | Subject Head           | Export semester report |
+| GET    | `/reports/classes/:classId/export`      | Lecturer, . | Export class report    |
+| GET    | `/reports/subjects/:subjectId/export`   | .           | Export subject report  |
+| GET    | `/reports/semesters/:semesterId/export` | .           | Export semester report |
 
 Export query:
 
@@ -1199,12 +1199,12 @@ csv
 
 | Method | Endpoint                           | Role                   | Description           |
 | ------ | ---------------------------------- | ---------------------- | --------------------- |
-| GET    | `/flags`                           | Lecturer, Subject Head | List flags            |
-| GET    | `/submissions/:submissionId/flags` | Lecturer, Subject Head | List submission flags |
-| POST   | `/submissions/:submissionId/flags` | Lecturer, Subject Head | Create manual flag    |
-| PATCH  | `/flags/:id/resolve`               | Lecturer, Subject Head | Resolve flag          |
-| PATCH  | `/flags/:id/level`                 | Lecturer, Subject Head | Update severity level |
-| PATCH  | `/flags/:id/dismiss`               | Lecturer, Subject Head | Dismiss flag          |
+| GET    | `/flags`                           | Lecturer, . | List flags            |
+| GET    | `/submissions/:submissionId/flags` | Lecturer, . | List submission flags |
+| POST   | `/submissions/:submissionId/flags` | Lecturer, . | Create manual flag    |
+| PATCH  | `/flags/:id/resolve`               | Lecturer, . | Resolve flag          |
+| PATCH  | `/flags/:id/level`                 | Lecturer, . | Update severity level |
+| PATCH  | `/flags/:id/dismiss`               | Lecturer, . | Dismiss flag          |
 
 Flag types:
 
@@ -1418,11 +1418,11 @@ Implementation owner:
 
 | Method | Endpoint | Role | Description |
 | ------ | -------- | ---- | ----------- |
-| GET | `/news` | Student, Lecturer, Subject Head, Admin | List published news |
-| GET | `/news/:id` | Student, Lecturer, Subject Head, Admin | Get news details |
-| POST | `/news` | Admin, Subject Head | Create a news post |
-| PUT | `/news/:id` | Admin, Subject Head | Update a news post |
-| DELETE | `/news/:id` | Admin, Subject Head | Delete a news post |
+| GET | `/news` | Student, Lecturer, ., Admin | List published news |
+| GET | `/news/:id` | Student, Lecturer, ., Admin | Get news details |
+| POST | `/news` | Admin, . | Create a news post |
+| PUT | `/news/:id` | Admin, . | Update a news post |
+| DELETE | `/news/:id` | Admin, . | Delete a news post |
 
 
 ---

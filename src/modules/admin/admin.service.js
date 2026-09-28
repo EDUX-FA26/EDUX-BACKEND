@@ -149,6 +149,13 @@ const AdminService = {
 
     return { success: true, count: createdNotifications.length };
   },
+
+  /**
+   * Lấy danh sách các thông báo hệ thống đã gửi
+   */
+  async getSystemNotifications() {
+    return await adminRepository.getSystemNotifications();
+  },
 };
 
 module.exports = AdminService;
