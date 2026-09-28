@@ -117,6 +117,23 @@ const AdminController = {
       next(error);
     }
   },
+
+  /**
+   * GET /api/admin/notifications
+   * Lấy danh sách thông báo hệ thống đã phát
+   */
+  async getSystemNotifications(req, res, next) {
+    try {
+      const notifications = await adminService.getSystemNotifications();
+      res.status(200).json({
+        success: true,
+        message: "Lấy danh sách thông báo thành công",
+        data: notifications,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
 
 module.exports = AdminController;

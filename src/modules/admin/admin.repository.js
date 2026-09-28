@@ -176,6 +176,21 @@ const AdminRepository = {
     const result = await pool.query(query, params);
     return result.rows.map(row => row.id);
   },
+
+  /**
+   * Lấy danh sách các thông báo hệ thống đã gửi
+   */
+  async getSystemNotifications() {
+    const query = `
+      SELECT title, message, type, MAX(created_at) as created_at
+      FROM notifications
+      WHERE type = 'system_announcement'
+      GROUP BY title, message, type
+      ORDER BY MAX(created_at) DESC
+    `;
+    const result = await pool.query(query);
+    return result.rows;
+  },
 };
 
 module.exports = AdminRepository;
