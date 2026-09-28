@@ -1,13 +1,14 @@
 const { pool } = require('../../config/db.config');
 
 /**
- * Helper: chạy query an toàn — nếu bảng chưa tồn tại hoặc lỗi thì trả fallback
+ * Helper: chạy query an toàn — nếu có lỗi thì log chi tiết và trả fallback
  */
 async function safeQuery(query, params = [], fallback = null) {
   try {
     const { rows } = await pool.query(query, params);
     return rows;
-  } catch {
+  } catch (err) {
+    console.error('❌ safeQuery error:', err.message);
     return fallback !== null ? fallback : [];
   }
 }
@@ -19,71 +20,64 @@ const DashboardRepository = {
   // ─────────────────────────────────────────────
 
   async getStudentStatistics(userId) {
-    const [classesRes, pendingRes, submittedRes, avgRes] = await Promise.all([
-      // Tổng số lớp đang tham gia
-      safeQuery(
-        `SELECT COUNT(*) as count
-         FROM class_members
-         WHERE student_id = $1 AND status = 'active'`,
-        [userId], [{ count: '0' }]
-      ),
+    const rows = await safeQuery(
+      `SELECT 
+        (
+          SELECT COUNT(*) 
+          FROM class_members 
+          WHERE student_id = $1
+        ) as total_classes,
+        (
+          SELECT COUNT(*) 
+          FROM class_members cm
+          JOIN assignments a ON cm.class_id = a.class_id
+          WHERE cm.student_id = $1
+            AND (a.deadline IS NULL OR a.deadline > NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM submissions s
+              WHERE s.assignment_id = a.id AND s.student_id = $1
+            )
+        ) as pending_assignments,
+        (
+          SELECT COUNT(*) 
+          FROM submissions 
+          WHERE student_id = $1
+        ) as submitted_assignments,
+        (
+          SELECT ROUND(AVG((score / NULLIF(max_score, 0)) * 10)::numeric, 2)
+          FROM grades 
+          WHERE student_id = $1
+             OR submission_id IN (SELECT id FROM submissions WHERE student_id = $1)
+        ) as average_score`,
+      [userId],
+      [{ total_classes: '0', pending_assignments: '0', submitted_assignments: '0', average_score: null }]
+    );
 
-      // Số bài tập chưa nộp (deadline chưa qua)
-      safeQuery(
-        `SELECT COUNT(*) as count
-         FROM assignments a
-         JOIN class_members cm ON a.class_id = cm.class_id
-         WHERE cm.student_id = $1
-           AND cm.status = 'active'
-           AND a.is_active = true
-           AND a.deadline > NOW()
-           AND NOT EXISTS (
-             SELECT 1 FROM submissions s
-             WHERE s.assignment_id = a.id AND s.student_id = $1
-           )`,
-        [userId], [{ count: '0' }]
-      ),
-
-      // Số bài tập đã nộp
-      safeQuery(
-        `SELECT COUNT(*) as count
-         FROM submissions
-         WHERE student_id = $1`,
-        [userId], [{ count: '0' }]
-      ),
-
-      // Điểm trung bình
-      safeQuery(
-        `SELECT ROUND(AVG(g.score)::numeric, 2) as avg_score
-         FROM grades g
-         JOIN submissions s ON g.submission_id = s.id
-         WHERE s.student_id = $1`,
-        [userId], [{ avg_score: null }]
-      ),
-    ]);
-
+    const row = rows[0] || {};
     return {
-      totalClasses:         parseInt(classesRes[0]?.count || 0),
-      pendingAssignments:   parseInt(pendingRes[0]?.count || 0),
-      submittedAssignments: parseInt(submittedRes[0]?.count || 0),
-      averageScore:         parseFloat(avgRes[0]?.avg_score) || null,
+      totalClasses:         parseInt(row.total_classes || 0),
+      pendingAssignments:   parseInt(row.pending_assignments || 0),
+      submittedAssignments: parseInt(row.submitted_assignments || 0),
+      averageScore:         row.average_score !== null && row.average_score !== undefined ? parseFloat(row.average_score) : null,
     };
   },
 
   async getStudentRecentAssignments(userId) {
     return safeQuery(
-      `SELECT a.id, a.title, a.deadline, a.type,
+      `SELECT a.id, a.title, a.deadline,
               c.class_code,
               s.name as subject_name,
-              CASE WHEN sub.id IS NOT NULL THEN true ELSE false END as is_submitted
-       FROM assignments a
-       JOIN classes c ON a.class_id = c.id
+              EXISTS (
+                SELECT 1 FROM submissions sub
+                WHERE sub.assignment_id = a.id AND sub.student_id = $1
+              ) as is_submitted
+       FROM class_members cm
+       JOIN classes c ON cm.class_id = c.id
        JOIN subjects s ON c.subject_id = s.id
-       JOIN class_members cm ON a.class_id = cm.class_id
-       LEFT JOIN submissions sub ON sub.assignment_id = a.id AND sub.student_id = $1
+       JOIN assignments a ON a.class_id = c.id
        WHERE cm.student_id = $1
-         AND cm.status = 'active'
-         AND a.is_active = true
+         AND (cm.status IS NULL OR cm.status = 'active')
+         AND (a.publish_status IS NULL OR a.publish_status = 'published')
        ORDER BY a.deadline ASC
        LIMIT 5`,
       [userId]
@@ -95,55 +89,47 @@ const DashboardRepository = {
   // ─────────────────────────────────────────────
 
   async getLecturerStatistics(userId) {
-    const [classesRes, studentsRes, pendingRes, assignmentsRes] = await Promise.all([
-      // Số lớp đang dạy
-      safeQuery(
-        `SELECT COUNT(*) as count
-         FROM classes
-         WHERE lecturer_id = $1 AND is_active = true`,
-        [userId], [{ count: '0' }]
-      ),
+    const rows = await safeQuery(
+      `SELECT 
+        (
+          SELECT COUNT(*) 
+          FROM classes 
+          WHERE lecturer_id = $1 AND (is_active IS NULL OR is_active = true)
+        ) as total_classes,
+        (
+          SELECT COUNT(DISTINCT cm.student_id) 
+          FROM class_members cm
+          JOIN classes c ON cm.class_id = c.id
+          WHERE c.lecturer_id = $1
+            AND (c.is_active IS NULL OR c.is_active = true)
+        ) as total_students,
+        (
+          SELECT COUNT(*) 
+          FROM submissions s
+          JOIN assignments a ON s.assignment_id = a.id
+          JOIN classes c ON a.class_id = c.id
+          WHERE c.lecturer_id = $1
+            AND s.status = 'submitted'
+            AND NOT EXISTS (
+              SELECT 1 FROM grades g WHERE g.submission_id = s.id
+            )
+        ) as pending_submissions,
+        (
+          SELECT COUNT(*) 
+          FROM assignments a
+          JOIN classes c ON a.class_id = c.id
+          WHERE c.lecturer_id = $1 AND (a.publish_status IS NULL OR a.publish_status = 'published')
+        ) as total_assignments`,
+      [userId],
+      [{ total_classes: '0', total_students: '0', pending_submissions: '0', total_assignments: '0' }]
+    );
 
-      // Tổng số sinh viên trong các lớp
-      safeQuery(
-        `SELECT COUNT(DISTINCT cm.student_id) as count
-         FROM class_members cm
-         JOIN classes c ON cm.class_id = c.id
-         WHERE c.lecturer_id = $1
-           AND c.is_active = true
-           AND cm.status = 'active'`,
-        [userId], [{ count: '0' }]
-      ),
-
-      // Số bài nộp chờ chấm điểm
-      safeQuery(
-        `SELECT COUNT(*) as count
-         FROM submissions s
-         JOIN assignments a ON s.assignment_id = a.id
-         JOIN classes c ON a.class_id = c.id
-         WHERE c.lecturer_id = $1
-           AND s.status = 'submitted'
-           AND NOT EXISTS (
-             SELECT 1 FROM grades g WHERE g.submission_id = s.id
-           )`,
-        [userId], [{ count: '0' }]
-      ),
-
-      // Tổng số bài tập đã tạo
-      safeQuery(
-        `SELECT COUNT(*) as count
-         FROM assignments a
-         JOIN classes c ON a.class_id = c.id
-         WHERE c.lecturer_id = $1 AND a.is_active = true`,
-        [userId], [{ count: '0' }]
-      ),
-    ]);
-
+    const row = rows[0] || {};
     return {
-      totalClasses:       parseInt(classesRes[0]?.count   || 0),
-      totalStudents:      parseInt(studentsRes[0]?.count  || 0),
-      pendingSubmissions: parseInt(pendingRes[0]?.count   || 0),
-      totalAssignments:   parseInt(assignmentsRes[0]?.count || 0),
+      totalClasses:       parseInt(row.total_classes || 0),
+      totalStudents:      parseInt(row.total_students || 0),
+      pendingSubmissions: parseInt(row.pending_submissions || 0),
+      totalAssignments:   parseInt(row.total_assignments || 0),
     };
   },
 
@@ -171,18 +157,22 @@ const DashboardRepository = {
   // ─────────────────────────────────────────────
 
   async getAdminStatistics() {
-    const [totalUsersRes, studentsRes, lecturersRes, classesRes] = await Promise.all([
-      safeQuery(`SELECT COUNT(*) as count FROM users WHERE is_active = true`, [], [{ count: '0' }]),
-      safeQuery(`SELECT COUNT(*) as count FROM users WHERE role = 'student' AND is_active = true`, [], [{ count: '0' }]),
-      safeQuery(`SELECT COUNT(*) as count FROM users WHERE role = 'lecturer' AND is_active = true`, [], [{ count: '0' }]),
-      safeQuery(`SELECT COUNT(*) as count FROM classes WHERE is_active = true`, [], [{ count: '0' }]),
-    ]);
+    const rows = await safeQuery(
+      `SELECT 
+        (SELECT COUNT(*) FROM users WHERE is_active = true) as total_users,
+        (SELECT COUNT(*) FROM users WHERE role = 'student' AND is_active = true) as total_students,
+        (SELECT COUNT(*) FROM users WHERE role = 'lecturer' AND is_active = true) as total_lecturers,
+        (SELECT COUNT(*) FROM classes WHERE is_active = true) as total_classes`,
+      [],
+      [{ total_users: '0', total_students: '0', total_lecturers: '0', total_classes: '0' }]
+    );
 
+    const row = rows[0] || {};
     return {
-      totalUsers:     parseInt(totalUsersRes[0]?.count || 0),
-      totalStudents:  parseInt(studentsRes[0]?.count   || 0),
-      totalLecturers: parseInt(lecturersRes[0]?.count  || 0),
-      totalClasses:   parseInt(classesRes[0]?.count    || 0),
+      totalUsers:     parseInt(row.total_users || 0),
+      totalStudents:  parseInt(row.total_students || 0),
+      totalLecturers: parseInt(row.total_lecturers || 0),
+      totalClasses:   parseInt(row.total_classes || 0),
     };
   },
 
@@ -197,7 +187,7 @@ const DashboardRepository = {
   },
 
   // ─────────────────────────────────────────────
-  // SHARED: Notifications (dùng chung cho mọi role)
+  // SHARED: Notifications
   // ─────────────────────────────────────────────
 
   async getRecentNotifications(userId) {

@@ -1,25 +1,38 @@
 const DashboardRepository = require('./dashboard.repository');
+const { redis } = require('../../config/redis.config');
 
 class DashboardService {
 
   async getDashboard(user) {
     const { id: userId, role } = user;
+    const cacheKey = `dashboard:${userId}`;
 
-    // Notifications luôn lấy cho mọi role
-    const [notifications, unreadCount] = await Promise.all([
-      DashboardRepository.getRecentNotifications(userId),
-      DashboardRepository.getUnreadCount(userId),
-    ]);
+    // 1. Check Redis cache
+    try {
+      if (redis.isOpen) {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          return JSON.parse(cached);
+        }
+      }
+    } catch (err) {
+      // Ignore cache error, fallback to DB
+    }
 
+    // 2. Fetch from database
+    let data;
     switch (role) {
       case 'student':
-        return this._buildStudentDashboard(userId, notifications, unreadCount);
+        data = await this._buildStudentDashboard(userId);
+        break;
 
       case 'lecturer':
-        return this._buildLecturerDashboard(userId, notifications, unreadCount);
+        data = await this._buildLecturerDashboard(userId);
+        break;
 
       case 'admin':
-        return this._buildAdminDashboard(userId, notifications, unreadCount);
+        data = await this._buildAdminDashboard(userId);
+        break;
 
       default: {
         const error = new Error('UNKNOWN_ROLE');
@@ -27,13 +40,36 @@ class DashboardService {
         throw error;
       }
     }
+
+    // 3. Save to Redis cache (15 seconds TTL)
+    try {
+      if (redis.isOpen) {
+        await redis.setEx(cacheKey, 15, JSON.stringify(data));
+      }
+    } catch (err) {
+      // Ignore cache write error
+    }
+
+    return data;
+  }
+
+  async getDashboardNotifications(userId) {
+    const [notifications, unreadCount] = await Promise.all([
+      DashboardRepository.getRecentNotifications(userId),
+      DashboardRepository.getUnreadCount(userId),
+    ]);
+
+    return {
+      notifications,
+      unreadCount,
+    };
   }
 
   // ─────────────────────────────────────────────
   // STUDENT
   // ─────────────────────────────────────────────
 
-  async _buildStudentDashboard(userId, notifications, unreadCount) {
+  async _buildStudentDashboard(userId) {
     const [statistics, recentAssignments] = await Promise.all([
       DashboardRepository.getStudentStatistics(userId),
       DashboardRepository.getStudentRecentAssignments(userId),
@@ -43,8 +79,6 @@ class DashboardService {
       role: 'student',
       statistics,
       recentAssignments,
-      notifications,
-      unreadCount,
     };
   }
 
@@ -52,7 +86,7 @@ class DashboardService {
   // LECTURER
   // ─────────────────────────────────────────────
 
-  async _buildLecturerDashboard(userId, notifications, unreadCount) {
+  async _buildLecturerDashboard(userId) {
     const [statistics, recentSubmissions] = await Promise.all([
       DashboardRepository.getLecturerStatistics(userId),
       DashboardRepository.getLecturerRecentSubmissions(userId),
@@ -62,8 +96,6 @@ class DashboardService {
       role: 'lecturer',
       statistics,
       recentSubmissions,
-      notifications,
-      unreadCount,
     };
   }
 
@@ -71,7 +103,7 @@ class DashboardService {
   // ADMIN
   // ─────────────────────────────────────────────
 
-  async _buildAdminDashboard(userId, notifications, unreadCount) {
+  async _buildAdminDashboard(userId) {
     const [statistics, recentUsers] = await Promise.all([
       DashboardRepository.getAdminStatistics(),
       DashboardRepository.getAdminRecentUsers(),
@@ -81,8 +113,6 @@ class DashboardService {
       role: 'admin',
       statistics,
       recentUsers,
-      notifications,
-      unreadCount,
     };
   }
 }
