@@ -26,6 +26,7 @@ router.patch("/users/:id/suspend", adminController.suspendUser);
 router.patch("/users/:id/activate", adminController.activateUser);
 
 // UC 90 — Broadcast Notification
+router.get("/notifications", adminController.getSystemNotifications);
 router.post("/notifications/broadcast", validate(broadcastNotificationSchema), adminController.broadcastNotification);
 
 module.exports = router;
