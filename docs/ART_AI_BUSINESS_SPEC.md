@@ -52,7 +52,7 @@ Responsibilities:
 
 ---
 
-## ACT-003 Subject Head
+## ACT-003 .
 
 Responsibilities:
 
@@ -123,7 +123,7 @@ Actors:
 
 * Student
 * Lecturer
-* Subject Head
+* .
 * Admin
 
 Description:
@@ -606,7 +606,7 @@ Students belong to same class.
 
 ---
 
-## BR-CHAT-003 Lecturer ↔ Subject Head Chat
+## BR-CHAT-003 Lecturer ↔ . Chat
 
 Condition:
 
@@ -649,7 +649,7 @@ Metrics:
 
 ---
 
-## BR-REPORT-002 Subject Head Dashboard
+## BR-REPORT-002 . Dashboard
 
 Metrics:
 
@@ -704,7 +704,7 @@ Allowed Values:
 Authorized Roles:
 
 * Lecturer
-* Subject Head
+* .
 
 Outputs:
 
