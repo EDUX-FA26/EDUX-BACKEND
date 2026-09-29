@@ -15,6 +15,10 @@ const loginSchema = z.object({
   password: z.string().min(1, "Vui lòng nhập mật khẩu"),
 });
 
+const googleLoginSchema = z.object({
+  credential: z.string().min(1, "Google credential is required"),
+}).strict();
+
 const refreshTokenSchema = z.object({
   refreshToken: z.string().min(1, "Refresh token is required"),
 });
@@ -36,6 +40,7 @@ const resetPasswordSchema = z.object({
 module.exports = {
   registerSchema,
   loginSchema,
+  googleLoginSchema,
   refreshTokenSchema,
   changePasswordSchema,
   forgotPasswordSchema,

@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const { OAuth2Client } = require("google-auth-library");
 const authRepository = require("./auth.repository");
 const { redis } = require("../../config/redis.config");
 
@@ -59,29 +60,68 @@ class AuthService {
       throw error;
     }
 
-    // 4. Cập nhật last_login_at (bất đồng bộ)
+    return this._createSession(user);
+  }
+
+  async googleLogin(credential) {
+    const googleProfile = await this._verifyGoogleCredential(credential);
+    const user = await authRepository.findUserByEmailForLogin(googleProfile.email);
+
+    if (!user) {
+      const error = new Error("Tài khoản Google chưa được đăng ký trong hệ thống EDUX");
+      error.status = 403;
+      throw error;
+    }
+
+    if (!user.is_active) {
+      const error = new Error("Tài khoản EDUX đã bị khóa hoặc ngừng hoạt động");
+      error.status = 403;
+      throw error;
+    }
+
+    return this._createSession(user);
+  }
+
+  async _verifyGoogleCredential(credential) {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      const error = new Error("Google login is not configured");
+      error.status = 503;
+      throw error;
+    }
+
+    try {
+      const client = new OAuth2Client(clientId);
+      const ticket = await client.verifyIdToken({
+        idToken: credential,
+        audience: clientId,
+      });
+      const profile = ticket.getPayload();
+      if (!profile?.email || profile.email_verified !== true) {
+        throw new Error("Google email is not verified");
+      }
+      return { email: profile.email };
+    } catch (cause) {
+      if (cause.status === 503) throw cause;
+      const error = new Error("Google credential is invalid or expired");
+      error.status = 401;
+      throw error;
+    }
+  }
+
+  async _createSession(user) {
     authRepository.updateLastLogin(user.id).catch((err) => {
       console.error("Failed to update last login:", err);
     });
 
-    // 5. Sinh token
     const payload = { userId: user.id, role: user.role };
     const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     const refreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRES_IN });
-
-    // 6. Lưu Refresh Token vào Redis
     const ttlSeconds = this._parseExpireString(JWT_REFRESH_EXPIRES_IN);
-    await redis.set(`refresh_token:${user.id}`, refreshToken, {
-      EX: ttlSeconds,
-    });
+    await redis.set(`refresh_token:${user.id}`, refreshToken, { EX: ttlSeconds });
 
-    // Trả về dữ liệu không có password_hash
     const { password_hash, ...userInfo } = user;
-    return {
-      accessToken,
-      refreshToken,
-      user: userInfo,
-    };
+    return { accessToken, refreshToken, user: userInfo };
   }
 
   async refreshToken(token) {

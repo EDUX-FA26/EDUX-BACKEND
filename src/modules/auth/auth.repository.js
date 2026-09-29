@@ -69,6 +69,20 @@ class AuthRepository {
   }
 
   /**
+   * Tìm tài khoản hiện hữu để đăng nhập Google.
+   * Không tạo hoặc cập nhật user từ dữ liệu Google.
+   */
+  async findUserByEmailForLogin(email) {
+    const query = `
+      SELECT id, email, username, role, is_active
+      FROM users
+      WHERE LOWER(email) = LOWER($1)
+    `;
+    const result = await pool.query(query, [email]);
+    return result.rows[0] || null;
+  }
+
+  /**
    * Cập nhật thời gian đăng nhập cuối
    */
   async updateLastLogin(userId) {

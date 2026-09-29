@@ -5,16 +5,16 @@ const authController = require("./auth.controller");
 const { authenticate } = require("../../middlewares/auth.middleware");
 const { validate } = require("../../middlewares/validate.middleware");
 const { 
-  registerSchema, 
   loginSchema, 
+  googleLoginSchema,
   refreshTokenSchema, 
   changePasswordSchema,
   forgotPasswordSchema,
   resetPasswordSchema
 } = require("./auth.validation");
 
-router.post("/register", validate(registerSchema), authController.register);
 router.post("/login", validate(loginSchema), authController.login);
+router.post("/google", validate(googleLoginSchema), authController.googleLogin);
 router.post("/refresh-token", validate(refreshTokenSchema), authController.refreshToken);
 
 router.post("/forgot-password", validate(forgotPasswordSchema), authController.forgotPassword);
