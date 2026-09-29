@@ -140,6 +140,7 @@ if (!process.env.TEST_DB_PASSWORD) {
       assert.equal((await call('get', '/api/search?q=database&type=assignment', lecturerAuth)).body.total, 2);
       assert.equal((await call('get', '/api/search?q=database', outsiderAuth)).body.total, 1);
       assert.equal((await call('get', '/api/search?q=database', adminAuth)).body.total, 6);
+      assert.equal((await call('get', '/api/search?type=flashcard', adminAuth)).body.total, 2);
       const paged = await call('get', '/api/search?q=database&page=2&limit=2', studentAuth);
       assert.equal(paged.status, 200);
       assert.equal(paged.body.data.length, 2);
