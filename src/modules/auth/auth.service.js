@@ -40,14 +40,14 @@ class AuthService {
     // 1. Tìm user
     const user = await authRepository.findUserByEmailOrUsername(identifier);
     if (!user) {
-      const error = new Error("Invalid credentials");
+      const error = new Error("INVALID_CREDENTIALS");
       error.status = 401;
       throw error;
     }
 
     // 2. Kiểm tra is_active
     if (!user.is_active) {
-      const error = new Error("Account is inactive");
+      const error = new Error("ACCOUNT_INACTIVE");
       error.status = 403;
       throw error;
     }
@@ -55,7 +55,7 @@ class AuthService {
     // 3. So khớp password
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      const error = new Error("Invalid credentials");
+      const error = new Error("INVALID_CREDENTIALS");
       error.status = 401;
       throw error;
     }
@@ -165,7 +165,7 @@ class AuthService {
       // 3. Sinh Access Token mới
       const payload = { userId, role: decoded.role };
       const newAccessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-      
+
       // Xoay vòng Refresh Token
       const newRefreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRES_IN });
       const ttlSeconds = this._parseExpireString(JWT_REFRESH_EXPIRES_IN);
@@ -202,7 +202,7 @@ class AuthService {
     const isMatch = await bcrypt.compare(oldPassword, user.password_hash);
     if (!isMatch) {
       const error = new Error("Invalid old password");
-      error.status = 400; 
+      error.status = 400;
       throw error;
     }
 
@@ -212,7 +212,7 @@ class AuthService {
 
     // 4. Thu hồi Refresh Token cũ bắt buộc login lại
     await redis.del(`refresh_token:${userId}`);
-    
+
     return { success: true };
   }
 
@@ -265,7 +265,7 @@ class AuthService {
   _parseExpireString(expireString) {
     if (!isNaN(expireString)) return Number(expireString);
     const match = expireString.match(/^(\d+)([dhms])$/);
-    if (!match) return 7 * 24 * 60 * 60; 
+    if (!match) return 7 * 24 * 60 * 60;
     const value = parseInt(match[1]);
     const unit = match[2];
     switch (unit) {
