@@ -90,23 +90,49 @@ class AuthService {
       throw error;
     }
 
+    const allowedDomains = (process.env.GOOGLE_ALLOWED_DOMAINS || "")
+      .split(",")
+      .map((domain) => domain.trim().toLowerCase())
+      .filter(Boolean);
+    if (allowedDomains.length === 0) {
+      const error = new Error("Google Workspace domain is not configured");
+      error.status = 503;
+      throw error;
+    }
+
+    let profile;
     try {
       const client = new OAuth2Client(clientId);
       const ticket = await client.verifyIdToken({
         idToken: credential,
         audience: clientId,
       });
-      const profile = ticket.getPayload();
-      if (!profile?.email || profile.email_verified !== true) {
-        throw new Error("Google email is not verified");
-      }
-      return { email: profile.email };
-    } catch (cause) {
-      if (cause.status === 503) throw cause;
+      profile = ticket.getPayload();
+    } catch {
       const error = new Error("Google credential is invalid or expired");
       error.status = 401;
       throw error;
     }
+
+    if (!profile?.email || profile.email_verified !== true) {
+      const error = new Error("Google credential is invalid or expired");
+      error.status = 401;
+      throw error;
+    }
+
+    const emailDomain = profile.email.split("@").pop().toLowerCase();
+    const workspaceDomain = profile.hd?.toLowerCase();
+    if (
+      !workspaceDomain ||
+      !allowedDomains.includes(workspaceDomain) ||
+      !allowedDomains.includes(emailDomain)
+    ) {
+      const error = new Error("Chỉ tài khoản Google Workspace do nhà trường cấp mới được đăng nhập");
+      error.status = 403;
+      throw error;
+    }
+
+    return { email: profile.email };
   }
 
   async _createSession(user) {

@@ -1,6 +1,7 @@
 process.env.JWT_SECRET = "test-jwt-secret";
 process.env.JWT_REFRESH_SECRET = "test-refresh-secret";
 process.env.GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
+process.env.GOOGLE_ALLOWED_DOMAINS = "fpt.edu.vn";
 
 jest.mock("./auth.repository", () => ({
   findUserByEmailForLogin: jest.fn(),
@@ -46,6 +47,7 @@ describe("AuthService.googleLogin", () => {
         getPayload: () => ({
           email: "verified@fpt.edu.vn",
           email_verified: true,
+          hd: "fpt.edu.vn",
         }),
       });
 
@@ -68,6 +70,20 @@ describe("AuthService.googleLogin", () => {
 
     await expect(authService._verifyGoogleCredential("signed-token")).rejects.toMatchObject({
       status: 401,
+    });
+  });
+
+  test("rejects a verified Google account outside the school Workspace", async () => {
+    jest.spyOn(OAuth2Client.prototype, "verifyIdToken").mockResolvedValue({
+      getPayload: () => ({
+        email: "student@gmail.com",
+        email_verified: true,
+      }),
+    });
+
+    await expect(authService._verifyGoogleCredential("signed-token")).rejects.toMatchObject({
+      status: 403,
+      message: "Chỉ tài khoản Google Workspace do nhà trường cấp mới được đăng nhập",
     });
   });
 
