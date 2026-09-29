@@ -407,6 +407,7 @@ const LearningStreakService = {
       return {
         subjectId: row.subject_id,
         subjectName: row.subject_name,
+        subjectCode: row.subject_code,
         currentStreak: calculated.currentStreak,
         longestStreak: calculated.longestStreak,
         lastActivityDate: calculated.lastActivityDate,
@@ -446,6 +447,7 @@ const LearningStreakService = {
     return {
       subjectId: row.subject_id,
       subjectName: row.subject_name,
+      subjectCode: row.subject_code,
       currentStreak: calculated.currentStreak,
       longestStreak: calculated.longestStreak,
       lastActivityDate: calculated.lastActivityDate,
