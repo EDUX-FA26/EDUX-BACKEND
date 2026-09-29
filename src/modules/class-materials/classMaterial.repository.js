@@ -2,7 +2,7 @@ const { pool } = require('../../config/db.config');
 
 const ClassMaterialRepository = {
   /**
-   * Lấy danh sách tài liệu của lớp (có phân trang)
+   * Lấy danh sách tài liệu của lớp (có phân trang) - Đã tối ưu song song
    */
   async findByClassId(classId, { page = 1, limit = 20 } = {}) {
     page = Number(page);
@@ -13,8 +13,6 @@ const ClassMaterialRepository = {
       SELECT COUNT(*) FROM class_materials
       WHERE class_id = $1
     `;
-    const { rows: countRows } = await pool.query(countQuery, [classId]);
-    const total = parseInt(countRows[0].count, 10);
 
     const query = `
       SELECT cm.*, up.full_name AS uploaded_by_name
@@ -24,8 +22,15 @@ const ClassMaterialRepository = {
       ORDER BY cm.created_at DESC
       LIMIT $2 OFFSET $3
     `;
-    const { rows } = await pool.query(query, [classId, limit, offset]);
-    return { data: rows, total };
+
+    // Chạy song song cả 2 query cùng một lúc để tiết kiệm thời gian
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(countQuery, [classId]),
+      pool.query(query, [classId, limit, offset])
+    ]);
+
+    const total = parseInt(countResult.rows[0].count, 10);
+    return { data: dataResult.rows, total };
   },
 
   /**
@@ -101,4 +106,3 @@ const ClassMaterialRepository = {
 };
 
 module.exports = ClassMaterialRepository;
-
