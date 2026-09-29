@@ -16,9 +16,10 @@ All routes require a Bearer token. Semesters and Subjects require the `admin` ro
 | --- | --- |
 | Semesters | `GET /api/semesters`, `GET /api/semesters/:id`, `POST /api/semesters`, `PATCH /api/semesters/:id`, `POST /api/semesters/:id/activate`, `POST /api/semesters/:id/close`, `POST /api/semesters/:id/lock` |
 | Subjects | `GET /api/subjects`, `GET /api/subjects/:id`, `POST /api/subjects`, `PATCH /api/subjects/:id`, `DELETE /api/subjects/:id` |
-| Search | `GET /api/search?q=term&type=assignment&page=1&limit=20` |
+| Search | `GET /api/search?q=term&type=assignment&page=1&limit=20` (`q` is optional for browse mode) |
 
 Search `type` may be `assignment`, `material`, `class`, or `flashcard`. Omit `type` to search all four. Flashcard search returns decks. Results are restricted to classes, assignments, materials, and decks the caller may access. Student assignment results include only published assignments.
+Omit `q` (or pass an empty value) to browse all accessible results for the selected type.
 
 Semester create requires `code`, `name`, `academic_year`, `start_date`, and `end_date` (ISO timestamps). Subject create requires `code` and `name`; optional fields are `description`, `department_id`, and `credits`.
 
