@@ -1,5 +1,6 @@
 const ClassesRepository = require('./classes.repository');
 const ExcelJS = require('exceljs');
+const LearningStreakService = require('../learning/learningStreak.service');
 
 const ClassesService = {
   async getClasses(filters, user) {
@@ -50,7 +51,7 @@ const ClassesService = {
   async updateClass(id, data) {
     const existing = await ClassesRepository.findById(id);
     if (!existing) throw new Error('CLASS_NOT_FOUND');
-    
+
     return await ClassesRepository.update(id, data);
   },
 
@@ -64,7 +65,49 @@ const ClassesService = {
   async getMembers(classId, user) {
     // verify access using getClassById logic
     await this.getClassById(classId, user);
-    return await ClassesRepository.findMembers(classId);
+
+    const rows = await ClassesRepository.findMembers(classId);
+
+    return rows.map((row) => {
+      let streakInfo = {
+        currentStreak: 0,
+        longestStreak: 0,
+        lastActivityDate: null,
+        recoveryUsed: 0,
+        recoveryRemaining: 3,
+        status: 'not_started'
+      };
+
+      // Tính toán lại streak thực tế nếu record streak tồn tại và đang active
+      if (row.current_streak !== null && row.current_streak !== undefined && row.is_active !== false) {
+        const calculated = LearningStreakService.calculateCurrentStreak({
+          current_streak: parseInt(row.current_streak, 10) || 0,
+          longest_streak: parseInt(row.longest_streak, 10) || 0,
+          last_activity_date: row.last_activity_date,
+          recovery_used: parseInt(row.recovery_used, 10) || 0,
+          recovery_month: row.recovery_month, // ✅ ĐÃ BỔ SUNG
+        });
+
+        streakInfo = {
+          currentStreak: calculated.currentStreak,
+          longestStreak: calculated.longestStreak,
+          lastActivityDate: calculated.lastActivityDate,
+          recoveryUsed: calculated.recoveryUsed,
+          recoveryRemaining: calculated.recoveryRemaining,
+          status: calculated.status
+        };
+      }
+
+      return {
+        studentId: row.student_id,
+        status: row.status,
+        email: row.email,
+        fullName: row.full_name,
+        studentCode: row.student_code,
+        departmentName: row.department_name,
+        ...streakInfo,
+      };
+    });
   },
 
   async removeMember(classId, studentId, user) {
@@ -90,7 +133,7 @@ const ClassesService = {
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
-    
+
     const worksheet = workbook.worksheets[0]; // Get first sheet
     if (!worksheet) throw new Error('INVALID_EXCEL_FORMAT');
 

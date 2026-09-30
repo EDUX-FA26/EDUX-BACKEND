@@ -139,7 +139,7 @@ const ClassesRepository = {
       WHERE id = $${idx}
       RETURNING *
     `;
-    
+
     const { rows } = await pool.query(query, values);
     return rows[0];
   },
@@ -163,14 +163,30 @@ const ClassesRepository = {
    */
   async findMembers(classId) {
     const query = `
-      SELECT cm.student_id, cm.status, u.email, up.full_name, up.student_code, d.name as department_name 
-      FROM class_members cm 
-      JOIN users u ON cm.student_id = u.id 
-      JOIN user_profiles up ON u.id = up.user_id 
-      LEFT JOIN departments d ON up.department_id = d.id 
-      WHERE cm.class_id = $1
-      ORDER BY up.student_code ASC
-    `;
+    SELECT 
+      cm.student_id, 
+      cm.status, 
+      u.email, 
+      up.full_name, 
+      up.student_code, 
+      d.name AS department_name,
+      -- Thông tin streak từ bảng subject_streaks
+      ss.current_streak,
+      ss.longest_streak,
+      ss.last_activity_date,
+      ss.recovery_used,
+      ss.recovery_month,
+      ss.is_active
+    FROM class_members cm 
+    JOIN classes c ON cm.class_id = c.id
+    JOIN users u ON cm.student_id = u.id 
+    JOIN user_profiles up ON u.id = up.user_id 
+    LEFT JOIN departments d ON up.department_id = d.id 
+    LEFT JOIN subject_streaks ss 
+      ON cm.student_id = ss.user_id AND c.subject_id = ss.subject_id
+    WHERE cm.class_id = $1
+    ORDER BY up.student_code ASC
+  `;
     const { rows } = await pool.query(query, [classId]);
     return rows;
   },
@@ -200,7 +216,7 @@ const ClassesRepository = {
         DO UPDATE SET status = 'active', updated_at = NOW()
         RETURNING *
       `;
-      
+
       const { rowCount } = await client.query(query, params);
       return rowCount;
     });
