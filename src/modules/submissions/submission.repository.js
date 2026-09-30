@@ -211,14 +211,14 @@ const SubmissionRepository = {
         u.email as student_email,
         sv.files as latest_files,
         sv.note as latest_note,
-        g.id as grade_id,       -- 🔴 LẤY THÊM GRADE ID
-        g.score,                -- 🔴 LẤY THÊM ĐIỂM SỐ
-        g.feedback              -- 🔴 LẤY THÊM FEEDBACK
+        g.id as grade_id,     
+        g.score,                
+        g.feedback             
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
       LEFT JOIN submission_versions sv ON s.id = sv.submission_id AND sv.is_latest = TRUE
-      LEFT JOIN grades g ON s.id = g.submission_id  -- 🔴 LEFT JOIN VÀO BẢNG GRADES
+      LEFT JOIN grades g ON s.id = g.submission_id 
       ${whereString}
       ORDER BY s.submitted_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
