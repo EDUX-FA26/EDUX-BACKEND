@@ -78,6 +78,10 @@ const GradingService = {
       feedback: feedback,
     });
 
+    if (grade.submission_id) {
+      await GradingRepository.markSubmissionGraded(grade.submission_id);
+    }
+
     return updated;
   },
 
