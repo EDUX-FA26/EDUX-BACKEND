@@ -1,4 +1,4 @@
-const { pool } = require('../../config/db.config');
+const { pool, withTransaction } = require('../../config/db.config');
 
 const FlashcardsRepository = {
 
@@ -10,11 +10,11 @@ const FlashcardsRepository = {
    * Lấy danh sách deck (có filter + phân trang)
    */
   async findDecks({ page, limit, subject_id, class_id, is_public, created_by, role, userId }) {
-    page  = Number(page)  || 1;
+    page = Number(page) || 1;
     limit = Number(limit) || 10;
     const offset = (page - 1) * limit;
     const params = [];
-    const where  = [];
+    const where = [];
 
     // Chỉ lấy deck đang active
     where.push(`fd.is_active = true`);
@@ -31,13 +31,21 @@ const FlashcardsRepository = {
       where.push(`fd.class_id = $${params.length}`);
     }
 
-    // Student: chỉ thấy deck public hoặc deck trong lớp mình tham gia
+    // Student: chỉ thấy deck public hoặc deck trong lớp mình tham gia (qua bảng access)
     if (role === 'student') {
       params.push(userId);
-      where.push(`(fd.is_public = true OR fd.class_id IN (
-        SELECT class_id FROM class_members
-        WHERE student_id = $${params.length} AND status = 'active'
-      ))`);
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (
+          SELECT class_id FROM class_members
+          WHERE student_id = $${params.length} AND status = 'active'
+        )
+        OR fd.id IN (
+          SELECT deck_id FROM flashcard_deck_class_access fdca
+          JOIN class_members cm ON fdca.class_id = cm.class_id
+          WHERE cm.student_id = $${params.length} AND cm.status = 'active'
+        )
+      )`);
     }
 
     // Lecturer: thấy deck của mình + deck public
@@ -344,17 +352,17 @@ const FlashcardsRepository = {
 
     return {
       total_cards,
-      reviewed_cards:   agg.reviewed_cards,
+      reviewed_cards: agg.reviewed_cards,
       unreviewed_cards: total_cards - agg.reviewed_cards,
-      total_reviews:    agg.total_reviews,
-      correct:          agg.correct,     // good + easy
-      incorrect:        agg.incorrect,   // again + hard
-      again:            agg.again,
-      hard:             agg.hard,
-      good:             agg.good,
-      easy:             agg.easy,
+      total_reviews: agg.total_reviews,
+      correct: agg.correct,     // good + easy
+      incorrect: agg.incorrect,   // again + hard
+      again: agg.again,
+      hard: agg.hard,
+      good: agg.good,
+      easy: agg.easy,
       accuracy,
-      card_results:     cardResults,
+      card_results: cardResults,
     };
   },
 
@@ -436,6 +444,73 @@ const FlashcardsRepository = {
       [deckId, userId]
     );
     return rows;
+  },
+  // ───────────────────────────────────────────
+  // CLASS ACCESS (per-class visibility)
+  // ───────────────────────────────────────────
+
+  /**
+   * Lấy danh sách class_id đang được cấp quyền xem deck này
+   */
+  async getClassAccess(deckId) {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        fdca.class_id,
+        c.class_code,
+        sem.name AS semester_name
+      FROM flashcard_deck_class_access fdca
+      JOIN classes c
+        ON fdca.class_id = c.id
+      LEFT JOIN semesters sem
+        ON c.semester_id = sem.id
+      WHERE fdca.deck_id = $1
+      ORDER BY c.class_code ASC
+    `,
+      [deckId]
+    );
+
+    return rows;
+  },
+
+  /**
+   * Cập nhật danh sách lớp được phép xem deck (replace all).
+   * classIds: UUID[] — danh sách lớp mới cần giữ lại
+   */
+  async setClassAccess(deckId, classIds) {
+    return withTransaction(async (client) => {
+      // Xóa tất cả access cũ
+      await client.query(
+        `
+        DELETE FROM flashcard_deck_class_access
+        WHERE deck_id = $1
+      `,
+        [deckId]
+      );
+
+      // Không có class nào được chọn
+      if (!classIds || classIds.length === 0) {
+        return [];
+      }
+
+      // Insert các class mới
+      const values = classIds
+        .map((_, i) => `($1, $${i + 2})`)
+        .join(', ');
+
+      const { rows } = await client.query(
+        `
+        INSERT INTO flashcard_deck_class_access
+          (deck_id, class_id)
+        VALUES ${values}
+        ON CONFLICT DO NOTHING
+        RETURNING class_id
+      `,
+        [deckId, ...classIds]
+      );
+
+      return rows.map((r) => r.class_id);
+    });
   },
 };
 

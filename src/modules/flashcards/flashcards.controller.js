@@ -84,6 +84,35 @@ const FlashcardsController = {
     }
   },
 
+  // GET  /api/flashcards/decks/:deckId/class-access
+  async getClassAccess(req, res, next) {
+    try {
+      const access = await FlashcardsService.getClassAccess(req.params.deckId, req.user);
+      res.status(200).json({ success: true, data: access });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      next(error);
+    }
+  },
+
+  // PUT  /api/flashcards/decks/:deckId/class-access
+  async setClassAccess(req, res, next) {
+    try {
+      const { class_ids } = req.body;
+      if (!Array.isArray(class_ids)) {
+        return res.status(400).json({ success: false, message: 'class_ids phải là mảng UUID' });
+      }
+      const result = await FlashcardsService.setClassAccess(req.params.deckId, class_ids, req.user);
+      res.status(200).json({ success: true, message: 'Cập nhật quyền truy cập thành công', data: result });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'DECK_EMPTY')     return res.status(422).json({ success: false, message: 'Bộ thẻ chưa có thẻ nào. Thêm thẻ trước khi chia sẻ.' });
+      next(error);
+    }
+  },
+
   async completeDeck(req, res, next) {
     try {
       const result = await FlashcardsService.completeDeck(req.params.deckId, req.user);

@@ -46,6 +46,12 @@ router.put('/decks/:deckId', authorizeWrite, validate(updateDeck), ctrl.updateDe
 // DELETE /api/flashcards/decks/:deckId — Xóa deck (soft delete)
 router.delete('/decks/:deckId', authorizeWrite, ctrl.deleteDeck);
 
+// GET  /api/flashcards/decks/:deckId/class-access — Danh sách lớp được phép xem
+router.get('/decks/:deckId/class-access', authorizeWrite, ctrl.getClassAccess);
+
+// PUT  /api/flashcards/decks/:deckId/class-access — Cập nhật quyền truy cập theo lớp
+router.put('/decks/:deckId/class-access', authorizeWrite, ctrl.setClassAccess);
+
 // POST   /api/flashcards/decks/:deckId/cards — UC66 Tạo card
 router.post('/decks/:deckId/cards', authorizeWrite, validate(createCard), ctrl.createCard);
 

@@ -88,6 +88,48 @@ class FlashcardsService {
     });
   }
 
+  // ───────────────────────────────────────────
+  // CLASS ACCESS
+  // ───────────────────────────────────────────
+
+  /**
+   * Lấy danh sách lớp đang được phép xem 1 deck.
+   */
+  async getClassAccess(deckId, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+
+    // Chỉ chủ deck hoặc admin mới xem được danh sách access
+    if (user.role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
+
+    return FlashcardsRepository.getClassAccess(deckId);
+  }
+
+  /**
+   * Cập nhật (replace) danh sách lớp được phép xem deck.
+   * Khi có ít nhất 1 lớp trong danh sách → deck được coi là “published” (is_public = true)
+   * Khi danh sách rỗng → revoke tất cả, is_public = false
+   */
+  async setClassAccess(deckId, classIds, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+    if (user.role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
+
+    // Deck phải có ít nhất 1 thẻ mới có thể chia sẻ
+    if (classIds.length > 0 && (!deck.cards || deck.cards.length === 0)) {
+      throw new Error('DECK_EMPTY');
+    }
+
+    // Ghi access mới
+    const grantedClassIds = await FlashcardsRepository.setClassAccess(deckId, classIds);
+
+    // Cập nhật is_public trên deck: true nếu có ít nhất 1 lớp, false nếu không có lớp nào
+    const shouldBePublic = classIds.length > 0;
+    await FlashcardsRepository.updateDeck(deckId, { is_public: shouldBePublic });
+
+    return { deck_id: deckId, granted_class_ids: grantedClassIds, is_public: shouldBePublic };
+  }
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────
