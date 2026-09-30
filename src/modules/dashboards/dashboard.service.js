@@ -41,10 +41,10 @@ class DashboardService {
       }
     }
 
-    // 3. Save to Redis cache (15 seconds TTL)
+    // 3. Save to Redis cache (60 seconds TTL)
     try {
       if (redis.isOpen) {
-        await redis.setEx(cacheKey, 15, JSON.stringify(data));
+        await redis.setEx(cacheKey, 60, JSON.stringify(data));
       }
     } catch (err) {
       // Ignore cache write error

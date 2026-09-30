@@ -252,6 +252,7 @@ const LearningStreakService = {
       }
 
       const newLongest = Math.max(longestStreak, newStreak);
+      const subjectCode = streakRow?.subject_code || deck?.subject_code;
 
       // Cập nhật subject_streaks
       await LearningRepository.updateStreak(
@@ -270,6 +271,7 @@ const LearningStreakService = {
 
       socketPayload = {
         subjectId,
+        subjectCode,
         currentStreak: newStreak,
         longestStreak: newLongest,
         lastActivityDate: today,
@@ -407,6 +409,7 @@ const LearningStreakService = {
       return {
         subjectId: row.subject_id,
         subjectName: row.subject_name,
+        subjectCode: row.subject_code,
         currentStreak: calculated.currentStreak,
         longestStreak: calculated.longestStreak,
         lastActivityDate: calculated.lastActivityDate,
@@ -446,6 +449,7 @@ const LearningStreakService = {
     return {
       subjectId: row.subject_id,
       subjectName: row.subject_name,
+      subjectCode: row.subject_code,
       currentStreak: calculated.currentStreak,
       longestStreak: calculated.longestStreak,
       lastActivityDate: calculated.lastActivityDate,

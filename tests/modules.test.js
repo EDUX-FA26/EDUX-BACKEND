@@ -68,20 +68,27 @@ test('subjects are admin-only and reject unknown fields', async () => {
   } finally { subjectsService.create = originalCreate; }
 });
 
-test('search requires a query and passes role, type, and pagination to service', async () => {
+test('search supports browse mode and passes role, type, query, and pagination to service', async () => {
   assert.equal((await request(app).get('/api/search?q=database')).status, 401);
-  assert.equal((await request(app).get('/api/search').set('Authorization', token('student'))).status, 400);
   assert.equal((await request(app).get('/api/search?q=x&type=unknown').set('Authorization', token('student'))).status, 400);
   const originalSearch = searchService.search;
   try {
+    const received = [];
     searchService.search = async (filters, user) => {
-      assert.deepEqual(filters, { q: 'database', type: 'assignment', page: 3, limit: 20 });
+      received.push(filters);
       assert.equal(user.role, 'student');
       return { data: [], total: 0 };
     };
+    const browse = await request(app).get('/api/search')
+      .set('Authorization', token('student'));
+    assert.equal(browse.status, 200);
     const result = await request(app).get('/api/search?q=database&type=assignment&page=3')
       .set('Authorization', token('student'));
     assert.equal(result.status, 200);
     assert.equal(result.body.pagination.page, 3);
+    assert.deepEqual(received, [
+      { q: '', page: 1, limit: 20 },
+      { q: 'database', type: 'assignment', page: 3, limit: 20 },
+    ]);
   } finally { searchService.search = originalSearch; }
 });

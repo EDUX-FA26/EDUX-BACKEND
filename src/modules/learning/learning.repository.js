@@ -66,7 +66,7 @@ const LearningRepository = {
     `, [userId, subjectId]);
 
     const query = `
-      SELECT ss.*, s.name AS subject_name
+      SELECT ss.*, s.name AS subject_name, s.code AS subject_code
       FROM subject_streaks ss
       JOIN subjects s ON ss.subject_id = s.id
       WHERE ss.user_id = $1 AND ss.subject_id = $2
