@@ -20,7 +20,7 @@ const SubmissionRepository = {
       1, // latest_version_no
       submissionData.status || 'submitted'
     ];
-    
+
     const { rows: submissionRows } = await client.query(submissionQuery, submissionValues);
     const submission = submissionRows[0];
 
@@ -52,7 +52,7 @@ const SubmissionRepository = {
   async addSubmissionVersion(submissionId, versionData, client = pool) {
     // 1. Lấy thông tin submission hiện tại để biết latest_version_no
     const { rows: subRows } = await client.query(
-      `SELECT * FROM submissions WHERE id = $1 FOR UPDATE`, 
+      `SELECT * FROM submissions WHERE id = $1 FOR UPDATE`,
       [submissionId]
     );
     if (subRows.length === 0) throw new Error("Submission not found");
@@ -148,9 +148,9 @@ const SubmissionRepository = {
       versionQuery += ` AND is_latest = TRUE`;
     }
     versionQuery += ` ORDER BY version_no DESC`;
-    
+
     const { rows: versionRows } = await pool.query(versionQuery, [id]);
-    
+
     return {
       ...submission,
       versions: versionRows
@@ -210,11 +210,15 @@ const SubmissionRepository = {
         up.full_name as student_name,
         u.email as student_email,
         sv.files as latest_files,
-        sv.note as latest_note
+        sv.note as latest_note,
+        g.id as grade_id,       -- 🔴 LẤY THÊM GRADE ID
+        g.score,                -- 🔴 LẤY THÊM ĐIỂM SỐ
+        g.feedback              -- 🔴 LẤY THÊM FEEDBACK
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
       LEFT JOIN submission_versions sv ON s.id = sv.submission_id AND sv.is_latest = TRUE
+      LEFT JOIN grades g ON s.id = g.submission_id  -- 🔴 LEFT JOIN VÀO BẢNG GRADES
       ${whereString}
       ORDER BY s.submitted_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
@@ -230,7 +234,7 @@ const SubmissionRepository = {
    */
   async findMySubmissions(studentId, { page = 1, limit = 10 }) {
     const offset = (page - 1) * limit;
-    
+
     const countQuery = `SELECT COUNT(*) FROM submissions WHERE student_id = $1`;
     const { rows: countRows } = await pool.query(countQuery, [studentId]);
     const total = parseInt(countRows[0].count, 10);
@@ -245,7 +249,7 @@ const SubmissionRepository = {
       ORDER BY s.updated_at DESC
       LIMIT $2 OFFSET $3
     `;
-    
+
     const { rows } = await pool.query(query, [studentId, limit, offset]);
     return { data: rows, total };
   }
