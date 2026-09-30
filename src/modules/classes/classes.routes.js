@@ -21,6 +21,7 @@ router.use(authenticate);
 // Classes CRUD
 router.get('/', validate(getClassesQuery, 'query'), classesController.getClasses);
 router.get('/:id', classesController.getClassById);
+router.get('/:id/slots', classesController.getSlots);
 router.post('/', authorize('admin'), validate(createClass), classesController.createClass);
 router.patch('/:id', authorize('admin'), validate(updateClass), classesController.updateClass);
 router.delete('/:id', authorize('admin'), classesController.deleteClass);

@@ -34,6 +34,12 @@ const ClassesService = {
 
     return classData;
   },
+  async getSlots(classId, user) {
+    // verify access using getClassById logic
+    await this.getClassById(classId, user);
+    return await ClassesRepository.getSlots(classId);
+  },
+
 
   async createClass(data) {
     // Could add uniqueness check for class_code + semester_id + subject_id here 
