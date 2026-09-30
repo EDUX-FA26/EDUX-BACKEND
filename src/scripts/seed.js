@@ -91,8 +91,7 @@ async function runSeed() {
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT uk_class_student UNIQUE (class_id, student_id)
         );
-        DROP TABLE IF EXISTS assignment_materials CASCADE;
-        DROP TABLE IF EXISTS assignments CASCADE;
+
 
         CREATE TABLE IF NOT EXISTS assignments (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
