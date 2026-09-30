@@ -41,6 +41,15 @@ const ClassesController = {
       next(error);
     }
   },
+  async getSlots(req, res, next) {
+    try {
+      const slots = await ClassesService.getSlots(req.params.id, req.user);
+      res.json({ success: true, data: slots });
+    } catch (error) {
+      next(error);
+    }
+  },
+
 
   async createClass(req, res, next) {
     try {

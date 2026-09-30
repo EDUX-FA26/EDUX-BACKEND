@@ -9,7 +9,7 @@ const AssignmentController = {
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      next(error);
+      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
     }
   },
 
@@ -22,7 +22,7 @@ const AssignmentController = {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      next(error);
+      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
     }
   },
 
@@ -35,7 +35,7 @@ const AssignmentController = {
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      next(error);
+      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
     }
   },
 
@@ -47,7 +47,7 @@ const AssignmentController = {
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      next(error);
+      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
     }
   },
 
@@ -60,7 +60,7 @@ const AssignmentController = {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'ASSIGNMENT_NOT_PUBLISHED') return res.status(403).json({ success: false, message: 'Assignment is not published yet' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      next(error);
+      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
     }
   },
 
@@ -82,7 +82,7 @@ const AssignmentController = {
         }
       });
     } catch (error) {
-      next(error);
+      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
     }
   }
 };

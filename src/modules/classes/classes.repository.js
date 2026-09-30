@@ -10,7 +10,7 @@ const ClassesRepository = {
     const offset = (page - 1) * limit;
     const params = [];
     let query = `
-      SELECT c.*, s.name as subject_name, sem.name as semester_name, u.full_name as lecturer_name 
+      SELECT c.*, s.name as subject_name, s.code as subject_code, sem.name as semester_name, u.full_name as lecturer_name 
       FROM classes c 
       JOIN subjects s ON c.subject_id = s.id 
       JOIN semesters sem ON c.semester_id = sem.id 
@@ -63,7 +63,7 @@ const ClassesRepository = {
    */
   async findById(id) {
     const query = `
-      SELECT c.*, s.name as subject_name, sem.name as semester_name, u.full_name as lecturer_name 
+      SELECT c.*, s.name as subject_name, s.code as subject_code, sem.name as semester_name, u.full_name as lecturer_name 
       FROM classes c 
       JOIN subjects s ON c.subject_id = s.id 
       JOIN semesters sem ON c.semester_id = sem.id 
@@ -73,6 +73,23 @@ const ClassesRepository = {
     const { rows } = await pool.query(query, [id]);
     return rows[0];
   },
+  async getSlots(classId) {
+    const query = `
+      SELECT 
+        id, 
+        session_no as slot_number, 
+        learning_date as date, 
+        '12:30 - 14:45' as time, 
+        title, 
+        note as content
+      FROM sessions 
+      WHERE class_id = $1 
+      ORDER BY session_no ASC
+    `;
+    const { rows } = await pool.query(query, [classId]);
+    return rows;
+  },
+
 
   /**
    * Tạo lớp học mới
