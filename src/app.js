@@ -9,6 +9,7 @@ const classesRoutes = require("./modules/classes/classes.routes");
 const notificationsRoutes = require("./modules/notifications/notifications.routes");
 const dashboardRoutes = require("./modules/dashboards/dashboard.routes");
 const flashcardsRoutes = require("./modules/flashcards/flashcards.routes");
+const flashcardsTestRoutes = require("./modules/flashcards-test/flashcardsTest.routes");
 const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRouter } = require("./modules/class-materials/classMaterial.routes");
 const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
@@ -49,6 +50,7 @@ app.use("/api/classes", classesRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/dashboards", dashboardRoutes);
 app.use("/api/flashcards", flashcardsRoutes);
+app.use("/api/flashcards", flashcardsTestRoutes);
 
 // Module 7 — Learning Materials
 // A. Class Materials
