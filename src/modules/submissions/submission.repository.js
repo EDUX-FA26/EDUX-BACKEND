@@ -232,26 +232,72 @@ const SubmissionRepository = {
   /**
    * Sinh viên xem danh sách bài nộp của mình
    */
-  async findMySubmissions(studentId, { page = 1, limit = 10 }) {
+  async findMySubmissions(
+    studentId,
+    { page = 1, limit = 10, assignment_id }
+  ) {
     const offset = (page - 1) * limit;
 
-    const countQuery = `SELECT COUNT(*) FROM submissions WHERE student_id = $1`;
-    const { rows: countRows } = await pool.query(countQuery, [studentId]);
+    const conditions = ['s.student_id = $1'];
+    const values = [studentId];
+    let paramIndex = 2;
+
+    if (assignment_id) {
+      conditions.push(`s.assignment_id = $${paramIndex}`);
+      values.push(assignment_id);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    // Count
+    const countQuery = `
+    SELECT COUNT(*)
+    FROM submissions s
+    WHERE ${whereClause}
+  `;
+
+    const { rows: countRows } = await pool.query(
+      countQuery,
+      values
+    );
+
     const total = parseInt(countRows[0].count, 10);
 
+    // Data
     const query = `
-      SELECT 
-        s.*,
-        a.title as assignment_title
-      FROM submissions s
-      JOIN assignments a ON s.assignment_id = a.id
-      WHERE s.student_id = $1
-      ORDER BY s.updated_at DESC
-      LIMIT $2 OFFSET $3
-    `;
+    SELECT 
+      s.*,
+      a.title AS assignment_title,
 
-    const { rows } = await pool.query(query, [studentId, limit, offset]);
-    return { data: rows, total };
+      g.score AS score,
+      g.feedback AS feedback
+
+    FROM submissions s
+
+    JOIN assignments a 
+      ON s.assignment_id = a.id
+
+    LEFT JOIN grades g
+      ON g.submission_id = s.id
+
+    WHERE ${whereClause}
+
+    ORDER BY s.updated_at DESC
+
+    LIMIT $${paramIndex}
+    OFFSET $${paramIndex + 1}
+  `;
+
+    const { rows } = await pool.query(
+      query,
+      [...values, limit, offset]
+    );
+
+    return {
+      data: rows,
+      total
+    };
   }
 };
 
