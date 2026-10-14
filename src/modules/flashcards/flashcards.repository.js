@@ -512,6 +512,35 @@ const FlashcardsRepository = {
       return rows.map((r) => r.class_id);
     });
   },
+
+  /**
+   * Tạo nhiều card cùng lúc trong một transaction
+   */
+  async createCardsBatch(cards) {
+    if (!cards || cards.length === 0) return [];
+    return withTransaction(async (client) => {
+      const inserted = [];
+      for (const card of cards) {
+        const { rows } = await client.query(
+          `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING *`,
+          [
+            card.deck_id,
+            card.type || 'multiple_choice',
+            card.question,
+            JSON.stringify(card.options || []),
+            card.answer,
+            card.explanation || '',
+            card.difficulty || 'medium',
+            card.position,
+          ]
+        );
+        inserted.push(rows[0]);
+      }
+      return inserted;
+    });
+  },
 };
 
 module.exports = FlashcardsRepository;

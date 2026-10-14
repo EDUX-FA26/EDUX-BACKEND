@@ -1,3 +1,4 @@
+const ExcelJS = require('exceljs');
 const FlashcardsRepository = require('./flashcards.repository');
 const LearningStreakService = require('../learning/learningStreak.service');
 
@@ -260,6 +261,229 @@ class FlashcardsService {
       deck_id: deckId,
       cards,
       stats: { total: cards.length, ...stats },
+    };
+  }
+
+  // ─────────────────────────────────────────────
+  // EXCEL IMPORT & TEMPLATE
+  // ─────────────────────────────────────────────
+
+  /**
+   * Tạo file Excel mẫu (.xlsx) để người dùng tải về điền dữ liệu flashcards
+   */
+  async generateExcelTemplate() {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Flashcards_Template');
+
+    worksheet.columns = [
+      { header: 'Câu hỏi (*)', key: 'question', width: 40 },
+      { header: 'Lựa chọn A (*)', key: 'option_a', width: 25 },
+      { header: 'Lựa chọn B (*)', key: 'option_b', width: 25 },
+      { header: 'Lựa chọn C', key: 'option_c', width: 25 },
+      { header: 'Lựa chọn D', key: 'option_d', width: 25 },
+      { header: 'Đáp án đúng (*)', key: 'answer', width: 25 },
+      { header: 'Giải thích', key: 'explanation', width: 35 },
+      { header: 'Độ khó (easy/medium/hard)', key: 'difficulty', width: 25 },
+    ];
+
+    // Style header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4F46E5' }, // Indigo color
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    headerRow.height = 30;
+
+    // Sample data rows
+    const samples = [
+      {
+        question: 'Ngôn ngữ nào sau đây chạy trực tiếp trên trình duyệt web?',
+        option_a: 'JavaScript',
+        option_b: 'Python',
+        option_c: 'Java',
+        option_d: 'C++',
+        answer: 'A',
+        explanation: 'JavaScript là ngôn ngữ kịch bản chạy trong môi trường trình duyệt web.',
+        difficulty: 'easy',
+      },
+      {
+        question: 'Giao thức nào cung cấp kết nối truyền tải dữ liệu an toàn được mã hóa qua SSL/TLS?',
+        option_a: 'HTTP',
+        option_b: 'FTP',
+        option_c: 'HTTPS',
+        option_d: 'Telnet',
+        answer: 'HTTPS',
+        explanation: 'HTTPS (Hypertext Transfer Protocol Secure) sử dụng TLS/SSL để mã hóa dữ liệu.',
+        difficulty: 'medium',
+      },
+      {
+        question: 'Trong lập trình hướng đối tượng (OOP), tính chất nào cho phép một lớp kế thừa các thuộc tính và phương thức của lớp khác?',
+        option_a: 'Tính đóng gói (Encapsulation)',
+        option_b: 'Tính kế thừa (Inheritance)',
+        option_c: 'Tính đa hình (Polymorphism)',
+        option_d: 'Tính trừu tượng (Abstraction)',
+        answer: 'B',
+        explanation: 'Tính kế thừa cho phép lớp con tái sử dụng và mở rộng các thành phần của lớp cha.',
+        difficulty: 'medium',
+      },
+    ];
+
+    samples.forEach((sample) => {
+      worksheet.addRow(sample);
+    });
+
+    // Style data rows
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) {
+        row.alignment = { vertical: 'middle', wrapText: true };
+      }
+    });
+
+    return workbook;
+  }
+
+  /**
+   * Đọc file Excel (.xlsx, .xls) và thêm cards vào deck
+   */
+  async importCardsFromExcel(deckId, fileBuffer, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+
+    if (user.role !== 'admin' && deck.created_by !== user.id) {
+      throw new Error('FORBIDDEN');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(fileBuffer);
+
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      throw new Error('EMPTY_WORKBOOK');
+    }
+
+    const getCellValue = (row, colIndex) => {
+      const cell = row.getCell(colIndex);
+      if (!cell || cell.value === null || cell.value === undefined) return '';
+      if (typeof cell.value === 'object') {
+        if (cell.value.text) return String(cell.value.text).trim();
+        if (cell.value.result !== undefined) return String(cell.value.result).trim();
+        if (Array.isArray(cell.value.richText)) {
+          return cell.value.richText.map(t => t.text).join('').trim();
+        }
+      }
+      return String(cell.value).trim();
+    };
+
+    const validCards = [];
+    const errors = [];
+    let totalProcessedRows = 0;
+
+    for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
+      const row = worksheet.getRow(rowNumber);
+      const question = getCellValue(row, 1);
+      const optA = getCellValue(row, 2);
+      const optB = getCellValue(row, 3);
+      const optC = getCellValue(row, 4);
+      const optD = getCellValue(row, 5);
+      const rawAnswer = getCellValue(row, 6);
+      const explanation = getCellValue(row, 7);
+      const rawDifficulty = getCellValue(row, 8).toLowerCase();
+
+      // Bỏ qua dòng trống hoàn toàn
+      if (!question && !optA && !optB && !optC && !optD && !rawAnswer) {
+        continue;
+      }
+
+      totalProcessedRows++;
+
+      // Kiểm tra câu hỏi
+      if (!question) {
+        errors.push({ row: rowNumber, message: 'Thiếu nội dung câu hỏi' });
+        continue;
+      }
+
+      // Thu thập các lựa chọn không rỗng
+      const options = [optA, optB, optC, optD].filter(Boolean);
+      if (options.length < 2) {
+        errors.push({ row: rowNumber, message: 'Cần có ít nhất 2 lựa chọn đáp án (A và B)' });
+        continue;
+      }
+
+      // Kiểm tra đáp án
+      if (!rawAnswer) {
+        errors.push({ row: rowNumber, message: 'Thiếu đáp án đúng' });
+        continue;
+      }
+
+      let answer = '';
+      const upperAns = rawAnswer.toUpperCase();
+      if (upperAns === 'A' && optA) answer = optA;
+      else if (upperAns === 'B' && optB) answer = optB;
+      else if (upperAns === 'C' && optC) answer = optC;
+      else if (upperAns === 'D' && optD) answer = optD;
+      else {
+        // Tìm xem có khớp với text của lựa chọn nào không
+        const matched = options.find((opt) => opt.toLowerCase() === rawAnswer.toLowerCase());
+        if (matched) {
+          answer = matched;
+        } else {
+          errors.push({
+            row: rowNumber,
+            message: `Đáp án "${rawAnswer}" không khớp với các lựa chọn (A, B, C, D hoặc nội dung lựa chọn)`,
+          });
+          continue;
+        }
+      }
+
+      // Độ khó
+      const difficulty = ['easy', 'medium', 'hard'].includes(rawDifficulty) ? rawDifficulty : 'medium';
+
+      validCards.push({
+        question,
+        options,
+        answer,
+        explanation,
+        difficulty,
+      });
+    }
+
+    if (validCards.length === 0) {
+      return {
+        success: false,
+        message: errors.length > 0
+          ? 'Không tìm thấy thẻ hợp lệ nào trong file do có lỗi dữ liệu'
+          : 'File Excel không có dữ liệu câu hỏi',
+        total_rows: totalProcessedRows,
+        imported_count: 0,
+        errors,
+        cards: [],
+      };
+    }
+
+    let nextPos = await FlashcardsRepository.getNextPosition(deckId);
+    const cardsToInsert = validCards.map((c) => ({
+      deck_id: deckId,
+      type: 'multiple_choice',
+      question: c.question,
+      options: c.options,
+      answer: c.answer,
+      explanation: c.explanation,
+      difficulty: c.difficulty,
+      position: nextPos++,
+    }));
+
+    const inserted = await FlashcardsRepository.createCardsBatch(cardsToInsert);
+
+    return {
+      success: true,
+      message: `Đã nhập thành công ${inserted.length}/${totalProcessedRows} thẻ từ file Excel`,
+      total_rows: totalProcessedRows,
+      imported_count: inserted.length,
+      errors,
+      cards: inserted,
     };
   }
 

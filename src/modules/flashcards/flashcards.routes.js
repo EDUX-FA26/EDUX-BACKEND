@@ -24,6 +24,39 @@ const authorizeWrite = (req, res, next) => {
   next();
 };
 
+const multer = require('multer');
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    if (
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      file.mimetype === 'application/vnd.ms-excel' ||
+      file.mimetype === 'text/csv' ||
+      file.originalname.match(/\.(xlsx|xls|csv)$/i)
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ chấp nhận file định dạng Excel (.xlsx, .xls) hoặc .csv'));
+    }
+  },
+});
+
+// ─────────────────────────────────────────────
+// EXCEL TEMPLATE & IMPORT routes
+// ─────────────────────────────────────────────
+
+// GET  /api/flashcards/template/excel               — Tải file Excel mẫu
+router.get('/template/excel', ctrl.downloadExcelTemplate);
+
+// POST /api/flashcards/decks/:deckId/cards/import-excel — Import cards từ file Excel
+router.post(
+  '/decks/:deckId/cards/import-excel',
+  authorizeWrite,
+  upload.single('file'),
+  ctrl.importCardsFromExcel
+);
+
 // ─────────────────────────────────────────────
 // DECK routes
 // ─────────────────────────────────────────────

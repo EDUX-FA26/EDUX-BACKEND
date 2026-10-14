@@ -219,6 +219,47 @@ const FlashcardsController = {
       next(error);
     }
   },
+
+  // GET /api/flashcards/template/excel
+  async downloadExcelTemplate(req, res, next) {
+    try {
+      const workbook = await FlashcardsService.generateExcelTemplate();
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="flashcard_template.xlsx"'
+      );
+      await workbook.xlsx.write(res);
+      res.end();
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /api/flashcards/decks/:deckId/cards/import-excel
+  async importCardsFromExcel(req, res, next) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel để tải lên' });
+      }
+
+      const result = await FlashcardsService.importCardsFromExcel(
+        req.params.deckId,
+        req.file.buffer,
+        req.user
+      );
+
+      res.status(result.success ? 200 : 422).json(result);
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'EMPTY_WORKBOOK') return res.status(400).json({ success: false, message: 'File Excel không có sheet nào' });
+      next(error);
+    }
+  },
 };
 
 module.exports = FlashcardsController;
