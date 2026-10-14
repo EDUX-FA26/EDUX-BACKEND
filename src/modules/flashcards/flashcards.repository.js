@@ -230,7 +230,7 @@ const FlashcardsRepository = {
        RETURNING *`,
       [
         deck_id,
-        type || 'essay',
+        type || 'multiple_choice',
         question,
         JSON.stringify(options || []),
         answer,

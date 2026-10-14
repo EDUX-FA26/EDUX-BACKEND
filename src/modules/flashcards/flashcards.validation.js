@@ -36,7 +36,7 @@ const flashcardsSchemas = {
 
   // POST /api/flashcards/decks/:deckId/cards
   createCard: z.object({
-    type:        z.enum(['essay', 'multiple_choice']).optional().default('essay'),
+    type:        z.enum(['multiple_choice']).optional().default('multiple_choice'),
     question:    z.string().min(1, 'Câu hỏi không được để trống'),
     answer:      z.string().min(1, 'Đáp án không được để trống'),
     options:     z.array(z.any()).optional().default([]),
@@ -55,7 +55,7 @@ const flashcardsSchemas = {
 
   // PUT /api/flashcards/:id
   updateCard: z.object({
-    type:        z.enum(['essay', 'multiple_choice']).optional(),
+    type:        z.enum(['multiple_choice']).optional(),
     question:    z.string().min(1).optional(),
     answer:      z.string().min(1).optional(),
     options:     z.array(z.any()).optional(),

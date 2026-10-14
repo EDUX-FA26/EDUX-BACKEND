@@ -57,7 +57,7 @@ const FlashcardsTestRepository = {
     const { rows } = await pool.query(
       `SELECT id, type AS question_type, question, options, difficulty, position
        FROM flashcards
-       WHERE deck_id = $1 AND is_active = true
+       WHERE deck_id = $1 AND is_active = true AND type = 'multiple_choice'
        ORDER BY position ASC, created_at ASC`,
       [deckId]
     );
@@ -79,7 +79,7 @@ const FlashcardsTestRepository = {
     const { rows } = await pool.query(
       `SELECT id, type AS question_type, question, options, answer, explanation
        FROM flashcards
-       WHERE deck_id = $1 AND is_active = true`,
+       WHERE deck_id = $1 AND is_active = true AND type = 'multiple_choice'`,
       [deckId]
     );
 

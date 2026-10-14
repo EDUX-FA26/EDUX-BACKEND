@@ -65,11 +65,11 @@ router.post('/decks/:deckId/complete', ctrl.completeDeck);
 // GET    /api/flashcards/decks/:deckId/cards               — UC67 Xem card
 router.get('/decks/:deckId/cards', ctrl.getCardById);
 
-// put  /api/flashcards/:id                 — UC68 Sửa card
-router.put('/decks/:deckId/cards', authorizeWrite, validate(updateCard), ctrl.updateCard);
+// put  /api/flashcards/decks/:deckId/cards/:cardId  — UC68 Sửa card
+router.put('/decks/:deckId/cards/:cardId', authorizeWrite, validate(updateCard), ctrl.updateCard);
 
-// DELETE /api/flashcards/:id                 — UC69 Xóa card
-router.delete('/decks/:deckId/cards', authorizeWrite, ctrl.deleteCard);
+// DELETE /api/flashcards/decks/:deckId/cards/:cardId — UC69 Xóa card
+router.delete('/decks/:deckId/cards/:cardId', authorizeWrite, ctrl.deleteCard);
 
 // ─────────────────────────────────────────────
 // REVIEW routes

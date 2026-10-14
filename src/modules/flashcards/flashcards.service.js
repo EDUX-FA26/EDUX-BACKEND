@@ -147,7 +147,7 @@ class FlashcardsService {
 
     return FlashcardsRepository.createCard({
       deck_id: deckId,
-      type: data.type || 'essay',
+      type: data.type || 'multiple_choice',
       question: data.question,
       options: data.options || [],
       answer: data.answer,

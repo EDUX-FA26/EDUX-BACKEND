@@ -12,7 +12,7 @@ class FlashcardsTestService {
 
     const cards = await FlashcardsTestRepository.getDeckCardsForTest(deckId);
     if (!cards || cards.length === 0) {
-      throw new Error('DECK_EMPTY');
+      throw new Error('DECK_NO_MULTIPLE_CHOICE');
     }
 
     const test = await FlashcardsTestRepository.createTest({

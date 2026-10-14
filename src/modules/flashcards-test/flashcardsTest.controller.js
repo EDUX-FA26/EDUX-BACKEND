@@ -7,9 +7,9 @@ const FlashcardsTestController = {
       const result = await FlashcardsTestService.createTest(req.params.deckId, req.user);
       res.status(201).json({ success: true, data: result });
     } catch (error) {
-      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
-      if (error.message === 'FORBIDDEN')      return res.status(403).json({ success: false, message: 'Access denied' });
-      if (error.message === 'DECK_EMPTY')     return res.status(422).json({ success: false, message: 'Bộ thẻ chưa có câu hỏi nào để tạo bài kiểm tra' });
+      if (error.message === 'DECK_NOT_FOUND')           return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN')                 return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'DECK_NO_MULTIPLE_CHOICE')   return res.status(422).json({ success: false, message: 'Bộ thẻ này chưa có câu hỏi trắc nghiệm nào để làm bài kiểm tra' });
       next(error);
     }
   },

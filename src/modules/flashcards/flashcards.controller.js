@@ -141,7 +141,7 @@ const FlashcardsController = {
 
   async getCardById(req, res, next) {
     try {
-      const card = await FlashcardsService.getCardById(req.params.id, req.user);
+      const card = await FlashcardsService.getCardById(req.params.cardId, req.user);
       res.status(200).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
@@ -152,7 +152,7 @@ const FlashcardsController = {
 
   async updateCard(req, res, next) {
     try {
-      const card = await FlashcardsService.updateCard(req.params.id, req.body, req.user);
+      const card = await FlashcardsService.updateCard(req.params.cardId, req.body, req.user);
       res.status(200).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
@@ -163,7 +163,7 @@ const FlashcardsController = {
 
   async deleteCard(req, res, next) {
     try {
-      await FlashcardsService.deleteCard(req.params.id, req.user);
+      await FlashcardsService.deleteCard(req.params.cardId, req.user);
       res.status(200).json({ success: true, message: 'Card deleted successfully' });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
