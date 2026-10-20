@@ -19,12 +19,17 @@ const learningSchemas = {
   }),
 
   getLearningProfileQuery: z.object({
-    subjectId: z.string().uuid('subjectId pháº£i lÃ  UUID há»£p lá»‡'),
+    subjectId: z.string().uuid('subjectId phải là UUID hợp lệ'),
     historyLimit: z.string().regex(/^\d+$/).transform(Number).default(20)
-      .refine((value) => value >= 1 && value <= 100, 'historyLimit pháº£i tá»« 1 Ä‘áº¿n 100'),
+      .refine((value) => value >= 1 && value <= 100, 'historyLimit phải từ 1 đến 100'),
     wrongAnswersLimit: z.string().regex(/^\d+$/).transform(Number).default(50)
-      .refine((value) => value >= 1 && value <= 100, 'wrongAnswersLimit pháº£i tá»« 1 Ä‘áº¿n 100'),
+      .refine((value) => value >= 1 && value <= 100, 'wrongAnswersLimit phải từ 1 đến 100'),
   }),
+
+  getTopicPerformanceQuery: z.object({
+    subjectId: z.string().uuid('subjectId phải là UUID hợp lệ'),
+  }),
+
   postActivity: z.object({
     deckId: z.string().uuid('deckId phải là UUID hợp lệ').optional(),
     flashcardDeckId: z.string().uuid('flashcardDeckId phải là UUID hợp lệ').optional(),

@@ -175,6 +175,43 @@ const LearningRepository = {
     );
     return rows;
   },
+
+  async findActiveTopicsBySubject(subjectId) {
+    const { rows } = await pool.query(
+      `SELECT id, name, parent_id
+       FROM topics WHERE subject_id = $1 AND is_active = true
+       ORDER BY name ASC`,
+      [subjectId]
+    );
+    return rows;
+  },
+
+  async findSubmittedMultipleChoiceTopicAnswers(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT fct.topic_id, fta.id AS answer_id, fta.flashcard_id, fta.is_correct, ft.submitted_at
+       FROM flashcard_tests ft
+       JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+       JOIN flashcards fc ON fc.id = fta.flashcard_id AND fc.is_active = true
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+       JOIN flashcard_topics fct ON fct.flashcard_id = fc.id AND fct.review_status = 'approved'
+       JOIN topics t ON t.id = fct.topic_id AND t.subject_id = fd.subject_id AND t.is_active = true
+       WHERE ft.user_id = $1
+         AND ft.status = 'submitted'
+         AND fd.subject_id = $2
+         AND fc.type = 'multiple_choice'
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (
+             SELECT fdca.deck_id FROM flashcard_deck_class_access fdca
+             JOIN class_members cm ON cm.class_id = fdca.class_id
+             WHERE cm.student_id = $1 AND cm.status = 'active'
+           )
+         )`,
+      [studentId, subjectId]
+    );
+    return rows;
+  },
   /**
    * Lấy 1 streak của user theo subject (kèm thông tin subject)
    */

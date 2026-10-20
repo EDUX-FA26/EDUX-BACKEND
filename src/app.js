@@ -17,11 +17,13 @@ const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.ro
 const submissionsRoutes = require("./modules/submissions/submission.routes");
 const semestersRoutes = require("./modules/semesters/semesters.routes");
 const subjectsRoutes = require("./modules/subjects/subjects.routes");
+const topicsRoutes = require("./modules/topics/topics.routes");
 const searchRoutes = require("./modules/search/search.routes");
 const learningRoutes = require("./modules/learning/learning.routes");
 const adminRoutes = require("./modules/admin/admin.routes");
 const reportsRoutes = require("./modules/reports/reports.routes");
 const communicationsRoutes = require("./modules/communications/communications.routes");
+
 
 // =========================
 // Middleware
@@ -37,6 +39,7 @@ app.use(
 app.use(express.json());
 
 app.use(express.urlencoded({ extended: true }));
+
 
 
 // =========================
@@ -67,6 +70,7 @@ app.use("/api/grades", gradesRouter);
 app.use("/api/gradebooks", gradebooksRouter);
 app.use("/api/semesters", semestersRoutes);
 app.use("/api/subjects", subjectsRoutes);
+app.use("/api/topics", topicsRoutes);
 app.use("/api/search", searchRoutes);
 
 // Module 9 - Submissions

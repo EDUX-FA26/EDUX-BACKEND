@@ -1,10 +1,11 @@
 const LearningStreakService = require('./learningStreak.service');
 const LearningProfileService = require('./learningProfile.service');
+const LearningTopicAnalyticsService = require('./learningTopicAnalytics.service');
 
 const LearningController = {
   /**
    * GET /api/learning/profile?subjectId=...
-   * Chá»‰ tráº£ dá»¯ liá»‡u há»c táº­p cá»§a student Ä‘ang Ä‘Äƒng nháº­p.
+   * Chỉ trả dữ liệu học tập của student đang đăng nhập.
    */
   async getLearningProfile(req, res, next) {
     try {
@@ -30,6 +31,25 @@ const LearningController = {
       return next(error);
     }
   },
+
+  async getTopicPerformance(req, res, next) {
+    try {
+      if (req.user.role !== 'student') {
+        return res.status(403).json({ success: false, message: 'Student access is required' });
+      }
+      const data = await LearningTopicAnalyticsService.getStudentTopicPerformance(req.user.id, req.query.subjectId);
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      if (error.message === 'SUBJECT_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Subject not found' });
+      }
+      if (error.message === 'SUBJECT_ACCESS_FORBIDDEN') {
+        return res.status(403).json({ success: false, message: 'You are not an active member of this subject' });
+      }
+      return next(error);
+    }
+  },
+
   /**
    * GET /api/learning/streak
    * Trả về tất cả streak của user hiện tại theo từng subject

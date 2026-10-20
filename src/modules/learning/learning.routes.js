@@ -9,14 +9,17 @@ const {
   getActivitiesQuery,
   getHeatmapQuery,
   getLearningProfileQuery,
+  getTopicPerformanceQuery,
   postActivity,
 } = require('./learning.validation');
 
 // Toàn bộ route yêu cầu đăng nhập
 router.use(authenticate);
 
-// GET /api/learning/profile?subjectId=... â€” Profile há»c táº­p cá»§a chÃ­nh student
+// GET /api/learning/profile?subjectId=... — Profile học tập của chính student
 router.get('/profile', validate(getLearningProfileQuery, 'query'), ctrl.getLearningProfile);
+router.get('/topics/performance', validate(getTopicPerformanceQuery, 'query'), ctrl.getTopicPerformance);
+
 // ─────────────────────────────────────────────
 // STREAK ROUTES
 // ─────────────────────────────────────────────
