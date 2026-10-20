@@ -18,6 +18,13 @@ const learningSchemas = {
     year: z.string().regex(/^\d{4}$/, 'year phải có 4 chữ số').optional(),
   }),
 
+  getLearningProfileQuery: z.object({
+    subjectId: z.string().uuid('subjectId pháº£i lÃ  UUID há»£p lá»‡'),
+    historyLimit: z.string().regex(/^\d+$/).transform(Number).default(20)
+      .refine((value) => value >= 1 && value <= 100, 'historyLimit pháº£i tá»« 1 Ä‘áº¿n 100'),
+    wrongAnswersLimit: z.string().regex(/^\d+$/).transform(Number).default(50)
+      .refine((value) => value >= 1 && value <= 100, 'wrongAnswersLimit pháº£i tá»« 1 Ä‘áº¿n 100'),
+  }),
   postActivity: z.object({
     deckId: z.string().uuid('deckId phải là UUID hợp lệ').optional(),
     flashcardDeckId: z.string().uuid('flashcardDeckId phải là UUID hợp lệ').optional(),

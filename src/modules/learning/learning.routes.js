@@ -8,12 +8,15 @@ const {
   subjectIdParam,
   getActivitiesQuery,
   getHeatmapQuery,
+  getLearningProfileQuery,
   postActivity,
 } = require('./learning.validation');
 
 // Toàn bộ route yêu cầu đăng nhập
 router.use(authenticate);
 
+// GET /api/learning/profile?subjectId=... â€” Profile há»c táº­p cá»§a chÃ­nh student
+router.get('/profile', validate(getLearningProfileQuery, 'query'), ctrl.getLearningProfile);
 // ─────────────────────────────────────────────
 // STREAK ROUTES
 // ─────────────────────────────────────────────
