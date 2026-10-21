@@ -79,14 +79,19 @@ class FlashcardsService {
   }
 
   /**
-   * Ghi nhận user hoàn thành deck → cập nhật learning streak theo môn học.
-   * Delegate hoàn toàn sang LearningStreakService để giữ logic streak ở 1 nơi.
+   * Ghi nhận user hoàn thành phiên học flashcard.
+   * LƯU Ý: Học flashcard không làm tăng chuỗi streak
+   * (chỉ khi làm bài kiểm tra flashcard test đạt từ 50% câu đúng trở lên mới tăng chuỗi).
    */
   async completeDeck(deckId, user) {
-    return LearningStreakService.recordFlashcardDeckCompletion({
-      userId: user.id,
-      deckId,
-    });
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+    this._checkViewAccess(deck, user);
+
+    return {
+      success: true,
+      message: 'Flashcard study session completed',
+    };
   }
 
   // ───────────────────────────────────────────
@@ -556,7 +561,6 @@ class FlashcardsService {
   }
 
   /**
-  /**
    * Kiểm tra quyền xem deck:
    * - Admin: luôn xem được
    * - Lecturer: deck public hoặc deck của mình
@@ -564,6 +568,12 @@ class FlashcardsService {
    */
   _checkViewAccess(deck, user) {
     if (user.role === 'admin') return;
+    if (user.role === 'lecturer') {
+      if (deck.created_by !== user.id) {
+        throw new Error('FORBIDDEN');
+      }
+      return;
+    }
     if (deck.is_public) return;
     if (deck.created_by === user.id) return;
     throw new Error('FORBIDDEN');

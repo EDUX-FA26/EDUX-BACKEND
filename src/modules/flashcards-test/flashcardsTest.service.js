@@ -1,4 +1,5 @@
 const FlashcardsTestRepository = require('./flashcardsTest.repository');
+const LearningStreakService = require('../learning/learningStreak.service');
 
 class FlashcardsTestService {
   /**
@@ -60,6 +61,7 @@ class FlashcardsTestService {
 
   /**
    * Nộp bài kiểm tra & chấm điểm tự động
+   * YÊU CẦU: Đúng từ 50% câu trở lên mới được tính và tăng chuỗi học tập (Streak)
    */
   async submitTest(testId, body, user) {
     const test = await FlashcardsTestRepository.findTestById(testId);
@@ -102,6 +104,8 @@ class FlashcardsTestService {
 
     const totalQuestions = deckCardsWithAnswers.length || 1;
     const finalScore = Math.round((correctCount / totalQuestions) * 10 * 10) / 10;
+    const percentage = Math.round((correctCount / totalQuestions) * 100);
+    const isPassedStreak = percentage >= 50;
 
     await FlashcardsTestRepository.saveTestAnswers(testId, processedAnswers);
     await FlashcardsTestRepository.updateTestResult(testId, {
@@ -109,12 +113,32 @@ class FlashcardsTestService {
       status: 'submitted',
     });
 
+    // ─── TÍNH TOÁN STREAK: Đúng từ 50% trở lên mới tăng chuỗi ─────────
+    let streakResult = null;
+    if (isPassedStreak) {
+      try {
+        streakResult = await LearningStreakService.recordFlashcardTestCompletion({
+          userId: user.id,
+          deckId: test.deck_id,
+          testId,
+          score: finalScore,
+          percentage,
+        });
+      } catch (streakErr) {
+        console.error('❌ Lỗi cập nhật streak khi hoàn thành test:', streakErr);
+      }
+    }
+
     return {
       test_id: testId,
+      deck_id: test.deck_id,
       total_questions: totalQuestions,
       correct: correctCount,
       incorrect: totalQuestions - correctCount,
       score: finalScore,
+      percentage,
+      passed_streak: isPassedStreak,
+      streak: streakResult,
       status: 'submitted',
     };
   }
@@ -157,6 +181,12 @@ class FlashcardsTestService {
    */
   _checkViewAccess(deck, user) {
     if (user.role === 'admin') return;
+    if (user.role === 'lecturer') {
+      if (deck.created_by !== user.id) {
+        throw new Error('FORBIDDEN');
+      }
+      return;
+    }
     if (deck.is_public) return;
     if (deck.created_by === user.id) return;
     throw new Error('FORBIDDEN');
