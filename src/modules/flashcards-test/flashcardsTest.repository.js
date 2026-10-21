@@ -192,15 +192,21 @@ const FlashcardsTestRepository = {
 
     const correctCount = questions.filter((q) => q.is_correct).length;
     const incorrectCount = questions.length - correctCount;
+    const percentage = test.total_questions > 0
+      ? Math.round((correctCount / test.total_questions) * 100)
+      : 0;
 
     return {
       test_id: test.id,
       deck_id: test.deck_id,
       deck_title: test.deck_title,
+      subject_id: test.subject_id,
       total_questions: test.total_questions,
       correct: correctCount,
       incorrect: incorrectCount,
       score: Number(test.score),
+      percentage,
+      passed_streak: percentage >= 50,
       status: test.status,
       started_at: test.started_at,
       submitted_at: test.submitted_at,

@@ -51,7 +51,7 @@ const FlashcardsRepository = {
     // Lecturer: thấy deck của mình + deck public
     if (role === 'lecturer') {
       params.push(userId);
-      where.push(`(fd.is_public = true OR fd.created_by = $${params.length})`);
+      where.push(`fd.created_by = $${params.length}`);
     }
 
     // Filter is_public (admin có thể dùng)

@@ -289,6 +289,298 @@ const LearningStreakService = {
   },
 
   /**
+   * Ghi nhận hoàn thành 1 Flashcard Test (yêu cầu đúng >= 50% câu mới tăng streak)
+   * Đảm bảo IDEMPOTENCY, CONCURRENCY và TRANSACTION
+   */
+  async recordFlashcardTestCompletion({ userId, deckId, testId, score, percentage }) {
+    if (!deckId) {
+      throw new Error('DECK_ID_REQUIRED');
+    }
+
+    // Yêu cầu bắt buộc: tỉ lệ đúng phải từ 50% trở lên
+    if (percentage < 50) {
+      return null;
+    }
+
+    // 1. Kiểm tra deck tồn tại
+    const deck = await LearningRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) {
+      throw new Error('DECK_NOT_FOUND');
+    }
+
+    const subjectId = deck.subject_id;
+
+    // 2. Kiểm tra quyền truy cập deck của user
+    if (!deck.is_public && deck.created_by !== userId) {
+      if (deck.class_id) {
+        const isMember = await LearningRepository.isUserInClass(deck.class_id, userId);
+        if (!isMember) throw new Error('FORBIDDEN');
+      } else {
+        throw new Error('FORBIDDEN');
+      }
+    }
+
+    const today = getVietnamToday();
+    const currentMonthStart = getVietnamCurrentMonthStart();
+    let socketPayload = null;
+
+    // 3. Thực hiện trong pg transaction
+    await withTransaction(async (client) => {
+      // Row locking trên subject_streaks để ngăn chặn race condition
+      const streakRow = await LearningRepository.lockStreakForUpdate(userId, subjectId, client);
+
+      // Kiểm tra xem môn này hôm nay đã có activity ghi nhận chưa
+      const alreadyStudiedToday =
+        await LearningRepository.hasActivityToday(
+          userId,
+          subjectId,
+          today,
+          client
+        );
+
+      const activity = await LearningRepository.insertActivity(
+        userId,
+        subjectId,
+        deckId,
+        today,
+        'flashcard_test_passed',
+        client
+      );
+
+      // Xử lý lazy reset recovery quota
+      const storedMonth = formatDate(streakRow.recovery_month);
+      let recoveryUsed = streakRow.recovery_used || 0;
+      let recoveryMonth = streakRow.recovery_month;
+
+      if (!storedMonth || storedMonth.slice(0, 7) !== currentMonthStart.slice(0, 7)) {
+        recoveryUsed = 0;
+        recoveryMonth = currentMonthStart;
+      }
+
+      let currentStreak = streakRow.current_streak || 0;
+      let longestStreak = streakRow.longest_streak || 0;
+      const lastDateStr = formatDate(streakRow.last_activity_date);
+
+      if (alreadyStudiedToday || !activity) {
+        socketPayload = {
+          subjectId,
+          subjectCode: streakRow?.subject_code || deck?.subject_code,
+          currentStreak,
+          longestStreak,
+          lastActivityDate: lastDateStr || today,
+          recoveryUsed,
+          recoveryRemaining: Math.max(0, 3 - recoveryUsed),
+          alreadyCompletedToday: true,
+          streakGained: false,
+        };
+
+        return;
+      }
+
+      // Lần đầu tiên đạt test >= 50% của môn này trong ngày hôm nay!
+      let newStreak = 1;
+      let streakLost = false;
+
+      if (lastDateStr) {
+        const diff = diffInCalendarDays(today, lastDateStr);
+
+        if (diff === 1) {
+          // Ngày hôm qua có hoạt động -> tăng chuỗi +1
+          newStreak = currentStreak + 1;
+        } else if (diff === 0) {
+          newStreak = currentStreak;
+        } else {
+          // diff > 1: đã mất chuỗi do bỏ lỡ ít nhất 1 ngày mà không recovery -> bắt đầu lại 1
+          newStreak = 1;
+          streakLost = true;
+        }
+      }
+
+      const newLongest = Math.max(longestStreak, newStreak);
+      const subjectCode = streakRow?.subject_code || deck?.subject_code;
+
+      // Cập nhật subject_streaks
+      await LearningRepository.updateStreak(
+        userId,
+        subjectId,
+        {
+          current_streak: newStreak,
+          longest_streak: newLongest,
+          last_activity_date: today,
+          recovery_used: recoveryUsed,
+          recovery_month: recoveryMonth,
+          streak_lost_at: streakLost ? new Date() : undefined,
+        },
+        client
+      );
+
+      socketPayload = {
+        subjectId,
+        subjectCode,
+        currentStreak: newStreak,
+        longestStreak: newLongest,
+        lastActivityDate: today,
+        recoveryUsed,
+        recoveryRemaining: Math.max(0, 3 - recoveryUsed),
+        streakGained: true,
+      };
+    });
+
+    // 4. Emit Socket.IO event sau khi transaction COMMIT thành công
+    if (socketPayload) {
+      emitStreakUpdated(userId, socketPayload);
+    }
+
+    return socketPayload;
+  },
+
+  /**
+   * Ghi nhận hoàn thành 1 Flashcard Test (yêu cầu đúng >= 50% câu mới tăng streak)
+   * Đảm bảo IDEMPOTENCY, CONCURRENCY và TRANSACTION
+   */
+  async recordFlashcardTestCompletion({ userId, deckId, testId, score, percentage }) {
+    if (!deckId) {
+      throw new Error('DECK_ID_REQUIRED');
+    }
+
+    // Yêu cầu bắt buộc: tỉ lệ đúng phải từ 50% trở lên
+    if (percentage < 50) {
+      return null;
+    }
+
+    // 1. Kiểm tra deck tồn tại
+    const deck = await LearningRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) {
+      throw new Error('DECK_NOT_FOUND');
+    }
+
+    const subjectId = deck.subject_id;
+
+    // 2. Kiểm tra quyền truy cập deck của user
+    if (!deck.is_public && deck.created_by !== userId) {
+      if (deck.class_id) {
+        const isMember = await LearningRepository.isUserInClass(deck.class_id, userId);
+        if (!isMember) throw new Error('FORBIDDEN');
+      } else {
+        throw new Error('FORBIDDEN');
+      }
+    }
+
+    const today = getVietnamToday();
+    const currentMonthStart = getVietnamCurrentMonthStart();
+    let socketPayload = null;
+
+    // 3. Thực hiện trong pg transaction
+    await withTransaction(async (client) => {
+      // Row locking trên subject_streaks để ngăn chặn race condition
+      const streakRow = await LearningRepository.lockStreakForUpdate(userId, subjectId, client);
+
+      // Kiểm tra xem môn này hôm nay đã có activity ghi nhận chưa
+      const alreadyStudiedToday =
+        await LearningRepository.hasActivityToday(
+          userId,
+          subjectId,
+          today,
+          client
+        );
+
+      const activity = await LearningRepository.insertActivity(
+        userId,
+        subjectId,
+        deckId,
+        today,
+        'flashcard_test_passed',
+        client
+      );
+
+      // Xử lý lazy reset recovery quota
+      const storedMonth = formatDate(streakRow.recovery_month);
+      let recoveryUsed = streakRow.recovery_used || 0;
+      let recoveryMonth = streakRow.recovery_month;
+
+      if (!storedMonth || storedMonth.slice(0, 7) !== currentMonthStart.slice(0, 7)) {
+        recoveryUsed = 0;
+        recoveryMonth = currentMonthStart;
+      }
+
+      let currentStreak = streakRow.current_streak || 0;
+      let longestStreak = streakRow.longest_streak || 0;
+      const lastDateStr = formatDate(streakRow.last_activity_date);
+
+      if (alreadyStudiedToday || !activity) {
+        socketPayload = {
+          subjectId,
+          subjectCode: streakRow?.subject_code || deck?.subject_code,
+          currentStreak,
+          longestStreak,
+          lastActivityDate: lastDateStr || today,
+          recoveryUsed,
+          recoveryRemaining: Math.max(0, 3 - recoveryUsed),
+          alreadyCompletedToday: true,
+          streakGained: false,
+        };
+
+        return;
+      }
+
+      // Lần đầu tiên đạt test >= 50% của môn này trong ngày hôm nay!
+      let newStreak = 1;
+      let streakLost = false;
+
+      if (lastDateStr) {
+        const diff = diffInCalendarDays(today, lastDateStr);
+
+        if (diff === 1) {
+          // Ngày hôm qua có hoạt động -> tăng chuỗi +1
+          newStreak = currentStreak + 1;
+        } else if (diff === 0) {
+          newStreak = currentStreak;
+        } else {
+          // diff > 1: đã mất chuỗi do bỏ lỡ ít nhất 1 ngày mà không recovery -> bắt đầu lại 1
+          newStreak = 1;
+          streakLost = true;
+        }
+      }
+
+      const newLongest = Math.max(longestStreak, newStreak);
+      const subjectCode = streakRow?.subject_code || deck?.subject_code;
+
+      // Cập nhật subject_streaks
+      await LearningRepository.updateStreak(
+        userId,
+        subjectId,
+        {
+          current_streak: newStreak,
+          longest_streak: newLongest,
+          last_activity_date: today,
+          recovery_used: recoveryUsed,
+          recovery_month: recoveryMonth,
+          streak_lost_at: streakLost ? new Date() : undefined,
+        },
+        client
+      );
+
+      socketPayload = {
+        subjectId,
+        subjectCode,
+        currentStreak: newStreak,
+        longestStreak: newLongest,
+        lastActivityDate: today,
+        recoveryUsed,
+        recoveryRemaining: Math.max(0, 3 - recoveryUsed),
+        streakGained: true,
+      };
+    });
+
+    // 4. Emit Socket.IO event sau khi transaction COMMIT thành công
+    if (socketPayload) {
+      emitStreakUpdated(userId, socketPayload);
+    }
+
+    return socketPayload;
+  },
+
+  /**
    * Khôi phục streak cho một môn học
    */
   async recoverSubjectStreak(userId, subjectId) {
@@ -474,3 +766,4 @@ const LearningStreakService = {
 };
 
 module.exports = LearningStreakService;
+
