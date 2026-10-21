@@ -1,6 +1,326 @@
 const { pool } = require('../../config/db.config');
 
 const LearningRepository = {
+  /** Verify that a student is actively enrolled in at least one class of a subject. */
+  async isStudentActiveInSubject(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT 1
+       FROM class_members cm
+       JOIN classes c ON c.id = cm.class_id
+       WHERE cm.student_id = $1
+         AND c.subject_id = $2
+         AND cm.status = 'active'
+         AND c.is_active = true
+       LIMIT 1`,
+      [studentId, subjectId]
+    );
+    return rows.length > 0;
+  },
+
+  async findAssignmentGradesBySubject(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT g.id AS grade_id, g.assignment_id, a.title AS assignment_title,
+              g.score, g.max_score, g.feedback, g.graded_at
+       FROM grades g
+       JOIN submissions sub ON sub.id = g.submission_id
+       JOIN assignments a ON a.id = g.assignment_id
+       JOIN classes c ON c.id = a.class_id
+       WHERE g.student_id = $1
+         AND c.subject_id = $2
+         AND sub.student_id = $1
+         AND sub.status = 'graded'
+       ORDER BY g.graded_at DESC NULLS LAST, g.created_at DESC`,
+      [studentId, subjectId]
+    );
+    return rows;
+  },
+
+  async findSubmittedFlashcardTestsBySubject(studentId, subjectId, limit) {
+    const { rows } = await pool.query(
+      `SELECT ft.id AS test_id, ft.deck_id, fd.title AS deck_title, ft.total_questions,
+              ft.score, ft.started_at, ft.submitted_at,
+              COUNT(fta.id)::int AS answered_count,
+              COUNT(fta.id) FILTER (WHERE fta.is_correct = true)::int AS correct_count,
+              COUNT(fta.id) FILTER (WHERE fta.is_correct = false)::int AS incorrect_count
+       FROM flashcard_tests ft
+       JOIN flashcard_decks fd ON fd.id = ft.deck_id
+       LEFT JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+       WHERE ft.user_id = $1 AND fd.subject_id = $2 AND ft.status = 'submitted'
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+         )
+       GROUP BY ft.id, fd.id
+       ORDER BY ft.submitted_at DESC NULLS LAST, ft.started_at DESC
+       LIMIT $3`,
+      [studentId, subjectId, limit]
+    );
+    return rows;
+  },
+
+  async getFlashcardTestAnswerSummaryBySubject(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT COUNT(fta.id)::int AS total_answers,
+              COUNT(fta.id) FILTER (WHERE fta.is_correct = true)::int AS correct_answers,
+              COUNT(fta.id) FILTER (WHERE fta.is_correct = false)::int AS incorrect_answers,
+              COUNT(DISTINCT fta.flashcard_id)::int AS distinct_flashcards
+       FROM flashcard_tests ft
+       JOIN flashcard_decks fd ON fd.id = ft.deck_id
+       JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+       WHERE ft.user_id = $1 AND fd.subject_id = $2 AND ft.status = 'submitted'
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+         )`,
+      [studentId, subjectId]
+    );
+    return rows[0];
+  },
+
+  async findWrongFlashcardTestAnswersBySubject(studentId, subjectId, limit) {
+    const { rows } = await pool.query(
+      `SELECT ft.id AS test_id, ft.deck_id, fd.title AS deck_title, ft.submitted_at,
+              fta.flashcard_id, fta.student_answer, fta.score,
+              fc.question, fc.type AS question_type, fc.options,
+              fc.answer AS correct_answer, fc.explanation
+       FROM flashcard_tests ft
+       JOIN flashcard_decks fd ON fd.id = ft.deck_id
+       JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+       JOIN flashcards fc ON fc.id = fta.flashcard_id
+       WHERE ft.user_id = $1
+         AND fd.subject_id = $2
+         AND ft.status = 'submitted'
+         AND fta.is_correct = false
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+         )
+       ORDER BY ft.submitted_at DESC NULLS LAST, ft.started_at DESC
+       LIMIT $3`,
+      [studentId, subjectId, limit]
+    );
+    return rows;
+  },
+
+  async getFlashcardReviewSummaryBySubject(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT COUNT(fr.id)::int AS total_reviews,
+              COUNT(fr.id) FILTER (WHERE fr.result = 'again')::int AS again,
+              COUNT(fr.id) FILTER (WHERE fr.result = 'hard')::int AS hard,
+              COUNT(fr.id) FILTER (WHERE fr.result = 'good')::int AS good,
+              COUNT(fr.id) FILTER (WHERE fr.result = 'easy')::int AS easy
+       FROM flashcard_reviews fr
+       JOIN flashcards fc ON fc.id = fr.flashcard_id
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id
+       WHERE fr.user_id = $1 AND fd.subject_id = $2
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+         )`,
+      [studentId, subjectId]
+    );
+    return rows[0];
+  },
+
+  async findFlashcardReviewHistoryBySubject(studentId, subjectId, limit) {
+    const { rows } = await pool.query(
+      `SELECT fr.id AS review_id, fr.flashcard_id, fr.result, fr.reviewed_at,
+              fc.question, fd.id AS deck_id, fd.title AS deck_title
+       FROM flashcard_reviews fr
+       JOIN flashcards fc ON fc.id = fr.flashcard_id
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id
+       WHERE fr.user_id = $1 AND fd.subject_id = $2
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+         )
+       ORDER BY fr.reviewed_at DESC
+       LIMIT $3`,
+      [studentId, subjectId, limit]
+    );
+    return rows;
+  },
+
+  async findDueFlashcardsBySubject(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT fc.id AS flashcard_id, fc.type AS question_type, fc.question, fc.options,
+              fc.difficulty, fc.position, fd.id AS deck_id, fd.title AS deck_title,
+              fs.due_date, fs.interval_days, fs.repetitions, fs.ease_factor, fs.last_reviewed_at
+       FROM flashcard_schedules fs
+       JOIN flashcards fc ON fc.id = fs.flashcard_id AND fc.is_active = true
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+       WHERE fs.user_id = $1
+         AND fd.subject_id = $2
+         AND fs.due_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (
+             SELECT class_id FROM class_members
+             WHERE student_id = $1 AND status = 'active'
+           )
+           OR fd.id IN (
+             SELECT fdca.deck_id
+             FROM flashcard_deck_class_access fdca
+             JOIN class_members cm ON cm.class_id = fdca.class_id
+             WHERE cm.student_id = $1 AND cm.status = 'active'
+           )
+         )
+       ORDER BY fs.due_date ASC, fc.position ASC`,
+      [studentId, subjectId]
+    );
+    return rows;
+  },
+
+  async findActiveTopicsBySubject(subjectId) {
+    const { rows } = await pool.query(
+      `SELECT id, name, parent_id
+       FROM topics WHERE subject_id = $1 AND is_active = true
+       ORDER BY name ASC`,
+      [subjectId]
+    );
+    return rows;
+  },
+
+  async findSubmittedMultipleChoiceTopicAnswers(studentId, subjectId) {
+    const { rows } = await pool.query(
+      `SELECT fct.topic_id, fta.id AS answer_id, fta.flashcard_id, fta.is_correct, ft.submitted_at
+       FROM flashcard_tests ft
+       JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+       JOIN flashcards fc ON fc.id = fta.flashcard_id AND fc.is_active = true
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+       JOIN flashcard_topics fct ON fct.flashcard_id = fc.id AND fct.review_status = 'approved'
+       JOIN topics t ON t.id = fct.topic_id AND t.subject_id = fd.subject_id AND t.is_active = true
+       WHERE ft.user_id = $1
+         AND ft.status = 'submitted'
+         AND fd.subject_id = $2
+         AND fc.type = 'multiple_choice'
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+           OR fd.id IN (
+             SELECT fdca.deck_id FROM flashcard_deck_class_access fdca
+             JOIN class_members cm ON cm.class_id = fdca.class_id
+             WHERE cm.student_id = $1 AND cm.status = 'active'
+           )
+         )`,
+      [studentId, subjectId]
+    );
+    return rows;
+  },
+
+
+  async findLatestIncorrectFlashcardsByTopic(
+    studentId,
+    subjectId,
+    topicIds
+  ) {
+    if (!topicIds.length) return [];
+
+    const { rows } = await pool.query(
+      `WITH ranked_answers AS (
+       SELECT
+         fct.topic_id,
+         fta.flashcard_id,
+         fta.is_correct,
+         ft.submitted_at,
+
+         ROW_NUMBER() OVER (
+           PARTITION BY fct.topic_id, fta.flashcard_id
+           ORDER BY
+             ft.submitted_at DESC NULLS LAST,
+             fta.id DESC
+         ) AS attempt_rank
+
+       FROM flashcard_tests ft
+
+       JOIN flashcard_test_answers fta
+         ON fta.test_id = ft.id
+
+       JOIN flashcards fc
+         ON fc.id = fta.flashcard_id
+         AND fc.is_active = true
+
+       JOIN flashcard_decks fd
+         ON fd.id = fc.deck_id
+         AND fd.is_active = true
+
+       JOIN flashcard_topics fct
+         ON fct.flashcard_id = fc.id
+         AND fct.review_status = 'approved'
+
+       JOIN topics t
+         ON t.id = fct.topic_id
+         AND t.subject_id = fd.subject_id
+         AND t.is_active = true
+
+       WHERE ft.user_id = $1
+         AND ft.status = 'submitted'
+         AND fd.subject_id = $2
+         AND fc.type = 'multiple_choice'
+         AND fct.topic_id = ANY($3::uuid[])
+
+         AND (
+           fd.is_public = true
+
+           OR fd.class_id IN (
+             SELECT class_id
+             FROM class_members
+             WHERE student_id = $1
+               AND status = 'active'
+           )
+
+           OR fd.id IN (
+             SELECT fdca.deck_id
+             FROM flashcard_deck_class_access fdca
+             JOIN class_members cm
+               ON cm.class_id = fdca.class_id
+             WHERE cm.student_id = $1
+               AND cm.status = 'active'
+           )
+         )
+     ),
+
+     incorrect AS (
+       SELECT
+         topic_id,
+         flashcard_id,
+         submitted_at,
+
+         ROW_NUMBER() OVER (
+           PARTITION BY topic_id
+           ORDER BY submitted_at DESC NULLS LAST,
+                    flashcard_id
+         ) AS question_rank
+
+       FROM ranked_answers
+       WHERE attempt_rank = 1
+         AND is_correct = false
+     )
+
+     SELECT
+       i.topic_id AS "topicId",
+       i.flashcard_id AS "flashcardId",
+       fc.question,
+       fc.difficulty,
+       i.submitted_at AS "lastSubmittedAt"
+
+     FROM incorrect i
+     JOIN flashcards fc ON fc.id = i.flashcard_id
+
+     WHERE i.question_rank <= 5
+
+     ORDER BY i.topic_id, i.question_rank`,
+      [studentId, subjectId, topicIds]
+    );
+
+    return rows;
+  },
+
   /**
    * Lấy 1 streak của user theo subject (kèm thông tin subject)
    */
