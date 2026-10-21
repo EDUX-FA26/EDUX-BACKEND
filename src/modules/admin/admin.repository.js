@@ -37,6 +37,29 @@ const AdminRepository = {
       ];
       const profileResult = await client.query(profileQuery, profileValues);
 
+      // --- NEW LOGIC: Cấp lại các thông báo hệ thống cũ cho user mới ---
+      const notifQuery = `
+        SELECT title, message, type, MAX(created_at) as created_at
+        FROM notifications
+        WHERE type = 'system_announcement'
+        GROUP BY title, message, type
+      `;
+      const notifResult = await client.query(notifQuery);
+      if (notifResult.rows.length > 0) {
+        const insertValues = [];
+        const notifParams = [];
+        let idx = 1;
+        for (const row of notifResult.rows) {
+          insertValues.push(`($${idx++}, $${idx++}, $${idx++}, $${idx++}, 'admin_broadcast', $${idx++})`);
+          notifParams.push(newUser.id, row.title, row.message, row.type, row.created_at);
+        }
+        await client.query(`
+          INSERT INTO notifications (user_id, title, message, type, related_entity_type, created_at)
+          VALUES ${insertValues.join(', ')}
+        `, notifParams);
+      }
+      // -----------------------------------------------------------------
+
       return {
         ...newUser,
         profile: profileResult.rows[0],
@@ -165,8 +188,8 @@ const AdminRepository = {
   /**
    * Lấy danh sách ID user theo target (phục vụ broadcast notification)
    */
-  async findUserIdsByTarget(target) {
-    let query = `SELECT id FROM users WHERE is_active = true`;
+  async findUsersByTarget(target) {
+    let query = `SELECT id, email FROM users WHERE is_active = true`;
     const params = [];
 
     if (target === "student" || target === "lecturer") {
@@ -175,7 +198,7 @@ const AdminRepository = {
     }
 
     const result = await pool.query(query, params);
-    return result.rows.map(row => row.id);
+    return result.rows;
   },
 
   /**
@@ -303,6 +326,29 @@ const AdminRepository = {
           [userId, fullName, role === 'student' ? code : null, deptId]
         );
 
+        // --- NEW LOGIC: Cấp lại các thông báo hệ thống cũ cho user mới ---
+        const notifQuery = `
+          SELECT title, message, type, MAX(created_at) as created_at
+          FROM notifications
+          WHERE type = 'system_announcement'
+          GROUP BY title, message, type
+        `;
+        const notifResult = await client.query(notifQuery);
+        if (notifResult.rows.length > 0) {
+          const insertValues = [];
+          const notifParams = [];
+          let idx = 1;
+          for (const row of notifResult.rows) {
+            insertValues.push(`($${idx++}, $${idx++}, $${idx++}, $${idx++}, 'admin_broadcast', $${idx++})`);
+            notifParams.push(userId, row.title, row.message, row.type, row.created_at);
+          }
+          await client.query(`
+            INSERT INTO notifications (user_id, title, message, type, related_entity_type, created_at)
+            VALUES ${insertValues.join(', ')}
+          `, notifParams);
+        }
+        // -----------------------------------------------------------------
+
         userCache[email] = userId;
         importedUsers++;
         return userId;
@@ -413,6 +459,29 @@ const AdminRepository = {
           'INSERT INTO user_profiles (user_id, full_name, student_code, department_id) VALUES ($1, $2, $3, $4)',
           [userId, fullName, role === 'student' ? code : null, deptId]
         );
+
+        // --- NEW LOGIC: Cấp lại các thông báo hệ thống cũ cho user mới ---
+        const notifQuery = `
+          SELECT title, message, type, MAX(created_at) as created_at
+          FROM notifications
+          WHERE type = 'system_announcement'
+          GROUP BY title, message, type
+        `;
+        const notifResult = await client.query(notifQuery);
+        if (notifResult.rows.length > 0) {
+          const insertValues = [];
+          const notifParams = [];
+          let idx = 1;
+          for (const row of notifResult.rows) {
+            insertValues.push(`($${idx++}, $${idx++}, $${idx++}, $${idx++}, 'admin_broadcast', $${idx++})`);
+            notifParams.push(userId, row.title, row.message, row.type, row.created_at);
+          }
+          await client.query(`
+            INSERT INTO notifications (user_id, title, message, type, related_entity_type, created_at)
+            VALUES ${insertValues.join(', ')}
+          `, notifParams);
+        }
+        // -----------------------------------------------------------------
 
         userCache[email] = userId;
         importedUsers++;

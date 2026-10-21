@@ -118,9 +118,12 @@ const AdminService = {
   async broadcastNotification(data) {
     const { title, message, target } = data;
 
-    // 1. Lấy danh sách user IDs theo target
-    const userIds = await adminRepository.findUserIdsByTarget(target);
-    if (userIds.length === 0) return { success: true, count: 0 };
+    // 1. Lấy danh sách users theo target
+    const users = await adminRepository.findUsersByTarget(target);
+    if (users.length === 0) return { success: true, count: 0 };
+
+    const userIds = users.map(u => u.id);
+    const emails = users.map(u => u.email).filter(e => e);
 
     // 2. Format notifications for bulk insert
     const notifications = userIds.map(userId => ({
@@ -136,7 +139,12 @@ const AdminService = {
     const createdNotifications = await notificationsRepository.bulkCreate(notifications);
 
     // 4. Emit realtime event via Socket.IO
-    const io = getIO();
+    let io = null;
+    try {
+      io = getIO();
+    } catch (e) {
+      console.warn("Socket.IO not initialized (running offline script)");
+    }
     if (io) {
       if (target === "all") {
         io.emit("new_notification", { title, message, type: "system_announcement" });
@@ -147,6 +155,21 @@ const AdminService = {
         });
       }
     }
+
+    // 5. Gửi email thông báo (chạy ngầm, không block request)
+    const { sendMail } = require('../../utils/mailer');
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
+        <h2 style="color: #4f46e5;">Thông Báo Mới Từ Hệ Thống EDUX</h2>
+        <h3>${title}</h3>
+        <p>${message}</p>
+        <hr style="border: 0; border-top: 1px solid #eaeaea; margin: 20px 0;">
+        <p style="font-size: 12px; color: #888;">Đây là email tự động, vui lòng không trả lời.</p>
+      </div>
+    `;
+    
+    // Gửi BCC đến tất cả email để tránh lộ danh sách email
+    sendMail(emails, `[EDUX] ${title}`, htmlContent).catch(err => console.error('Failed to send broadcast email:', err));
 
     return { success: true, count: createdNotifications.length };
   },

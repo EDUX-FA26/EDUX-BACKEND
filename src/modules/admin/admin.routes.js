@@ -38,13 +38,13 @@ router.post("/notifications/broadcast", validate(broadcastNotificationSchema), a
 // Lấy danh sách lớp học
 router.get("/classes", adminController.getAllClasses);
 
-// Lấy danh sách sinh viên trong lớp
-router.get("/classes/:id/students", adminController.getClassStudents);
-
 // Cập nhật lớp học
 router.patch("/classes/:id", adminController.updateClass);
 
 // Xóa lớp học
 router.delete("/classes/:id", adminController.deleteClass);
+
+// Lấy danh sách sinh viên của lớp
+router.get("/classes/:id/students", adminController.getClassStudents);
 
 module.exports = router;
