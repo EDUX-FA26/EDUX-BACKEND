@@ -142,3 +142,4 @@ const StudyPlannerService = {
 };
 
 module.exports = StudyPlannerService;
+module.exports = StudyPlannerService;

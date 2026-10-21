@@ -114,3 +114,4 @@ const StudyPlannerRepository = {
 };
 
 module.exports = StudyPlannerRepository;
+module.exports = StudyPlannerRepository;
