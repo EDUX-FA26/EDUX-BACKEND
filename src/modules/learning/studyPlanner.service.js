@@ -139,7 +139,10 @@ const StudyPlannerService = {
         };
     },
 
+    async getActivePlan(studentId, subjectId) {
+        return await StudyPlannerRepository.getActivePlan(studentId, subjectId);
+    },
 };
 
 module.exports = StudyPlannerService;
-module.exports = StudyPlannerService;
+

@@ -48,6 +48,9 @@ router.get(
   ctrl.getStudyPlanMistakes
 );
 
+// Phase 4 - Lấy kế hoạch đang chạy + tiến độ 7 ngày
+router.get('/study-plan', ctrl.getActivePlan);
+
 // Phase 3C - Tạo và lưu lịch học cá nhân hóa
 router.post(
   '/study-plan/generate',
