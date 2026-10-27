@@ -23,6 +23,8 @@ const learningRoutes = require("./modules/learning/learning.routes");
 const adminRoutes = require("./modules/admin/admin.routes");
 const reportsRoutes = require("./modules/reports/reports.routes");
 const communicationsRoutes = require("./modules/communications/communications.routes");
+const focusRoutes = require("./modules/focus/focus.routes");
+const todosRoutes = require("./modules/todos/todos.routes");
 
 
 // =========================
@@ -84,6 +86,9 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/reports", reportsRoutes);
 // Communications Module
 app.use("/api/communications", communicationsRoutes);
+// Focus Room (Pomodoro) & Smart Todo
+app.use("/api/focus", focusRoutes);
+app.use("/api/todos", todosRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
