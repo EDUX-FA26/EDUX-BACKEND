@@ -106,6 +106,20 @@ const GradingController = {
       next(error);
     }
   },
+
+  // ── AI Audit Rubric ──────────────────────────────────────────────────────
+  async handleAuditRubric(req, res, next) {
+    try {
+      const { submissionId } = req.params;
+      const result = await GradingService.auditRubricForSubmission(submissionId);
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      if (error.message === 'SUBMISSION_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Submission not found' });
+      }
+      next(error);
+    }
+  },
 };
 
 module.exports = GradingController;

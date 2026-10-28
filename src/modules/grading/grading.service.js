@@ -1,5 +1,6 @@
 const ExcelJS = require('exceljs');
 const GradingRepository = require('./grading.repository');
+const { evaluateRubricWithGemini } = require('../../config/gemini.config');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -191,6 +192,96 @@ const GradingService = {
     }
     // Default: xlsx
     return _buildXlsx(gradebook);
+  },
+
+  // ── AI Audit Rubric Grading ────────────────────────────────────────────────
+  /**
+   * Thẩm định và gợi ý điểm 5 tiêu chí Rubric qua Gemini AI
+   * @param {string} submissionId
+   */
+  async auditRubricForSubmission(submissionId) {
+    // 1. Lấy toàn bộ thông tin bài nộp, đề bài, version và AI logs
+    const auditData = await GradingRepository.getSubmissionAuditData(submissionId);
+    if (!auditData) {
+      throw new Error('SUBMISSION_NOT_FOUND');
+    }
+
+    // 2. Chuẩn bị thông tin bài tập (assignmentInfo)
+    const assignmentInfo = [
+      `Tiêu đề bài tập: ${auditData.submission.assignment_title || 'N/A'}`,
+      `Mô tả yêu cầu: ${auditData.submission.assignment_description || 'Không có mô tả chi tiết'}`,
+      `Hướng dẫn thực hiện: ${auditData.submission.assignment_instructions || 'Không có hướng dẫn cụ thể'}`,
+      `Điểm tối đa bài tập: ${auditData.submission.assignment_max_score || 10} điểm`
+    ].join('\n');
+
+    // 3. Chuẩn bị thông tin mã nguồn và tập tin bài nộp (sourceCode)
+    let filesList = [];
+    if (auditData.latestVersion && auditData.latestVersion.files) {
+      try {
+        const rawFiles = typeof auditData.latestVersion.files === 'string'
+          ? JSON.parse(auditData.latestVersion.files)
+          : auditData.latestVersion.files;
+        filesList = Array.isArray(rawFiles) ? rawFiles : [];
+      } catch (err) {
+        filesList = [];
+      }
+    }
+
+    const filesDescription = filesList.length > 0
+      ? filesList.map((f, i) => `- Tệp ${i + 1}: ${f.name || f.filename || 'Tập tin'} (Kích thước: ${f.size || 0} bytes, Định dạng: ${f.type || 'unknown'})`).join('\n')
+      : 'Không có tập tin đính kèm.';
+
+    const studentNote = auditData.latestVersion?.note
+      ? auditData.latestVersion.note
+      : 'Không có ghi chú thêm từ sinh viên.';
+
+    const sourceCode = [
+      `[DANH SÁCH TẬP TIN NỘP BÀI (VERSION ${auditData.latestVersion?.version_no || auditData.submission.latest_version_no || 1})]:`,
+      filesDescription,
+      '',
+      `[GHI CHÚ / GIẢI TRÌNH CỦA SINH VIÊN]:`,
+      studentNote
+    ].join('\n');
+
+    // 4. Chuẩn bị nhật ký tương tác AI (aiLogs)
+    let aiLogs = '';
+    if (auditData.aiInteractions && auditData.aiInteractions.length > 0) {
+      aiLogs = auditData.aiInteractions.map((log, index) => {
+        return [
+          `[TƯƠNG TÁC AI #${index + 1}]`,
+          `• Công cụ AI sử dụng: ${log.ai_tool || 'N/A'}`,
+          `• Mục đích sử dụng: ${log.usage_purpose || 'N/A'}`,
+          `• Quyết định của sinh viên: ${log.student_decision || 'N/A'}`,
+          `• Prompt/Câu hỏi của sinh viên: ${log.prompt_content || 'Không có nội dung'}`,
+          `• Tóm tắt câu trả lời từ AI: ${log.ai_response_summary || 'Không có tóm tắt'}`,
+          `• Báo cáo phản tư & nhận định của sinh viên: ${log.reflection_text || 'Không có giải trình'}`
+        ].join('\n');
+      }).join('\n\n');
+    }
+
+    if (auditData.aiEvaluation) {
+      const evalInfo = [
+        `\n[ĐÁNH GIÁ MINH BẠCH HỆ THỐNG ART-AI]:`,
+        `• Mức độ rủi ro: ${auditData.aiEvaluation.risk_level || 'N/A'}`,
+        `• Mô hình tương tác (Pattern): ${auditData.aiEvaluation.pattern || 'N/A'}`,
+        `• Điểm minh bạch: ${auditData.aiEvaluation.transparency_score ?? 'N/A'}/100`,
+        `• Tóm lược đánh giá: ${auditData.aiEvaluation.summary || 'Không có'}`
+      ].join('\n');
+      aiLogs = (aiLogs ? aiLogs + '\n\n' : '') + evalInfo;
+    }
+
+    if (!aiLogs.trim()) {
+      aiLogs = 'Sinh viên không có nhật ký tương tác AI (nộp bài trực tiếp không qua trợ lý AI).';
+    }
+
+    // 5. Gọi hàm evaluateRubricWithGemini
+    const result = await evaluateRubricWithGemini({
+      assignmentInfo,
+      sourceCode,
+      aiLogs,
+    });
+
+    return result;
   },
 };
 

@@ -72,7 +72,7 @@ const GradingRepository = {
    * Tìm grade theo submission_id
    */
   async findBySubmissionId(submissionId) {
-    const query = `SELECT * FROM grades WHERE submission_id = $1`;
+    const query = `SELECT * FROM grades WHERE submission_id = $1 ORDER BY created_at DESC LIMIT 1`;
     const { rows } = await pool.query(query, [submissionId]);
     return rows[0] || null;
   },
@@ -180,6 +180,93 @@ const GradingRepository = {
       `UPDATE submissions SET status = 'graded', updated_at = NOW() WHERE id = $1`,
       [submissionId]
     );
+  },
+
+  /**
+   * Lấy toàn bộ dữ liệu cần thiết cho việc thẩm định điểm AI Rubric
+   */
+  async getSubmissionAuditData(submissionId) {
+    const subQuery = `
+      SELECT
+        s.id                  AS submission_id,
+        s.student_id,
+        s.assignment_id,
+        s.status              AS submission_status,
+        s.latest_version_no,
+        a.title               AS assignment_title,
+        a.description         AS assignment_description,
+        a.instructions        AS assignment_instructions,
+        a.max_score           AS assignment_max_score,
+        a.class_id,
+        c.lecturer_id,
+        up.full_name          AS student_name,
+        up.student_code,
+        u.email               AS student_email
+      FROM submissions s
+      JOIN assignments a ON s.assignment_id = a.id
+      JOIN classes     c ON a.class_id      = c.id
+      JOIN users       u ON s.student_id    = u.id
+      LEFT JOIN user_profiles up ON u.id    = up.user_id
+      WHERE s.id = $1
+    `;
+    const { rows: subRows } = await pool.query(subQuery, [submissionId]);
+    if (subRows.length === 0) return null;
+    const submissionData = subRows[0];
+
+    const versionQuery = `
+      SELECT *
+      FROM submission_versions
+      WHERE submission_id = $1 AND is_latest = TRUE
+      LIMIT 1
+    `;
+    const { rows: versionRows } = await pool.query(versionQuery, [submissionId]);
+    const latestVersion = versionRows[0] || null;
+
+    let aiInteractions = [];
+    try {
+      const aiQuery = `
+        SELECT
+          ai_tool,
+          usage_purpose,
+          prompt_content,
+          ai_response_summary,
+          student_decision,
+          reflection_text,
+          created_at
+        FROM ai_interactions
+        WHERE submission_id = $1
+        ORDER BY created_at ASC
+      `;
+      const { rows: aiRows } = await pool.query(aiQuery, [submissionId]);
+      aiInteractions = aiRows;
+    } catch (e) {
+      console.warn('⚠️ ai_interactions query warning:', e.message);
+    }
+
+    let aiEvaluation = null;
+    try {
+      const evalQuery = `
+        SELECT
+          pattern,
+          risk_level,
+          transparency_score,
+          summary
+        FROM ai_evaluations
+        WHERE submission_id = $1
+        LIMIT 1
+      `;
+      const { rows: evalRows } = await pool.query(evalQuery, [submissionId]);
+      aiEvaluation = evalRows[0] || null;
+    } catch (e) {
+      console.warn('⚠️ ai_evaluations query warning:', e.message);
+    }
+
+    return {
+      submission: submissionData,
+      latestVersion,
+      aiInteractions,
+      aiEvaluation,
+    };
   },
 };
 
