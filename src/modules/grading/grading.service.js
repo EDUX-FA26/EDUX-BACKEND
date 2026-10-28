@@ -453,7 +453,25 @@ const GradingService = {
         aiAuditSummary += `\n\n[CẢNH BÁO KIỂM TOÁN TỰ ĐỘNG]: Tất cả ${prompts.length} giai đoạn khai báo AI đều chứa nội dung copy-paste giống hệt nhau ('${prompts[0].slice(0, 80)}...'). Đây là hành vi khai báo đối phó, sơ sài, không có giá trị học thuật. Cần kiểm tra xem nội dung khai báo có khớp với công nghệ của mã nguồn thực tế hay hoàn toàn lạc đề.`;
       }
     } else {
-      aiAuditSummary = 'Sinh viên KHÔNG thực hiện khai báo sử dụng AI (Không nộp Audit Log).';
+      aiAuditSummary = 'Sinh viên KHÔNG thực hiện khai báo sử dụng AI trong ghi chú bài nộp.';
+    }
+
+    // Tích hợp dữ liệu từ bảng ai_interactions (nếu có)
+    if (Array.isArray(auditData.aiInteractions) && auditData.aiInteractions.length > 0) {
+      aiAuditSummary += '\n\n[LỊCH SỬ TƯƠNG TÁC AI TỪ DATABASE (AI INTERACTIONS)]:\n';
+      auditData.aiInteractions.forEach((interaction, idx) => {
+        aiAuditSummary += `\n* Lượt tương tác #${idx + 1}:
+  - Công cụ: ${interaction.ai_tool} | Mục đích: ${interaction.usage_purpose}
+  - Quyết định: ${interaction.student_decision}
+  - Nội dung prompt: ${interaction.prompt_content}
+  - Tóm tắt phản hồi AI: ${interaction.ai_response_summary}
+  - Tự phản tư: ${interaction.reflection_text}`;
+      });
+    }
+
+    // Tích hợp kết quả đánh giá AI từ bảng ai_evaluations (nếu có)
+    if (auditData.aiEvaluation) {
+      aiAuditSummary += `\n\n[KẾT QUẢ ĐÁNH GIÁ AI TỪ DATABASE (AI EVALUATION)]: Pattern: ${auditData.aiEvaluation.pattern}, Risk: ${auditData.aiEvaluation.risk_level}, Transparency Score: ${auditData.aiEvaluation.transparency_score}, Summary: ${auditData.aiEvaluation.summary}`;
     }
 
     // 6. Oral Exam / Viva Logs nếu client đã cung cấp từ trước

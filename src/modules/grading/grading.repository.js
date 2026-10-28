@@ -238,9 +238,10 @@ const GradingRepository = {
         ORDER BY created_at ASC
       `;
       const { rows: aiRows } = await pool.query(aiQuery, [submissionId]);
-      aiInteractions = aiRows;
+      aiInteractions = aiRows || [];
     } catch (e) {
-      console.warn('⚠️ ai_interactions query warning:', e.message);
+      // Safe fallback - no crash if table query fails
+      aiInteractions = [];
     }
 
     let aiEvaluation = null;
@@ -258,7 +259,8 @@ const GradingRepository = {
       const { rows: evalRows } = await pool.query(evalQuery, [submissionId]);
       aiEvaluation = evalRows[0] || null;
     } catch (e) {
-      console.warn('⚠️ ai_evaluations query warning:', e.message);
+      // Safe fallback - no crash if table query fails
+      aiEvaluation = null;
     }
 
     return {

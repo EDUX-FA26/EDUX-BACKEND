@@ -1,0 +1,50 @@
+// Prisma schema file for EDUX
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AiInteraction {
+  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  uuid                  String            @unique @db.VarChar(255)
+  submission_id         String            @db.Uuid
+  submission_version_id String            @db.Uuid
+  assignment_id         String            @db.Uuid
+  student_id            String            @db.Uuid
+  ai_tool               String            @db.VarChar(100)
+  usage_purpose         String            @db.VarChar(100)
+  prompt_content        String            @db.Text
+  ai_response_summary   String            @db.Text
+  student_decision      String            @db.VarChar(50)
+  reflection_text       String            @db.Text
+  created_at            DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime?         @default(now()) @db.Timestamptz(6)
+
+  @@map("ai_interactions")
+}
+
+model AiEvaluation {
+  id                      String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submission_id           String            @db.Uuid
+  submission_version_id   String            @unique @db.Uuid
+  assignment_id           String            @db.Uuid
+  student_id              String            @db.Uuid
+  class_id                String            @db.Uuid
+  pattern                 String            @db.VarChar(100)
+  risk_level              String?           @default("low") @db.VarChar(50)
+  transparency_score      Decimal?          @default(0) @db.Decimal(5, 2)
+  prompt_quality_score    Decimal?          @default(0) @db.Decimal(5, 2)
+  reflection_quality_score Decimal?         @default(0) @db.Decimal(5, 2)
+  critical_thinking_score Decimal?          @default(0) @db.Decimal(5, 2)
+  ai_dependency_score     Decimal?          @default(0) @db.Decimal(5, 2)
+  summary                 String?           @default("") @db.Text
+  evaluated_at            DateTime?         @default(now()) @db.Timestamptz(6)
+  created_at              DateTime?         @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?         @default(now()) @db.Timestamptz(6)
+
+  @@map("ai_evaluations")
+}

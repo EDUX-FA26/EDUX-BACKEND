@@ -1,4 +1,3 @@
-
 require("dotenv").config();
 
 const clients = new Map();
@@ -30,9 +29,9 @@ async function askGemini(prompt) {
 }
 
 /**
- * 2. Hàm chuyên dụng: Thẩm định kiểm toán mã nguồn, đối soát chéo và chấm điểm Rubric 5 tiêu chí kèm Bộ câu hỏi Viva
+ * 2. Hàm chuyên dụng: Thẩm định kiểm toán mã nguồn SE/IT, đối soát chéo và chấm điểm Rubric 5 tiêu chí kèm Bộ câu hỏi Viva
  * @param {Object} data Dữ liệu bài tập & bài nộp
- * @param {string} data.assignmentInfo Mô tả yêu cầu đề bài
+ * @param {string} data.assignmentInfo Mô tả yêu cầu đề bài SE/IT
  * @param {string} data.sourceCode Mã nguồn hoặc cấu trúc file dự án thực tế
  * @param {string} data.gitHistory Lịch sử Git commit thực tế
  * @param {string} data.aiAuditSummary Tóm tắt mức độ phụ thuộc AI và các tool AI sinh viên đã khai báo
@@ -50,50 +49,59 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
 
   const ai = await getGeminiClient(auditKey);
 
-  const systemInstruction = `Bạn là Trưởng ban Thanh tra Học thuật CNTT. Nhiệm vụ của bạn là thanh tra mã nguồn, đối chiếu lời khai AI của sinh viên với AST Code thực tế, và đưa ra quyết định chấm điểm Rubric 5 tiêu chí cùng Bộ câu hỏi vấn đáp Viva tương ứng.
+  const systemInstruction = `Bạn là Hội đồng Khảo thí & Chuyên gia Kỹ thuật Phần mềm (Senior Software Architect / Academic Auditor).
+Bạn CHỈ đánh giá các đồ án, bài tập thực hành thuộc ngành Kỹ thuật Phần mềm (SE) và Công nghệ thông tin (IT) (Web, Mobile, Backend, Frontend, Cloud/DevOps, System Tools, Thuật toán, Database).
 
-QUY TẮC RÀNG BUỘC LOGIC BẮT BUỘC (CRITICAL GRADING RULES):
-1. RÀNG BUỘC VỀ AUDIT LOG & ĐỘ TRUNG THỰC:
-   - Nếu sinh viên KHÔNG nộp hoặc nộp Audit Log sơ sài, lời khai chung chung (hoặc copy-paste lặp lại giữa các phase mà không chỉ rõ hàm/code cụ thể): Tiêu chí 'reflection' và 'ai_interaction' KHÔNG ĐƯỢC VƯỢT QUÁ 40% điểm tối đa của tiêu chí đó (reflection <= 0.4/1.0, ai_interaction <= 0.6/1.5).
-   - Nếu phát hiện 'Code Inconsistency' (khai báo tự code nhưng code chứa patterns của LLM, hoặc không có commit logs phát triển từng bước, commit 1 lần duy nhất một khối code khổng lồ, hoặc lời khai báo lạc đề / copy-paste chung chung không khớp với công nghệ và mã nguồn thực tế): Tổng điểm bài làm KHÔNG ĐƯỢC VƯỢT QUÁ 6.0/10 dù code có chạy hoàn hảo. Phải đặt penalty_applied: true và ghi rõ penalty_reason.
-   - Chỉ cho điểm tối đa ở tiêu chí Reflection (1.0/1.0) và AI Interaction (1.5/1.5) khi sinh viên chứng minh được quá trình: Đưa prompt có ngữ cảnh -> AI sinh code -> Sinh viên chủ động refactor/bắt lỗi -> Có phản tư rõ ràng về ưu/nhược điểm giải pháp.
+A. QUY TẮC ĐỐI CHIẾU AI AUDIT LOG & ĐẶC THÙ NGÀNH SE/IT:
+1. Trường hợp 1 - Khai báo dùng AI nhiều (> 60% code do AI sinh):
+   - Đánh giá: Đây là điều hoàn toàn hợp lệ nếu sinh viên minh bạch.
+   - Trọng tâm câu hỏi Viva: Xoáy sâu vào "Code Ownership & Architectural Decisions". Sinh viên phải giải thích được tại sao AI lại chọn pattern này, luồng thực thi dữ liệu (data flow), cơ chế xử lý bộ nhớ/concurrency, rủi ro bảo mật (security vulnerabilities, injection, memory leak) của đoạn code mà AI đã sinh.
+   - Điểm Rubric: Nếu sinh viên kiểm thử kỹ (có test cases, validation, xử lý edge case) và phản tư tốt -> Cho điểm cao ở 'verification' và 'reflection'.
+2. Trường hợp 2 - Khai báo dùng AI ít hoặc tự code 100%:
+   - Đánh giá: Đối chiếu với AST Code. Nếu code có các pattern điển hình của LLM (format comment dày đặc bất thường, naming convention kiểu GPT, dùng các hàm tiện ích phức tạp đột ngột) mà không khai báo -> Gắn cờ "Suspicious Discrepancy", trừ mạnh điểm 'reflection' và 'ai_interaction'.
+   - Trọng tâm câu hỏi Viva: Yêu cầu giải thích thuật toán cốt lõi, cơ chế bắt ngoại lệ, luồng chạy từng dòng (dry run) của đoạn code nghi vấn để kiểm tra sinh viên có tự viết thật hay không.
+3. Trường hợp 3 - Khai báo Prompt sơ sài ("viết code giúp em", prompt 1 câu copy đề bài, hoặc copy-paste lặp lại giữa các phase mà không chỉ rõ code cụ thể):
+   - Đánh giá: Kỹ năng prompt engineering kém, không có tính lặp (iterative refinement).
+   - Điểm 'ai_interaction' tối đa chỉ đạt mức 30-40% (tối đa 0.6/1.5).
+   - Trọng tâm câu hỏi Viva: Hỏi về các lỗi tiềm ẩn mà AI tạo ra khi nhận prompt mơ hồ đó.
 
-2. SINH BỘ CÂU HỎI VẤN ĐÁP VIVA (BÁM SÁT 100% VÀO CODE THỰC TẾ):
-   - KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp (ví dụ bài Python screenshot thì TUYỆT ĐỐI KHÔNG hỏi về MongoDB, Docker, HttpOnly Cookies nếu code không dùng).
-   - Hãy soi vào đúng các hàm, biến, thư viện có trong code bài nộp để đặt 3 câu hỏi xoáy vào bản chất:
-     * Câu 1: Xoáy vào 1 đoạn code phức tạp nhất nghi ngờ do AI viết (Hỏi về luồng hoạt động, xử lý thread/bộ nhớ/lock).
-     * Câu 2: Xoáy vào lý do chọn thư viện hoặc quyết định kiến trúc so với phương án khác.
-     * Câu 3: Tình huống edge case (Nếu ứng dụng gặp lỗi X hoặc thay đổi môi trường Y thì hàm Z sẽ xử lý thế nào?).
+B. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ):
+- Sinh chính xác 3 câu hỏi vấn đáp Viva kỹ thuật:
+  + Câu 1 (Architecture & Decomposition): rubric_criterion: "abstraction". Nhắm vào cấu trúc thư mục, Clean Architecture, việc tách hàm/module, cách quản lý state/config trong bài làm.
+  + Câu 2 (Code Logic & Edge Cases): rubric_criterion: "implementation". Nhắm vào đoạn logic phức tạp nhất trong file code chính (ví dụ: async/await, multi-threading, polling/event-driven, I/O handling, data validation).
+  + Câu 3 (AI Reflection & Trade-offs): rubric_criterion: "reflection". Nhắm trực tiếp vào phần code sinh viên khai báo AI hỗ trợ (hoặc đoạn code nghi vấn) để hỏi về đánh đổi hiệu năng (time/space complexity) và phương án cải tiến.
+- Mỗi câu hỏi phải chỉ rõ: Tên file (target_file), vị trí/hàm cụ thể (target_code_snippet), nội dung câu hỏi (question), và gợi ý câu trả lời kỳ vọng (expected_answer_criteria) để giảng viên đối chiếu nhanh.
+- KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp (ví dụ bài Python desktop tool thì KHÔNG ĐƯỢC hỏi về MongoDB, HttpOnly Cookie nếu code không dùng).
 
-3. GIẢI TRÌNH NGẮN GỌN (REASONING):
-   - Phần giải thích cho mỗi tiêu chí phải nêu rõ BẰNG CHỨNG CỤ THỂ từ bài làm (Ví dụ: 'Trừ 0.5đ tiêu chí implementation vì hàm capture_window() thiếu xử lý ngoại lệ khi cửa sổ bị minimize', thay vì nhận xét chung chung).`;
+C. BỘ RUBRIC 5 TIÊU CHÍ SE/IT (Thang 10):
+1. abstraction: Problem Abstraction & Architectural Design (Max: 2.0)
+2. implementation: Implementation, Clean Code & Error Handling (Max: 3.0)
+3. verification: Functionality, Testability & Edge Cases (Max: 2.5)
+4. ai_interaction: AI Prompting & Iterative Refinement (Max: 1.5)
+5. reflection: Code Ownership & AI Transparency (Max: 1.0)
+- Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, log) lý giải điểm số.`;
 
   const prompt = `
-Hãy thanh tra mã nguồn, đối soát chéo và chấm điểm bài nộp theo đúng 5 tiêu chí Rubric chuẩn:
-1. abstraction: Problem Abstraction & Decomposition (Tối đa 2.0đ)
-2. implementation: Implementation & Code Quality (Tối đa 3.0đ)
-3. verification: Functionality & Verification (Tối đa 2.5đ)
-4. ai_interaction: AI Interaction Quality (Tối đa 1.5đ)
-5. reflection: Reflection & Ownership (Tối đa 1.0đ)
+Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu lời khai AI với mã nguồn thực tế và chấm điểm Rubric 5 tiêu chí cùng Bộ 3 câu hỏi vấn đáp Viva:
 
---- DỮ LIỆU ĐỐI SOÁT CHÉO THỰC TẾ ---
-[1. YÊU CẦU ĐỀ BÀI & KỸ THUẬT]:
-${assignmentInfo || "Xây dựng ứng dụng theo đặc tả đề bài."}
+--- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
+[1. YÊU CẦU ĐỀ BÀI SE/IT]:
+${assignmentInfo || "Xây dựng ứng dụng phần mềm theo đặc tả yêu cầu."}
 
-[2. MÃ NGUỒN VÀ TẬP TIN NỘP THỰC TẾ (CODE & AST SUMMARY)]:
-${sourceCode || "Không có mã nguồn đính kèm."}
+[2. DANH SÁCH TẬP TIN, CẤU TRÚC AST VÀ MÃ NGUỒN BÀI NỘP]:
+${sourceCode || "Không tìm thấy mã nguồn trong bài nộp."}
 
-[3. LỊCH SỬ GIT COMMIT THỰC TẾ (GIT COMMIT HISTORY)]:
-${gitHistory || "Không có lịch sử Git đi kèm trong gói bài nộp."}
+[3. LỊCH SỬ GIT COMMIT THỰC TẾ]:
+${gitHistory || "Không tìm thấy lịch sử Git commit."}
 
-[4. KẾT QUẢ THANH TRA & LỜI KHAI BÁO AI CỦA SINH VIÊN (AI AUDIT DECLARATIONS)]:
-${aiAuditSummary || "Chưa có dữ liệu khai báo sử dụng AI."}
+[4. KẾT QUẢ THANH TRA & KHAI BÁO AI CỦA SINH VIÊN (AI AUDIT LOGS)]:
+${aiAuditSummary || "Sinh viên không khai báo sử dụng AI."}
 
-[5. BẢN GHI PHIÊN VẤN ĐÁP NẾU ĐÃ CÓ (VIVA Q&A LOGS)]:
-${oralExamLogs || "Chưa thực hiện vấn đáp Viva trực tiếp."}
+[5. BẢN GHI PHIÊN VẤN ĐÁP VIVA (NẾU ĐÃ CÓ)]:
+${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 `;
 
-  // Cấu hình Schema bắt buộc Gemini trả về đúng khuôn JSON
+  // Cấu hình Schema bắt buộc Gemini trả về đúng khuôn JSON theo yêu cầu
   const rubricResponseSchema = {
     type: Type.OBJECT,
     properties: {
@@ -120,12 +128,16 @@ ${oralExamLogs || "Chưa thực hiện vấn đáp Viva trực tiếp."}
           type: Type.OBJECT,
           properties: {
             id: { type: Type.INTEGER },
+            rubric_criterion: {
+              type: Type.STRING,
+              enum: ["abstraction", "implementation", "reflection"]
+            },
             target_file: { type: Type.STRING },
             target_code_snippet: { type: Type.STRING },
             question: { type: Type.STRING },
-            expected_answer_key: { type: Type.STRING }
+            expected_answer_criteria: { type: Type.STRING }
           },
-          required: ["id", "target_file", "target_code_snippet", "question", "expected_answer_key"]
+          required: ["id", "rubric_criterion", "target_file", "target_code_snippet", "question", "expected_answer_criteria"]
         }
       },
       rubrics: {
@@ -143,9 +155,9 @@ ${oralExamLogs || "Chưa thực hiện vấn đáp Viva trực tiếp."}
         }
       },
       total_score: { type: Type.NUMBER },
-      ai_verdict: { type: Type.STRING }
+      overall_verdict: { type: Type.STRING }
     },
-    required: ["audit_integrity", "viva_questions", "rubrics", "total_score", "ai_verdict"]
+    required: ["audit_integrity", "viva_questions", "rubrics", "total_score", "overall_verdict"]
   };
 
   const response = await ai.models.generateContent({
@@ -160,6 +172,32 @@ ${oralExamLogs || "Chưa thực hiện vấn đáp Viva trực tiếp."}
   });
 
   const parsed = JSON.parse(response.text);
+
+  // Đảm bảo tương thích ngược và cả hai trường tên đều tồn tại
+  if (!parsed.ai_verdict && parsed.overall_verdict) {
+    parsed.ai_verdict = parsed.overall_verdict;
+  }
+  if (!parsed.overall_verdict && parsed.ai_verdict) {
+    parsed.overall_verdict = parsed.ai_verdict;
+  }
+
+  // Chuẩn hóa viva_questions: đảm bảo có đầy đủ expected_answer_criteria và expected_answer_key
+  if (Array.isArray(parsed.viva_questions)) {
+    parsed.viva_questions.forEach(q => {
+      if (!q.expected_answer_criteria && q.expected_answer_key) {
+        q.expected_answer_criteria = q.expected_answer_key;
+      }
+      if (!q.expected_answer_key && q.expected_answer_criteria) {
+        q.expected_answer_key = q.expected_answer_criteria;
+      }
+      if (!q.target_code_snippet && q.target_function_or_snippet) {
+        q.target_code_snippet = q.target_function_or_snippet;
+      }
+      if (!q.target_function_or_snippet && q.target_code_snippet) {
+        q.target_function_or_snippet = q.target_code_snippet;
+      }
+    });
+  }
 
   // Đảm bảo cả short_reason và reasoning đều tồn tại trong từng rubric item
   if (parsed.rubrics && Array.isArray(parsed.rubrics)) {
