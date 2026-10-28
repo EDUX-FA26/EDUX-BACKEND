@@ -131,12 +131,24 @@ const SubmissionRepository = {
       SELECT 
         s.*, 
         up.full_name as student_name,
+        up.student_code as student_code,
         u.email as student_email,
-        a.title as assignment_title
+        a.title as assignment_title,
+        g.id as grade_id,
+        g.score,
+        g.max_score,
+        g.feedback
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
       JOIN assignments a ON s.assignment_id = a.id
+      LEFT JOIN LATERAL (
+        SELECT id, score, max_score, feedback
+        FROM grades
+        WHERE submission_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) g ON TRUE
       WHERE s.id = $1
     `;
     const { rows: subRows } = await pool.query(subQuery, [id]);
@@ -200,27 +212,43 @@ const SubmissionRepository = {
 
     const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    const countQuery = `SELECT COUNT(*) FROM submissions s ${whereString}`;
+    const countQuery = `SELECT COUNT(DISTINCT s.student_id) FROM submissions s ${whereString}`;
     const { rows: countRows } = await pool.query(countQuery, values);
     const total = parseInt(countRows[0].count, 10);
 
     const query = `
-      SELECT 
-        s.*,
-        up.full_name as student_name,
-        u.email as student_email,
-        sv.files as latest_files,
-        sv.note as latest_note,
-        g.id as grade_id,     
-        g.score,                
-        g.feedback             
-      FROM submissions s
-      JOIN users u ON s.student_id = u.id
-      LEFT JOIN user_profiles up ON u.id = up.user_id
-      LEFT JOIN submission_versions sv ON s.id = sv.submission_id AND sv.is_latest = TRUE
-      LEFT JOIN grades g ON s.id = g.submission_id 
-      ${whereString}
-      ORDER BY s.submitted_at DESC
+      SELECT * FROM (
+        SELECT DISTINCT ON (s.student_id)
+          s.*,
+          up.full_name as student_name,
+          up.student_code as student_code,
+          u.email as student_email,
+          sv.files as latest_files,
+          sv.note as latest_note,
+          g.id as grade_id,     
+          g.score,                
+          g.feedback             
+        FROM submissions s
+        JOIN users u ON s.student_id = u.id
+        LEFT JOIN user_profiles up ON u.id = up.user_id
+        LEFT JOIN LATERAL (
+          SELECT files, note 
+          FROM submission_versions 
+          WHERE submission_id = s.id 
+          ORDER BY is_latest DESC, version_no DESC, submitted_at DESC 
+          LIMIT 1
+        ) sv ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT id, score, feedback
+          FROM grades
+          WHERE submission_id = s.id
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) g ON TRUE
+        ${whereString}
+        ORDER BY s.student_id, s.submitted_at DESC, s.created_at DESC
+      ) t
+      ORDER BY t.submitted_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
     `;
     values.push(limit, offset);

@@ -13,7 +13,7 @@ const flashcardsTestRoutes = require("./modules/flashcards-test/flashcardsTest.r
 const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRouter } = require("./modules/class-materials/classMaterial.routes");
 const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
-const { gradesRouter, gradebooksRouter } = require("./modules/grading/grading.routes");
+const { gradesRouter, gradebooksRouter, gradingRouter } = require("./modules/grading/grading.routes");
 const submissionsRoutes = require("./modules/submissions/submission.routes");
 const semestersRoutes = require("./modules/semesters/semesters.routes");
 const subjectsRoutes = require("./modules/subjects/subjects.routes");
@@ -65,9 +65,10 @@ app.use("/api/assignments", assignmentsRoutes);
 // B. Assignment Materials
 app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
 
-// Module 10 — Grades
+// Module 10 — Grades & Grading AI Audit
 app.use("/api/grades", gradesRouter);
 app.use("/api/gradebooks", gradebooksRouter);
+app.use("/api", gradingRouter);
 app.use("/api/semesters", semestersRoutes);
 app.use("/api/subjects", subjectsRoutes);
 app.use("/api/topics", topicsRoutes);

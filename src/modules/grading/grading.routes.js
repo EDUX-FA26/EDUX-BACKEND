@@ -64,4 +64,22 @@ gradebooksRouter.get(
   gradingController.exportGradebook
 );
 
-module.exports = { gradesRouter, gradebooksRouter };
+// ─── Router: AI Rubric Grading ───────────────────────────────────────────────
+const gradingRouter = express.Router();
+gradingRouter.use(authenticate);
+
+// POST /submissions/:submissionId/ai-rubric (chỉ lecturer / admin)
+gradingRouter.post(
+  '/submissions/:submissionId/ai-rubric',
+  authorize('lecturer', 'admin'),
+  gradingController.handleAuditRubric
+);
+
+// Alias on gradesRouter: POST /api/grades/submissions/:submissionId/ai-rubric
+gradesRouter.post(
+  '/submissions/:submissionId/ai-rubric',
+  authorize('lecturer', 'admin'),
+  gradingController.handleAuditRubric
+);
+
+module.exports = { gradesRouter, gradebooksRouter, gradingRouter };
