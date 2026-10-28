@@ -29,9 +29,11 @@ const GradingService = {
     // 2. Kiểm tra quyền (lecturer của class đó)
     assertLecturer(user, submission.lecturer_id);
 
-    // 3. Kiểm tra chưa có grade
+    // 3. Kiểm tra chưa có grade -> nếu đã có thì tự động update thay vì báo lỗi
     const existing = await GradingRepository.findBySubmissionId(submissionId);
-    if (existing) throw new Error('GRADE_ALREADY_EXISTS');
+    if (existing) {
+      return this.updateGrade(existing.id, { score, maxScore, feedback }, user);
+    }
 
     // 4. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
     const resolvedMaxScore = maxScore ?? submission.assignment_max_score ?? 10;

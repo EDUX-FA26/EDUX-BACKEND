@@ -131,12 +131,18 @@ const SubmissionRepository = {
       SELECT 
         s.*, 
         up.full_name as student_name,
+        up.student_code as student_code,
         u.email as student_email,
-        a.title as assignment_title
+        a.title as assignment_title,
+        g.id as grade_id,
+        g.score,
+        g.max_score,
+        g.feedback
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
       JOIN assignments a ON s.assignment_id = a.id
+      LEFT JOIN grades g ON g.submission_id = s.id
       WHERE s.id = $1
     `;
     const { rows: subRows } = await pool.query(subQuery, [id]);
@@ -208,6 +214,7 @@ const SubmissionRepository = {
       SELECT 
         s.*,
         up.full_name as student_name,
+        up.student_code as student_code,
         u.email as student_email,
         sv.files as latest_files,
         sv.note as latest_note,
