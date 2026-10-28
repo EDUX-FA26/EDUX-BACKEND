@@ -111,7 +111,7 @@ const GradingController = {
   async handleAuditRubric(req, res, next) {
     try {
       const { submissionId } = req.params;
-      const result = await GradingService.auditRubricForSubmission(submissionId);
+      const result = await GradingService.auditRubricForSubmission(submissionId, req.body);
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       if (error.message === 'SUBMISSION_NOT_FOUND') {
