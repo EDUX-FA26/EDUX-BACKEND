@@ -434,14 +434,11 @@ const GradingService = {
 
       scopes.forEach((scope, sIdx) => {
         const scopeTitle = scope.scope_title || scope.title || `Scope ${sIdx + 1}`;
-        const scopeDesc = scope.scope_description || scope.description || '';
+        const scopeDesc = scope.scope_description || scope.description || 'Chưa cung cấp mô tả kỹ thuật chi tiết.';
 
-        aiAuditSummary += `\n=======================================================\n`;
-        aiAuditSummary += `PHẠM VI #${sIdx + 1}: ${scopeTitle}\n`;
-        if (scopeDesc) {
-          aiAuditSummary += `• Mô tả phạm vi kỹ thuật: ${scopeDesc}\n`;
-        }
-        aiAuditSummary += `• Danh sách 5 tiêu chí Rubric trong phạm vi này:\n`;
+        aiAuditSummary += `\n--- PHẠM VI ${sIdx + 1}: ${scopeTitle} ---\n`;
+        aiAuditSummary += `Mô tả: ${scopeDesc}\n`;
+        aiAuditSummary += `Chi tiết 5 tiêu chí:\n`;
 
         const decs = scope.declarations || {};
         const criteriaList = [
@@ -457,12 +454,11 @@ const GradingService = {
           const promptText = (d.prompt || '').trim();
           if (promptText) allPrompts.push(promptText);
 
-          aiAuditSummary += `\n  * Tiêu chí [${crit.name}]:
-    - Công cụ AI khai báo: ${d.tool || d.aiTool || 'Chưa khai báo'}
-    - Quyết định sử dụng: ${d.decision || 'Chưa khai báo'}
-    - Câu lệnh (Prompt): ${d.prompt || 'Không có câu lệnh'}
-    - Tóm tắt phản hồi AI: ${d.response || d.responseSummary || d.aiResponseSummary || 'Không có tóm tắt'}
-    - Phản tư / Tự đánh giá: ${d.reflection || d.studentReflection || 'Không có phản tư'}`;
+          aiAuditSummary += `  * [${crit.name}]:
+    - Tool & Decision: ${d.tool || d.aiTool || 'Chưa khai báo'} | Quyết định: ${d.decision || 'Chưa khai báo'}
+    - Prompt/Input Used: ${d.prompt || 'Không có câu lệnh'}
+    - AI Respond Summary: ${d.response || d.responseSummary || d.aiResponseSummary || 'Không có tóm tắt'}
+    - Student Self-Reflection: ${d.reflection || d.studentReflection || 'Không có phản tư'}\n`;
         });
       });
 
