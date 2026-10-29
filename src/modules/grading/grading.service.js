@@ -1,6 +1,7 @@
 const ExcelJS = require('exceljs');
 const GradingRepository = require('./grading.repository');
 const { evaluateRubricWithGemini } = require('../../config/gemini.config');
+const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -414,43 +415,60 @@ const GradingService = {
       gitHistoryStr = 'Không tìm thấy thư mục .git trong bài nộp.';
     }
 
-    // 4. Phân tích ghi chú phiên bản và Khai báo AI của sinh viên
-    let parsedNote = null;
-    if (auditData.latestVersion?.note) {
-      try {
-        parsedNote = typeof auditData.latestVersion.note === 'string'
-          ? JSON.parse(auditData.latestVersion.note)
-          : auditData.latestVersion.note;
-      } catch (e) {
-        parsedNote = null;
-      }
-    }
+    // 4. Phân tích ghi chú phiên bản và Khai báo AI của sinh viên qua helper normalizeAuditData (Backward Compatible)
+    const normalizedAudit = normalizeAuditData(
+      auditData.latestVersion?.note ||
+      clientContext.aiAuditData ||
+      clientContext.aiDeclarations
+    );
+    const scopes = normalizedAudit?.scopes || [];
 
-    // 5. Chuẩn bị AI Audit Declarations
+    // 5. Chuẩn bị AI Audit Declarations theo mô hình Đa phân rã (Multi-Scope)
     let aiAuditSummary = '';
-    const declarationsMap = parsedNote?.declarations || clientContext.aiDeclarations || {};
-    const decKeys = Object.keys(declarationsMap);
 
-    if (decKeys.length > 0) {
-      aiAuditSummary += '[CHI TIẾT LỜI KHAI BÁO CỦA SINH VIÊN TRONG HỆ THỐNG]:\n';
-      const prompts = [];
+    if (scopes.length > 0) {
+      aiAuditSummary += `[KIỂM TOÁN KHAI BÁO AI THEO MÔ HÌNH ĐA PHÂN RÃ (MULTI-SCOPE AI AUDIT) - TỔNG CỘNG ${scopes.length} PHẠM VI/MODULE]:\n`;
+      aiAuditSummary += `Sinh viên đã phân rã bài toán thành ${scopes.length} phạm vi kỹ thuật độc lập để tương tác với AI:\n`;
 
-      decKeys.forEach((key) => {
-        const d = declarationsMap[key];
-        const promptText = (d.prompt || '').trim();
-        if (promptText) prompts.push(promptText);
+      const allPrompts = [];
 
-        aiAuditSummary += `\n* Giai đoạn [${(d.title || d.phaseName || key).toUpperCase()}]:
-  - Tool AI khai báo: ${d.aiTool || 'N/A'}
-  - Quyết định: ${d.decision || 'N/A'}
-  - Prompt: ${d.prompt || 'Không có'}
-  - AI Response Summary: ${d.responseSummary || d.aiResponseSummary || 'Không có'}
-  - Phản tư / Tự đánh giá: ${d.reflection || d.studentReflection || 'Không có'}`;
+      scopes.forEach((scope, sIdx) => {
+        const scopeTitle = scope.scope_title || scope.title || `Scope ${sIdx + 1}`;
+        const scopeDesc = scope.scope_description || scope.description || '';
+
+        aiAuditSummary += `\n=======================================================\n`;
+        aiAuditSummary += `PHẠM VI #${sIdx + 1}: ${scopeTitle}\n`;
+        if (scopeDesc) {
+          aiAuditSummary += `• Mô tả phạm vi kỹ thuật: ${scopeDesc}\n`;
+        }
+        aiAuditSummary += `• Danh sách 5 tiêu chí Rubric trong phạm vi này:\n`;
+
+        const decs = scope.declarations || {};
+        const criteriaList = [
+          { key: 'decomposition', name: 'Decomposition (Phân rã bài toán)' },
+          { key: 'pattern_recognition', altKey: 'pattern', name: 'Pattern Recognition (Nhận diện mẫu)' },
+          { key: 'abstraction', name: 'Abstraction (Trừu tượng hóa & Mô hình)' },
+          { key: 'algorithmic_thinking', altKey: 'algorithmic', name: 'Algorithmic Thinking (Tư duy thuật toán)' },
+          { key: 'reflection', name: 'Reflection (Phản tư & Đánh giá giải pháp)' },
+        ];
+
+        criteriaList.forEach((crit) => {
+          const d = decs[crit.key] || (crit.altKey ? decs[crit.altKey] : null) || {};
+          const promptText = (d.prompt || '').trim();
+          if (promptText) allPrompts.push(promptText);
+
+          aiAuditSummary += `\n  * Tiêu chí [${crit.name}]:
+    - Công cụ AI khai báo: ${d.tool || d.aiTool || 'Chưa khai báo'}
+    - Quyết định sử dụng: ${d.decision || 'Chưa khai báo'}
+    - Câu lệnh (Prompt): ${d.prompt || 'Không có câu lệnh'}
+    - Tóm tắt phản hồi AI: ${d.response || d.responseSummary || d.aiResponseSummary || 'Không có tóm tắt'}
+    - Phản tư / Tự đánh giá: ${d.reflection || d.studentReflection || 'Không có phản tư'}`;
+        });
       });
 
-      const uniquePrompts = new Set(prompts);
-      if (prompts.length >= 3 && uniquePrompts.size === 1) {
-        aiAuditSummary += `\n\n[CẢNH BÁO KIỂM TOÁN TỰ ĐỘNG]: Tất cả ${prompts.length} giai đoạn khai báo AI đều chứa nội dung copy-paste giống hệt nhau ('${prompts[0].slice(0, 80)}...'). Đây là hành vi khai báo đối phó, sơ sài, không có giá trị học thuật. Cần kiểm tra xem nội dung khai báo có khớp với công nghệ của mã nguồn thực tế hay hoàn toàn lạc đề.`;
+      const uniquePrompts = new Set(allPrompts);
+      if (allPrompts.length >= 3 && uniquePrompts.size === 1) {
+        aiAuditSummary += `\n\n[CẢNH BÁO KIỂM TOÁN TỰ ĐỘNG]: Tất cả ${allPrompts.length} câu lệnh (Prompt) qua các phạm vi đều copy-paste giống hệt nhau ('${allPrompts[0].slice(0, 80)}...'). Đây là hành vi khai báo đối phó, sơ sài, thiếu chiều sâu kỹ thuật. Cần kiểm tra xem nội dung khai báo có khớp với công nghệ của mã nguồn thực tế hay hoàn toàn lạc đề, và trừ điểm tiêu chí reflection.`;
       }
     } else {
       aiAuditSummary = 'Sinh viên KHÔNG thực hiện khai báo sử dụng AI trong ghi chú bài nộp.';
