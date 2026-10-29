@@ -143,16 +143,23 @@ function normalizeDeclarationItem(item) {
     item.self_evaluation ||
     '';
 
-  const isCompleted = Boolean(
-    (prompt && prompt.trim()) ||
-    (response && response.trim()) ||
-    (reflection && reflection.trim())
-  );
+  const hasPrompt = Boolean(prompt && prompt.trim().length > 0);
+  const hasResponse = Boolean(response && response.trim().length > 0);
+  const hasReflection = Boolean(reflection && reflection.trim().length > 0);
+
+  // Chỉ tính là hoàn thành khi ĐÃ ĐIỀN ĐỦ cả 3 mục text: Prompt, Response, Reflection (không tính chỉ chọn dropdown)
+  const isCompleted = hasPrompt && hasResponse && hasReflection;
+  const isPartiallyFilled = (hasPrompt || hasResponse || hasReflection) && !isCompleted;
+
+  // Nếu cả 3 trường text đều trống thì coi như chưa khai báo
+  const finalDecision = isCompleted || isPartiallyFilled
+    ? (decision || 'Partially Modified')
+    : 'Not Declared';
 
   return {
     tool,
     aiTool: tool,
-    decision,
+    decision: finalDecision,
     prompt,
     response,
     responseSummary: response,
@@ -160,6 +167,7 @@ function normalizeDeclarationItem(item) {
     reflection,
     studentReflection: reflection,
     isCompleted,
+    isPartiallyFilled,
   };
 }
 
