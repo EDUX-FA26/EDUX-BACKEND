@@ -113,12 +113,17 @@ const AssignmentRepository = {
         a.*, 
         c.class_code, 
         c.lecturer_id,
+        c.semester_id,
+        s.id as subject_id,
         s.name as subject_name,
+        s.code as subject_code,
+        sem.name as semester_name,
         u.full_name as creator_name
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
       JOIN subjects s ON c.subject_id = s.id
-      JOIN user_profiles u ON a.created_by = u.user_id
+      LEFT JOIN semesters sem ON c.semester_id = sem.id
+      LEFT JOIN user_profiles u ON a.created_by = u.user_id
       WHERE a.id = $1
     `;
     const { rows } = await pool.query(query, [id]);
@@ -191,7 +196,10 @@ const AssignmentRepository = {
       SELECT 
         a.*,
         c.class_code,
-        s.name as subject_name
+        c.semester_id,
+        s.id as subject_id,
+        s.name as subject_name,
+        s.code as subject_code
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
       JOIN subjects s ON c.subject_id = s.id

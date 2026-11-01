@@ -611,6 +611,24 @@ const LearningController = {
 
 
 
+  /**
+   * GET /api/learning/study-plan?subjectId=...
+   * Lấy kế hoạch học đang chạy của student (mới nhất), kèm tiến độ 7 ngày.
+   */
+  async getActivePlan(req, res, next) {
+    try {
+      if (req.user.role !== 'student') {
+        return res.status(403).json({ success: false, message: 'Student access is required' });
+      }
+      const data = await StudyPlannerService.getActivePlan(
+        req.user.id,
+        req.query.subjectId || null
+      );
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  },
 };
 
 

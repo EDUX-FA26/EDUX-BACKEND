@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 
 const SubmissionController = require('./submission.controller');
+const gradingController = require('../grading/grading.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
@@ -67,6 +68,13 @@ router.patch(
   authorize('admin', 'lecturer'),
   validate(reviewSubmissionSchema),
   SubmissionController.reviewSubmission
+);
+
+// AI Audit Rubric: POST /api/submissions/:submissionId/ai-rubric
+router.post(
+  '/:submissionId/ai-rubric',
+  authorize('admin', 'lecturer'),
+  gradingController.handleAuditRubric
 );
 
 module.exports = router;

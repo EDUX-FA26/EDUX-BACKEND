@@ -3,7 +3,8 @@ const { pool } = require('../../config/db.config');
 const sources = {
   class: `
     SELECT c.id, 'class'::text AS type, c.class_code::text AS title,
-           s.name::text AS description, sem.name::text AS subtitle, c.created_at
+           s.name::text AS description, sem.name::text AS subtitle, c.created_at,
+           c.id AS class_id, c.subject_id
     FROM classes c
     JOIN subjects s ON s.id = c.subject_id
     JOIN semesters sem ON sem.id = c.semester_id
@@ -16,7 +17,8 @@ const sources = {
         )))`,
   assignment: `
     SELECT a.id, 'assignment'::text AS type, a.title::text AS title,
-           a.description::text AS description, c.class_code::text AS subtitle, a.created_at
+           a.description::text AS description, c.class_code::text AS subtitle, a.created_at,
+           a.class_id, c.subject_id
     FROM assignments a
     JOIN classes c ON c.id = a.class_id
     WHERE c.is_active = true
@@ -28,7 +30,8 @@ const sources = {
         )))`,
   material: `
     SELECT m.id, 'material'::text AS type, m.title::text AS title,
-           m.description::text AS description, c.class_code::text AS subtitle, m.created_at
+           m.description::text AS description, c.class_code::text AS subtitle, m.created_at,
+           m.class_id, c.subject_id
     FROM class_materials m
     JOIN classes c ON c.id = m.class_id
     WHERE c.is_active = true
@@ -40,7 +43,8 @@ const sources = {
         )))`,
   flashcard: `
     SELECT fd.id, 'flashcard'::text AS type, fd.title::text AS title,
-           fd.description::text AS description, s.name::text AS subtitle, fd.created_at
+           fd.description::text AS description, s.name::text AS subtitle, fd.created_at,
+           fd.class_id, fd.subject_id
     FROM flashcard_decks fd
     JOIN subjects s ON s.id = fd.subject_id
     WHERE fd.is_active = true AND s.is_active = true

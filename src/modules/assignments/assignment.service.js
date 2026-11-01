@@ -184,14 +184,66 @@ const AssignmentService = {
 
     // Get materials
     const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, { limit: 100 });
-    return { ...assignment, materials };
+
+    const subjectObj = {
+      id: assignment.subject_id,
+      code: assignment.subject_code,
+      name: assignment.subject_name
+    };
+
+    const classObj = {
+      id: assignment.class_id,
+      class_code: assignment.class_code,
+      class_name: assignment.class_code,
+      lecturer_id: assignment.lecturer_id,
+      semester_id: assignment.semester_id,
+      semester_name: assignment.semester_name,
+      subject_id: assignment.subject_id,
+      subject: subjectObj,
+      course: subjectObj
+    };
+
+    return {
+      ...assignment,
+      class_name: assignment.class_code,
+      course_name: assignment.subject_name,
+      course_code: assignment.subject_code,
+      class: classObj,
+      subject: subjectObj,
+      course: subjectObj,
+      materials
+    };
   },
 
   /**
    * Lấy danh sách (phân trang, filter)
    */
   async getAssignments(query, user) {
-    return await AssignmentRepository.findMany(query, user);
+    const result = await AssignmentRepository.findMany(query, user);
+    const enrichedData = (result.data || []).map(a => {
+      const subjectObj = {
+        id: a.subject_id,
+        code: a.subject_code,
+        name: a.subject_name
+      };
+      return {
+        ...a,
+        class_name: a.class_code,
+        course_name: a.subject_name,
+        course_code: a.subject_code,
+        class: {
+          id: a.class_id,
+          class_code: a.class_code,
+          class_name: a.class_code,
+          subject_id: a.subject_id,
+          subject: subjectObj,
+          course: subjectObj
+        },
+        subject: subjectObj,
+        course: subjectObj
+      };
+    });
+    return { ...result, data: enrichedData };
   }
 };
 
