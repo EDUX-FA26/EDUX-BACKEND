@@ -43,6 +43,8 @@ const flashcardsSchemas = {
     explanation: z.string().optional().default(''),
     difficulty:  z.enum(['easy', 'medium', 'hard']).default('medium'),
     position:    z.number().int().min(0).optional(),
+    topicName:   z.string().trim().max(255).optional().nullable(),
+    topicId:     z.string().uuid().optional().nullable(),
   }).refine(data => {
     if (data.type === 'multiple_choice') {
       return Array.isArray(data.options) && data.options.length >= 2;
@@ -63,6 +65,8 @@ const flashcardsSchemas = {
     difficulty:  z.enum(['easy', 'medium', 'hard']).optional(),
     position:    z.number().int().min(0).optional(),
     is_active:   z.boolean().optional(),
+    topicName:   z.string().trim().max(255).optional().nullable(),
+    topicId:     z.string().uuid().optional().nullable(),
   }),
 
   // ── REVIEW ────────────────────────────────────────────────

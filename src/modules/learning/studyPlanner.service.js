@@ -77,7 +77,7 @@ const StudyPlannerService = {
     },
 
 
-    async generateForStudent(analytics, studentId) {
+    async generateForStudent(analytics, studentId, force = false) {
         // Ngày bắt đầu theo múi giờ Việt Nam.
         const parts = new Intl.DateTimeFormat('en-US', {
             timeZone: 'Asia/Ho_Chi_Minh',
@@ -103,7 +103,8 @@ const StudyPlannerService = {
                 subjectId: analytics.subjectId,
                 startsOn,
                 analytics,
-                days: preview.days
+                days: preview.days,
+                force
             });
 
         const startDate = new Date(

@@ -28,6 +28,7 @@ const learningSchemas = {
 
   getTopicPerformanceQuery: z.object({
     subjectId: z.string().uuid('subjectId phải là UUID hợp lệ'),
+    force: z.string().optional(),
   }),
 
   postActivity: z.object({

@@ -151,6 +151,9 @@ class FlashcardsService {
     // Tự động tính position nếu không truyền
     const position = data.position ?? (await FlashcardsRepository.getNextPosition(deckId));
 
+    const topicName = data.topicName !== undefined ? data.topicName : (data.topic_name || null);
+    const topicId = data.topicId !== undefined ? data.topicId : (data.topic_id || null);
+
     return FlashcardsRepository.createCard({
       deck_id: deckId,
       type: data.type || 'multiple_choice',
@@ -160,6 +163,10 @@ class FlashcardsService {
       explanation: data.explanation,
       difficulty: data.difficulty,
       position,
+      topic_name: topicName,
+      topic_id: topicId,
+      userId: user.id,
+      subject_id: deck.subject_id,
     });
   }
 
@@ -183,7 +190,19 @@ class FlashcardsService {
       throw new Error('FORBIDDEN');
     }
 
-    const updated = await FlashcardsRepository.updateCard(cardId, data);
+    const topicName = data.topicName !== undefined ? data.topicName : data.topic_name;
+    const topicId = data.topicId !== undefined ? data.topicId : data.topic_id;
+
+    const updated = await FlashcardsRepository.updateCard(
+      cardId,
+      data,
+      {
+        userId: user.id,
+        subject_id: card.subject_id,
+        topic_name: topicName,
+        topic_id: topicId,
+      }
+    );
     return updated;
   }
 
@@ -289,6 +308,7 @@ class FlashcardsService {
       { header: 'Đáp án đúng (*)', key: 'answer', width: 25 },
       { header: 'Giải thích', key: 'explanation', width: 35 },
       { header: 'Độ khó (easy/medium/hard)', key: 'difficulty', width: 25 },
+      { header: 'Chủ đề (Topic)', key: 'topic', width: 30 },
     ];
 
     // Style header row
@@ -313,6 +333,7 @@ class FlashcardsService {
         answer: 'A',
         explanation: 'JavaScript là ngôn ngữ kịch bản chạy trong môi trường trình duyệt web.',
         difficulty: 'easy',
+        topic: 'Lập trình Web cơ bản',
       },
       {
         question: 'Giao thức nào cung cấp kết nối truyền tải dữ liệu an toàn được mã hóa qua SSL/TLS?',
@@ -323,6 +344,7 @@ class FlashcardsService {
         answer: 'HTTPS',
         explanation: 'HTTPS (Hypertext Transfer Protocol Secure) sử dụng TLS/SSL để mã hóa dữ liệu.',
         difficulty: 'medium',
+        topic: 'Mạng máy tính & Bảo mật',
       },
       {
         question: 'Trong lập trình hướng đối tượng (OOP), tính chất nào cho phép một lớp kế thừa các thuộc tính và phương thức của lớp khác?',
@@ -333,6 +355,7 @@ class FlashcardsService {
         answer: 'B',
         explanation: 'Tính kế thừa cho phép lớp con tái sử dụng và mở rộng các thành phần của lớp cha.',
         difficulty: 'medium',
+        topic: 'Lập trình hướng đối tượng (OOP)',
       },
     ];
 
@@ -353,7 +376,7 @@ class FlashcardsService {
   /**
    * Đọc file Excel (.xlsx, .xls) và thêm cards vào deck
    */
-  async importCardsFromExcel(deckId, fileBuffer, user) {
+  async importCardsFromExcel(deckId, fileBuffer, user, { defaultTopicName } = {}) {
     const deck = await FlashcardsRepository.findDeckById(deckId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
@@ -396,6 +419,8 @@ class FlashcardsService {
       const rawAnswer = getCellValue(row, 6);
       const explanation = getCellValue(row, 7);
       const rawDifficulty = getCellValue(row, 8).toLowerCase();
+      const rawTopic = getCellValue(row, 9);
+      const resolvedTopic = rawTopic || defaultTopicName || null;
 
       // Bỏ qua dòng trống hoàn toàn
       if (!question && !optA && !optB && !optC && !optD && !rawAnswer) {
@@ -452,6 +477,7 @@ class FlashcardsService {
         answer,
         explanation,
         difficulty,
+        topic_name: resolvedTopic,
       });
     }
 
@@ -478,9 +504,13 @@ class FlashcardsService {
       explanation: c.explanation,
       difficulty: c.difficulty,
       position: nextPos++,
+      topic_name: c.topic_name,
     }));
 
-    const inserted = await FlashcardsRepository.createCardsBatch(cardsToInsert);
+    const inserted = await FlashcardsRepository.createCardsBatch(cardsToInsert, {
+      subject_id: deck.subject_id,
+      userId: user.id,
+    });
 
     return {
       success: true,

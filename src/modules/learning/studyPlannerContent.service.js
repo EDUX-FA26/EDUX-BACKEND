@@ -186,6 +186,17 @@ const StudyPlannerContentService = {
                         day.subjectId,
                         [day.topicId]
                     );
+
+            // FALLBACK: Nếu sinh viên chưa có câu làm sai nào trong chủ đề này,
+            // tự động lấy các câu hỏi flashcard có sẵn của chủ đề để AI làm ngữ cảnh tạo bài luyện tập
+            if (!sources.length) {
+                sources =
+                    await ContentRepository.findDiagnosticSources(
+                        studentId,
+                        day.subjectId,
+                        day.topicId
+                    );
+            }
         } else {
             // Diagnostic hoặc practice:
             // chọn câu từ ngân hàng được phép truy cập.

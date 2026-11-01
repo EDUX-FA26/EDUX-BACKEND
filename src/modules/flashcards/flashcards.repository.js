@@ -114,10 +114,22 @@ const FlashcardsRepository = {
     if (!deckResult.rows[0]) return null;
 
     const cardsResult = await pool.query(
-      `SELECT id, type, question, options, answer, explanation, difficulty, position, is_active, created_at, updated_at
-       FROM flashcards
-       WHERE deck_id = $1 AND is_active = true
-       ORDER BY position ASC, created_at ASC`,
+      `SELECT fc.id, fc.type, fc.question, fc.options, fc.answer, fc.explanation, fc.difficulty, fc.position, fc.is_active, fc.created_at, fc.updated_at,
+              (
+                SELECT t.id FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_id,
+              (
+                SELECT t.name FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_name
+       FROM flashcards fc
+       WHERE fc.deck_id = $1 AND fc.is_active = true
+       ORDER BY fc.position ASC, fc.created_at ASC`,
       [id]
     );
 
@@ -199,13 +211,75 @@ const FlashcardsRepository = {
    */
   async findCardById(id) {
     const { rows } = await pool.query(
-      `SELECT fc.*, fd.title AS deck_title, fd.created_by AS deck_owner_id
+      `SELECT fc.*, fd.title AS deck_title, fd.created_by AS deck_owner_id, fd.subject_id,
+              (
+                SELECT t.id FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_id,
+              (
+                SELECT t.name FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_name
        FROM flashcards fc
        JOIN flashcard_decks fd ON fc.deck_id = fd.id
        WHERE fc.id = $1`,
       [id]
     );
     return rows[0];
+  },
+
+  /**
+   * Tìm hoặc tạo mới topic theo subjectId và tên topic
+   */
+  async findOrCreateTopic({ subjectId, name, userId }, client = pool) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return null;
+
+    const existing = await client.query(
+      `SELECT id, name FROM topics WHERE subject_id = $1 AND lower(name) = lower($2) LIMIT 1`,
+      [subjectId, trimmed]
+    );
+    if (existing.rows[0]) {
+      return existing.rows[0];
+    }
+
+    const created = await client.query(
+      `INSERT INTO topics (subject_id, name, created_by, is_active)
+       VALUES ($1, $2, $3, true)
+       ON CONFLICT (subject_id, lower(name))
+       DO UPDATE SET is_active = true
+       RETURNING id, name`,
+      [subjectId, trimmed, userId || null]
+    );
+    return created.rows[0];
+  },
+
+  /**
+   * Gán card vào topic
+   */
+  async setCardTopic({ flashcardId, topicId, userId }, client = pool) {
+    if (!topicId) {
+      await client.query(`DELETE FROM flashcard_topics WHERE flashcard_id = $1`, [flashcardId]);
+      return;
+    }
+
+    await client.query(`DELETE FROM flashcard_topics WHERE flashcard_id = $1 AND topic_id <> $2`, [flashcardId, topicId]);
+
+    await client.query(
+      `INSERT INTO flashcard_topics (flashcard_id, topic_id, mapping_source, review_status, mapped_by)
+       VALUES ($1, $2, 'lecturer', 'approved', $3)
+       ON CONFLICT (flashcard_id, topic_id)
+       DO UPDATE SET
+         mapping_source = 'lecturer',
+         review_status = 'approved',
+         mapped_by = EXCLUDED.mapped_by,
+         updated_at = NOW()`,
+      [flashcardId, topicId, userId || null]
+    );
   },
 
   /**
@@ -223,49 +297,102 @@ const FlashcardsRepository = {
   /**
    * Tạo card mới
    */
-  async createCard({ deck_id, type, question, options, answer, explanation, difficulty, position }) {
-    const { rows } = await pool.query(
-      `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        deck_id,
-        type || 'multiple_choice',
-        question,
-        JSON.stringify(options || []),
-        answer,
-        explanation || '',
-        difficulty || 'medium',
-        position,
-      ]
-    );
-    return rows[0];
+  async createCard({ deck_id, type, question, options, answer, explanation, difficulty, position, topic_name, topic_id, userId, subject_id }) {
+    return withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          deck_id,
+          type || 'multiple_choice',
+          question,
+          JSON.stringify(options || []),
+          answer,
+          explanation || '',
+          difficulty || 'medium',
+          position,
+        ]
+      );
+      const card = rows[0];
+
+      let resolvedTopicId = topic_id;
+      let resolvedTopicName = topic_name;
+
+      if (!resolvedTopicId && topic_name && subject_id) {
+        const topic = await FlashcardsRepository.findOrCreateTopic({ subjectId: subject_id, name: topic_name, userId }, client);
+        if (topic) {
+          resolvedTopicId = topic.id;
+          resolvedTopicName = topic.name;
+        }
+      }
+
+      if (resolvedTopicId) {
+        await FlashcardsRepository.setCardTopic({ flashcardId: card.id, topicId: resolvedTopicId, userId }, client);
+      }
+
+      return {
+        ...card,
+        topic_id: resolvedTopicId || null,
+        topic_name: resolvedTopicName || null,
+      };
+    });
   },
 
   /**
    * Cập nhật card
    */
-  async updateCard(id, data) {
-    const fields = [];
-    const values = [];
-    let idx = 1;
+  async updateCard(id, data, { userId, subject_id, topic_name, topic_id } = {}) {
+    return withTransaction(async (client) => {
+      const fields = [];
+      const values = [];
+      let idx = 1;
 
-    const allowed = ['type', 'question', 'options', 'answer', 'explanation', 'difficulty', 'position', 'is_active'];
-    for (const key of allowed) {
-      if (data[key] !== undefined) {
-        fields.push(`${key} = $${idx++}`);
-        values.push(key === 'options' ? JSON.stringify(data[key]) : data[key]);
+      const allowed = ['type', 'question', 'options', 'answer', 'explanation', 'difficulty', 'position', 'is_active'];
+      for (const key of allowed) {
+        if (data[key] !== undefined) {
+          fields.push(`${key} = $${idx++}`);
+          values.push(key === 'options' ? JSON.stringify(data[key]) : data[key]);
+        }
       }
-    }
-    if (fields.length === 0) return null;
 
-    fields.push(`updated_at = NOW()`);
-    values.push(id);
-    const { rows } = await pool.query(
-      `UPDATE flashcards SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
-      values
-    );
-    return rows[0];
+      let card = null;
+      if (fields.length > 0) {
+        fields.push('updated_at = NOW()');
+        values.push(id);
+        const { rows } = await client.query(
+          `UPDATE flashcards SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
+          values
+        );
+        card = rows[0];
+      } else {
+        const { rows } = await client.query('SELECT * FROM flashcards WHERE id = $1', [id]);
+        card = rows[0];
+      }
+
+      if (!card) return null;
+
+      let resolvedTopicId = topic_id;
+      let resolvedTopicName = topic_name;
+
+      if (topic_name !== undefined || topic_id !== undefined) {
+        if (!resolvedTopicId && topic_name && subject_id) {
+          const topic = await FlashcardsRepository.findOrCreateTopic({ subjectId: subject_id, name: topic_name, userId }, client);
+          if (topic) {
+            resolvedTopicId = topic.id;
+            resolvedTopicName = topic.name;
+          }
+        }
+
+        await FlashcardsRepository.setCardTopic({ flashcardId: id, topicId: resolvedTopicId || null, userId }, client);
+      }
+
+      return {
+        ...card,
+        topic_id: resolvedTopicId ?? card.topic_id,
+        topic_name: resolvedTopicName ?? card.topic_name,
+      };
+    });
   },
 
   /**
@@ -516,7 +643,7 @@ const FlashcardsRepository = {
   /**
    * Tạo nhiều card cùng lúc trong một transaction
    */
-  async createCardsBatch(cards) {
+  async createCardsBatch(cards, { subject_id, userId } = {}) {
     if (!cards || cards.length === 0) return [];
     return withTransaction(async (client) => {
       const inserted = [];
@@ -536,7 +663,18 @@ const FlashcardsRepository = {
             card.position,
           ]
         );
-        inserted.push(rows[0]);
+        const newCard = rows[0];
+
+        if (card.topic_name && subject_id) {
+          const topic = await FlashcardsRepository.findOrCreateTopic({ subjectId: subject_id, name: card.topic_name, userId }, client);
+          if (topic) {
+            await FlashcardsRepository.setCardTopic({ flashcardId: newCard.id, topicId: topic.id, userId }, client);
+            newCard.topic_id = topic.id;
+            newCard.topic_name = topic.name;
+          }
+        }
+
+        inserted.push(newCard);
       }
       return inserted;
     });

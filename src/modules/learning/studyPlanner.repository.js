@@ -6,12 +6,24 @@ const StudyPlannerRepository = {
     subjectId,
     startsOn,
     analytics,
-    days
+    days,
+    force = false
   }) {
     const client = await pool.connect();
 
     try {
       await client.query('BEGIN');
+
+      if (force) {
+        const oldPlans = await client.query(
+          `SELECT id FROM study_plans WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`,
+          [studentId, subjectId, startsOn]
+        );
+        for (const op of oldPlans.rows) {
+          await client.query(`DELETE FROM study_plan_days WHERE plan_id = $1`, [op.id]);
+          await client.query(`DELETE FROM study_plans WHERE id = $1`, [op.id]);
+        }
+      }
 
       const inserted = await client.query(
         `INSERT INTO study_plans (

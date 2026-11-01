@@ -566,10 +566,13 @@ const LearningController = {
             req.query.subjectId
           );
 
+      const force = req.query.force === 'true' || req.body?.force === true;
+
       const data =
         await StudyPlannerService.generateForStudent(
           analytics,
-          req.user.id
+          req.user.id,
+          force
         );
 
       return res.status(data.created ? 201 : 200).json({

@@ -246,10 +246,13 @@ const FlashcardsController = {
         return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel để tải lên' });
       }
 
+      const defaultTopicName = req.body?.topicName || req.body?.defaultTopicName || null;
+
       const result = await FlashcardsService.importCardsFromExcel(
         req.params.deckId,
         req.file.buffer,
-        req.user
+        req.user,
+        { defaultTopicName }
       );
 
       res.status(result.success ? 200 : 422).json(result);

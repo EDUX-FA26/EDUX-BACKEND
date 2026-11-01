@@ -178,9 +178,13 @@ const LearningRepository = {
 
   async findActiveTopicsBySubject(subjectId) {
     const { rows } = await pool.query(
-      `SELECT id, name, parent_id
-       FROM topics WHERE subject_id = $1 AND is_active = true
-       ORDER BY name ASC`,
+      `SELECT DISTINCT t.id, t.name, t.parent_id
+       FROM topics t
+       JOIN flashcard_topics ft ON ft.topic_id = t.id AND ft.review_status = 'approved'
+       JOIN flashcards fc ON fc.id = ft.flashcard_id AND fc.is_active = true
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+       WHERE t.subject_id = $1 AND t.is_active = true
+       ORDER BY t.name ASC`,
       [subjectId]
     );
     return rows;
