@@ -25,6 +25,7 @@ const reportsRoutes = require("./modules/reports/reports.routes");
 const communicationsRoutes = require("./modules/communications/communications.routes");
 const focusRoutes = require("./modules/focus/focus.routes");
 const todosRoutes = require("./modules/todos/todos.routes");
+const aiChatRoutes = require("./modules/ai-chat/aiChat.routes");
 
 
 // =========================
@@ -90,6 +91,7 @@ app.use("/api/communications", communicationsRoutes);
 // Focus Room (Pomodoro) & Smart Todo
 app.use("/api/focus", focusRoutes);
 app.use("/api/todos", todosRoutes);
+app.use("/api/ai-chat", aiChatRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
