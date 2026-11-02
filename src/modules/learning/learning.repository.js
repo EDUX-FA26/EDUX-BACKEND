@@ -533,10 +533,22 @@ const LearningRepository = {
         ssa.created_at,
         s.name AS subject_name,
         s.code AS subject_code,
-        fd.title AS deck_title
+        fd.title AS deck_title,
+        ROUND((latest_test.score * 10)::numeric, 1) AS flashcard_score,
+        latest_test.total_questions AS flashcard_total_questions,
+        latest_test.submitted_at AS flashcard_submitted_at
       FROM subject_streak_activities ssa
       JOIN subjects s ON ssa.subject_id = s.id
       LEFT JOIN flashcard_decks fd ON ssa.flashcard_deck_id = fd.id
+      LEFT JOIN LATERAL (
+        SELECT ft.score, ft.total_questions, ft.submitted_at
+        FROM flashcard_tests ft
+        WHERE ft.user_id = ssa.user_id
+          AND ft.deck_id = ssa.flashcard_deck_id
+          AND ft.status = 'submitted'
+        ORDER BY ft.submitted_at DESC NULLS LAST
+        LIMIT 1
+      ) latest_test ON true
       ${whereStr}
       ORDER BY ssa.activity_date DESC, ssa.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
