@@ -1,7 +1,7 @@
 const { pool } = require('../../config/db.config');
 
 const postSelect = `
-  SELECT fp.id, fp.title, fp.content, fp.visibility, fp.is_pinned, fp.comments_locked,
+  SELECT fp.id, fp.title, fp.content, fp.visibility, fp.post_type, fp.is_anonymous, fp.view_count, fp.is_pinned, fp.comments_locked,
          fp.subject_id, fp.flashcard_deck_id, fp.created_at, fp.updated_at,
          u.id AS author_id, u.role AS author_role, up.full_name AS author_name,
          s.code AS subject_code, s.name AS subject_name,
@@ -48,7 +48,7 @@ const ForumRepository = {
     return rows.map((row) => row.id);
   },
 
-  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', classId = '' }) {
+  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', classId = '', type = '', sort = 'latest' }) {
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(50, Math.max(1, Number(limit) || 10));
     const offset = (safePage - 1) * safeLimit;
@@ -62,15 +62,18 @@ const ForumRepository = {
     if (q) { params.push(`%${q}%`); conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`); }
     if (author) { params.push(`%${author}%`); conditions.push(`(COALESCE(up.full_name, '') ILIKE $${params.length} OR u.email ILIKE $${params.length})`); }
     if (classId) { params.push(classId); conditions.push(`EXISTS (SELECT 1 FROM forum_post_classes filter_fpc WHERE filter_fpc.post_id = fp.id AND filter_fpc.class_id = $${params.length})`); }
+    if (type === 'CONFESSION' || type === 'DISCUSSION') { params.push(type); conditions.push(`fp.post_type = $${params.length}`); }
     const where = `WHERE ${conditions.join(' AND ')}`;
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp JOIN users u ON u.id = fp.author_id LEFT JOIN user_profiles up ON up.user_id = u.id ${where}`, params);
     const limitParam = params.length + 1;
     const offsetParam = params.length + 2;
-    const result = await pool.query(`${postSelect} ${where} GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title ORDER BY fp.is_pinned DESC, fp.created_at DESC LIMIT $${limitParam} OFFSET $${offsetParam}`, [...params, safeLimit, offset]);
+    const orderBy = sort === 'popular' ? 'fp.view_count DESC, fp.created_at DESC' : sort === 'comments' ? 'comment_count DESC, fp.created_at DESC' : 'fp.is_pinned DESC, fp.created_at DESC';
+    const result = await pool.query(`${postSelect} ${where} GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title ORDER BY ${orderBy} LIMIT $${limitParam} OFFSET $${offsetParam}`, [...params, safeLimit, offset]);
     return { data: result.rows, page: safePage, limit: safeLimit, total: count.rows[0].total, totalPages: Math.max(1, Math.ceil(count.rows[0].total / safeLimit)) };
   },
 
   async findPostById(id, userId, role) {
+    await pool.query('UPDATE forum_posts SET view_count = view_count + 1, updated_at = updated_at WHERE id = $1', [id]);
     const result = await pool.query(`${postSelect} WHERE fp.id = $2 AND (fp.visibility = 'PUBLIC' OR $3 = 'admin' OR EXISTS (SELECT 1 FROM forum_post_classes fpc_access LEFT JOIN class_members cm_access ON cm_access.class_id = fpc_access.class_id AND cm_access.student_id = $1 AND cm_access.status = 'active' LEFT JOIN classes c_access ON c_access.id = fpc_access.class_id WHERE fpc_access.post_id = fp.id AND (cm_access.student_id IS NOT NULL OR c_access.lecturer_id = $1))) GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title`, [userId, id, role]);
     if (!result.rows[0]) return null;
     const comments = await pool.query(`
@@ -82,11 +85,11 @@ const ForumRepository = {
     return { ...result.rows[0], comments: comments.rows };
   },
 
-  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [] }) {
+  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [], postType = 'DISCUSSION', isAnonymous = false }) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility]);
+      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility, post_type, is_anonymous) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility, postType, isAnonymous]);
       for (const classId of classIds) await client.query('INSERT INTO forum_post_classes (post_id, class_id) VALUES ($1, $2)', [rows[0].id, classId]);
       await client.query('COMMIT');
       return rows[0];

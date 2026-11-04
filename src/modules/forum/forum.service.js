@@ -5,13 +5,15 @@ const ForumService = {
   list(user, query) { return Repo.listPosts({ userId: user.id, role: user.role, ...query }); },
   get(user, id) { return Repo.findPostById(id, user.id, user.role); },
   async create(user, body) {
-    if (!['lecturer', 'admin'].includes(user.role)) throw Object.assign(new Error('Only lecturers or admins can create forum posts'), { status: 403 });
-    const visibility = body.visibility === 'CLASS_ONLY' ? 'CLASS_ONLY' : 'PUBLIC';
+    const isStudentConfession = user.role === 'student';
+    if (!['lecturer', 'admin', 'student'].includes(user.role)) throw Object.assign(new Error('You are not allowed to create forum posts'), { status: 403 });
+    const visibility = isStudentConfession ? 'PUBLIC' : (body.visibility === 'CLASS_ONLY' ? 'CLASS_ONLY' : 'PUBLIC');
+    const postType = isStudentConfession ? 'CONFESSION' : (body.postType === 'CONFESSION' ? 'CONFESSION' : 'DISCUSSION');
     const classIds = Array.isArray(body.classIds) ? [...new Set(body.classIds)] : [];
     if (visibility === 'CLASS_ONLY' && !classIds.length) throw Object.assign(new Error('At least one class is required for class-only posts'), { status: 400 });
     const allowedClassIds = await Repo.findAllowedClassIds({ userId: user.id, role: user.role, classIds });
     if (allowedClassIds.length !== classIds.length) throw Object.assign(new Error('You can only share posts with classes you teach'), { status: 403 });
-    const post = await Repo.createPost({ ...body, authorId: user.id, visibility, classIds: allowedClassIds });
+    const post = await Repo.createPost({ ...body, authorId: user.id, visibility, postType, isAnonymous: Boolean(body.isAnonymous), classIds: allowedClassIds });
     // Notify the public audience or only members/lecturers of selected classes.
     // failure must not roll back a successfully-created forum post.
     try {
