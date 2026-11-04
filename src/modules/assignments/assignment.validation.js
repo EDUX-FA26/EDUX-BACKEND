@@ -1,5 +1,14 @@
 const { z } = require('zod');
 
+const parseBoolean = z.preprocess((val) => {
+  if (typeof val === 'string') {
+    if (val.toLowerCase() === 'true') return true;
+    if (val.toLowerCase() === 'false') return false;
+  }
+  if (val === undefined || val === null) return undefined;
+  return Boolean(val);
+}, z.boolean());
+
 const createAssignmentSchema = z.object({
   class_id: z.string().uuid('Invalid class_id'),
   session_id: z.string().uuid('Invalid session_id').optional().nullable(),
@@ -9,10 +18,10 @@ const createAssignmentSchema = z.object({
   deadline: z.string().datetime({ message: 'Invalid datetime format for deadline' }),
   max_score: z.coerce.number().min(0).default(10),
   weight: z.coerce.number().min(0).max(100).default(0),
-  ai_declaration_required: z.coerce.boolean().default(true),
-  min_ai_interactions: z.coerce.number().min(0).default(1),
-  max_ai_interactions: z.coerce.number().min(0).default(20),
-  allow_late_submission: z.coerce.boolean().default(true),
+  ai_declaration_required: parseBoolean.default(true),
+  min_ai_interactions: z.coerce.number().min(0).optional().default(1),
+  max_ai_interactions: z.coerce.number().min(0).optional().default(20),
+  allow_late_submission: parseBoolean.default(true),
   publish_status: z.enum(['draft', 'published', 'closed']).default('draft'),
 });
 
@@ -23,10 +32,11 @@ const updateAssignmentSchema = z.object({
   deadline: z.string().datetime({ message: 'Invalid datetime format for deadline' }).optional(),
   max_score: z.coerce.number().min(0).optional(),
   weight: z.coerce.number().min(0).max(100).optional(),
-  ai_declaration_required: z.coerce.boolean().optional(),
+  ai_declaration_required: parseBoolean.optional(),
   min_ai_interactions: z.coerce.number().min(0).optional(),
   max_ai_interactions: z.coerce.number().min(0).optional(),
-  allow_late_submission: z.coerce.boolean().optional(),
+  allow_late_submission: parseBoolean.optional(),
+  publish_status: z.enum(['draft', 'published', 'closed']).optional(),
   session_id: z.string().uuid('Invalid session_id').optional().nullable(),
 });
 

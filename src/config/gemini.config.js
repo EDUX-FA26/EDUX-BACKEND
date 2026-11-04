@@ -1,17 +1,12 @@
 require("dotenv").config();
+const { GoogleGenAI, HarmCategory, HarmBlockThreshold, Type } = require("@google/genai");
 
 const clients = new Map();
 
 async function getGeminiClient(apiKey = process.env.GEMINI_API_KEY) {
   const key = apiKey || process.env.GEMINI_API_KEY;
   if (!clients.has(key)) {
-    const promise = import("@google/genai").then(
-      ({ GoogleGenAI }) =>
-        new GoogleGenAI({
-          apiKey: key
-        })
-    );
-    clients.set(key, promise);
+    clients.set(key, new GoogleGenAI({ apiKey: key }));
   }
 
   return clients.get(key);
@@ -39,7 +34,7 @@ async function askGemini(prompt) {
  */
 async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs }) {
   // Lấy SDK Type từ import động
-  const { Type } = await import("@google/genai");
+
 
   // Ưu tiên key audit riêng để tránh quá tải key chính
   const auditKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
@@ -54,37 +49,38 @@ Bạn CHỈ đánh giá các đồ án, bài tập thực hành thuộc ngành K
 
 A. NGUYÊN TẮC CHẤM ĐIỂM & ĐỐI CHIẾU AI AUDIT ĐA PHÂN RÃ (MULTI-SCOPE HEURISTICS):
 1. QUY MÔ BÀI TOÁN & TÍNH PHÂN RÃ (DECOMPOSITION BONUS):
-   - Nếu bài toán quy mô lớn (fullstack, web, app nhiều luồng, microservices) mà sinh viên biết chủ động phân rã thành các Scope kỹ thuật rõ ràng (như Backend Architecture & RESTful API, Frontend React State & UI, Database/Cache/Redis, Luồng nghiệp vụ/Security):
-     -> Đánh giá rất cao tư duy kiến trúc phần mềm (Software Architect mindset), ưu tiên cho điểm tối đa ở tiêu chí 'decomposition' (2.0/2.0) và 'abstraction' (2.0/2.0).
-   - Nếu bài toán lớn nhưng chỉ khai báo 1 scope chung chung, sơ sài hoặc gom hết vào một lần khai báo mờ nhạt:
+   - Nếu bài toán quy mô lớn (fullstack, web, app nhiều luồng, microservices) mà sinh viên biết chủ động phân rã thành các Scope kỹ thuật rõ ràng (Backend, Frontend, DB, Architecture):
+     -> Đánh giá rất cao tư duy kiến trúc phần mềm, ưu tiên cho điểm tối đa ở tiêu chí 'decomposition' (2.0/2.0) và 'abstraction' (2.0/2.0).
+   - Nếu đề bài yêu cầu hệ thống lớn nhưng sinh viên chỉ khai báo 1 scope chung chung, gom mờ nhạt:
      -> Trừ 30% - 50% điểm ở tiêu chí 'decomposition' vì thiếu năng lực phân rã bài toán kỹ thuật.
+   - LƯU Ý QUAN TRỌNG: Nếu đề bài thực tế là bài tập nhỏ / chức năng đơn lẻ (Single Scope Task), sinh viên khai báo 1 scope là hoàn toàn phù hợp và KHÔNG bị trừ điểm phân rã.
 
 2. THANH TRA CHI TIẾT TỪNG SCOPE:
-   - Kiểm tra xem mô tả 'scope_description' có khớp với mã nguồn thực tế của từng thư mục trong dự án hay không (ví dụ: Scope BE khớp với thư mục src/controllers, src/services, src/routes; Scope FE khớp với src/components, src/pages; Scope DB khớp với migrations, schemas, repositories).
-   - Đối chiếu từng tool và phản tư ở từng scope: ví dụ Scope BE thì dùng tool hỏi về async/await, database index, transaction, JWT middleware; Scope FE hỏi về responsive, state management, form validation, lifecycle.
+   - Kiểm tra xem mô tả 'scope_description' có khớp với mã nguồn thực tế của từng thư mục trong dự án hay không (ví dụ: BE khớp với controllers/services; FE khớp với components/pages; DB khớp với migrations/schemas).
+   - Đối chiếu tool và phản tư ở từng scope tương ứng với đặc thù kỹ thuật.
 
 3. TRƯỜNG HỢP KIỂM TOÁN TƯƠNG TÁC AI:
-   - Dùng AI nhiều (> 60% code do AI sinh): Hoàn toàn hợp lệ nếu sinh viên minh bạch qua từng Scope. Trọng tâm câu hỏi Viva xoáy sâu vào "Code Ownership & Architectural Decisions", yêu cầu giải thích luồng thực thi dữ liệu (data flow), concurrency, bảo mật. Điểm Rubric đánh giá cao nếu có test cases và phản tư sâu.
-   - Dùng AI ít hoặc tự code 100%: Đối chiếu với AST Code. Nếu code có các pattern điển hình của LLM mà không khai báo -> Gắn cờ "Suspicious Discrepancy", trừ mạnh điểm 'reflection'.
-   - Khai báo Prompt sơ sài hoặc copy-paste lặp lại giữa các Scope: Kỹ năng prompt engineering kém, trừ điểm tiêu chí 'reflection' và 'decomposition'.
+   - Dùng AI nhiều (> 60% code do AI sinh): Hoàn toàn hợp lệ nếu sinh viên minh bạch qua từng Scope. Trọng tâm câu hỏi Viva xoáy sâu vào "Code Ownership & Architectural Decisions", yêu cầu giải thích luồng dữ liệu (data flow) và bảo mật.
+   - Dùng AI ít hoặc tự code 100%: Đối chiếu với AST Code. Nếu code có pattern điển hình của LLM mà không khai báo -> Gắn cờ "Suspicious Discrepancy", trừ mạnh điểm 'reflection'.
+   - Khai báo Prompt sơ sài, lặp lại giữa các Scope: Kỹ năng prompt engineering kém, trừ điểm tiêu chí 'reflection' và 'decomposition'.
 
 B. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ):
 - Sinh chính xác 3 câu hỏi vấn đáp Viva kỹ thuật:
-  + CÂU HỎI VẤN ĐÁP VIVA LIÊN KẾT GIỮA CÁC SCOPE: Sinh câu hỏi vấn đáp nhắm thẳng vào sự liên kết giữa các Scope (Ví dụ: "Em đã phân rã Scope BE và Scope FE, vậy luồng truyền token xác thực giữa 2 module này được thiết kế và bảo vệ như thế nào?", hoặc luồng đồng bộ dữ liệu giữa Controller và Database/Cache).
-  + Câu 1 (Architecture & Scope Interconnection): rubric_criterion: "decomposition" hoặc "abstraction". Nhắm vào ranh giới giữa các Scope, cấu trúc thư mục, Clean Architecture, việc tách hàm/module, cách quản lý state/config trong bài làm.
-  + Câu 2 (Code Logic & Edge Cases): rubric_criterion: "algorithmic_thinking" hoặc "implementation". Nhắm vào đoạn logic phức tạp nhất trong file code chính (ví dụ: async/await, multi-threading, polling/event-driven, I/O handling, data validation).
-  + Câu 3 (AI Reflection & Trade-offs): rubric_criterion: "reflection". Nhắm trực tiếp vào phần code sinh viên khai báo AI hỗ trợ (hoặc đoạn code nghi vấn) để hỏi về đánh đổi hiệu năng (time/space complexity) và phương án cải tiến.
-- Mỗi câu hỏi phải chỉ rõ: Tên file (target_file), vị trí/hàm cụ thể (target_code_snippet), nội dung câu hỏi (question), và gợi ý câu trả lời kỳ vọng (expected_answer_criteria) để giảng viên đối chiếu nhanh.
-- KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp.
+  + CÂU HỎI 1 (Architecture & Scope Interconnection / Decomposition): Nhắm vào ranh giới giữa các Scope, cấu trúc thư mục, Clean Architecture, hoặc luồng truyền dữ liệu liên kết giữa các module.
+  + CÂU HỎI 2 (Code Logic & Edge Cases): Nhắm vào đoạn logic phức tạp nhất hoặc xử lý ngoại lệ trong file code chính (async/await, transaction, validation, state management).
+  + CÂU HỎI 3 (AI Reflection & Trade-offs): Nhắm trực tiếp vào phần code sinh viên khai báo AI hỗ trợ (hoặc đoạn code nghi vấn) để hỏi về đánh đổi hiệu năng (time/space complexity) và phương án tối ưu.
+- RÀNG BUỘC ĐỊNH DẠNG:
+  + Mỗi câu hỏi phải chỉ rõ: Tên file chính xác (target_file), đoạn mã nguồn ngắn gọn tối đa 3-5 dòng (target_code_snippet), nội dung câu hỏi (question), và gợi ý câu trả lời kỳ vọng (expected_answer_criteria).
+  + KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp.
 
 C. BỘ TIÊU CHÍ RUBRIC ĐÁNH GIÁ (Thang điểm 10):
 Chấm điểm 5 tiêu chí Rubric dựa trên sự phối hợp của tất cả các Scope đã khai báo so với mã nguồn thực tế:
-1. decomposition: Problem Decomposition & Scope Architecture (Max: 2.0) - Khả năng chia tách bài toán thành các module kỹ thuật logic, ranh giới trách nhiệm rõ ràng. Áp dụng quy tắc Decomposition Bonus (+2.0/2.0 nếu phân rã modular xuất sắc) hoặc trừ 30%-50% nếu gom chung mờ nhạt.
-   * QUY ĐỊNH BẮT BUỘC CHO TRƯỜNG 'reasoning' CỦA TIÊU CHÍ DECOMPOSITION: Nêu rõ nhận xét về cách sinh viên chia các Scope (ví dụ: "Sinh viên phân rã tốt thành 3 scope độc lập BE/FE/DB, mô tả phạm vi mạch lạc, khớp với cấu trúc thư mục", hoặc chỉ ra việc thiếu phân rã nếu gom chung).
-2. pattern_recognition: Pattern Recognition & Architecture Patterns (Max: 2.0) - Nhận diện mẫu kiến trúc và thiết kế phù hợp cho từng module (Repository, MVC, Microservices, Event-driven...).
-3. abstraction: Abstraction & System Modeling (Max: 2.0) - Mô hình hóa thực thể, giao diện API, lược đồ C4/ERD tương ứng giữa các module.
+1. decomposition: Problem Decomposition & Scope Architecture (Max: 2.0) - Khả năng chia tách bài toán thành các module kỹ thuật logic.
+   * QUY ĐỊNH 'reasoning': Nêu rõ nhận xét về cách sinh viên chia Scope có khớp với cấu trúc thư mục thực tế hay không.
+2. pattern_recognition: Pattern Recognition & Architecture Patterns (Max: 2.0) - Nhận diện mẫu kiến trúc và thiết kế phù hợp (Repository, MVC, Component-driven...).
+3. abstraction: Abstraction & System Modeling (Max: 2.0) - Mô hình hóa thực thể, giao diện API, lược đồ C4/ERD tương ứng.
 4. algorithmic_thinking: Algorithmic Thinking, Logic & Data Flow (Max: 2.5) - Luồng dữ liệu, thuật toán xử lý nghiệp vụ cụ thể trong từng module.
-5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI cho từng scope, mức độ làm chủ code (Code Ownership).
+5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI, mức độ làm chủ code.
 - Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.`;
 
   const prompt = `
@@ -175,16 +171,47 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     required: ["audit_integrity", "viva_questions", "rubrics", "total_score", "overall_verdict"]
   };
 
-  const response = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
-    contents: prompt,
-    config: {
-      systemInstruction,
-      temperature: 0.1, // Nhiệt độ thấp giúp tính toán và phân tích logic ổn định
-      responseMimeType: "application/json",
-      responseSchema: rubricResponseSchema,
-    },
-  });
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.1, // Giữ nguyên để AI chấm điểm logic, ít sáng tạo bừa
+    maxOutputTokens: 8192, // QUAN TRỌNG: Tránh bị cụt JSON khi bài code quá dài
+    responseMimeType: "application/json",
+    responseSchema: rubricResponseSchema,
+    // Bổ sung safety settings để tránh bị chặn nhầm các đoạn code liên quan đến bảo mật/SQL/Auth
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const fallbackModel = "gemini-3.5-flash-lite";
+
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: primaryModel,
+      contents: prompt,
+      config: generateConfig,
+    });
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404)) {
+      console.warn(`[Gemini Audit] Model ${primaryModel} gặp lỗi (${err.status || err.message}), tự động chuyển sang ${fallbackModel}...`);
+      response = await ai.models.generateContent({
+        model: fallbackModel,
+        contents: prompt,
+        config: generateConfig,
+      });
+    } else {
+      throw err;
+    }
+  }
 
   const parsed = JSON.parse(response.text);
 

@@ -46,7 +46,7 @@ const AssignmentRepository = {
     const allowedFields = [
       'title', 'description', 'instructions', 'deadline', 'max_score', 'weight',
       'ai_declaration_required', 'min_ai_interactions', 'max_ai_interactions',
-      'allow_late_submission', 'session_id'
+      'allow_late_submission', 'publish_status', 'session_id'
     ];
     
     const fields = [];

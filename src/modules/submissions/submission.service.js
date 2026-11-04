@@ -5,6 +5,7 @@ const { PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aw
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { v4: uuidv4 } = require('uuid');
+const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 
 const SubmissionService = {
   /**
@@ -38,6 +39,41 @@ const SubmissionService = {
         throw new Error('DEADLINE_PASSED_AND_LATE_SUBMISSION_NOT_ALLOWED');
       }
       status = 'late';
+    }
+
+    // 2.1. Kiểm tra nội dung bài nộp (không được để trống cả file lẫn ghi chú)
+    const hasFiles = Boolean(uploadedFiles && uploadedFiles.length > 0);
+    const hasNote = Boolean(body && body.note && body.note.trim().length > 0);
+    if (!hasFiles && !hasNote) {
+      throw new Error('SUBMISSION_EMPTY_CONTENT');
+    }
+
+    // 2.2. Kiểm tra yêu cầu khai báo AI Audit Log nếu được bật
+    if (assignment.ai_declaration_required) {
+      const auditData = normalizeAuditData(body?.note);
+      let validCount = 0;
+      if (auditData && Array.isArray(auditData.scopes)) {
+        for (const scope of auditData.scopes) {
+          if (scope && scope.declarations) {
+            for (const key of Object.keys(scope.declarations)) {
+              const item = scope.declarations[key];
+              const prompt = (item.prompt || item.prompt_used || '').trim();
+              const response = (item.response || item.responseSummary || '').trim();
+              const reflection = (item.reflection || item.studentReflection || '').trim();
+              if (prompt.length > 0 && response.length > 0 && reflection.length > 0) {
+                validCount++;
+              }
+            }
+          }
+        }
+      }
+
+      const minRequired = (assignment.min_ai_interactions != null && Number(assignment.min_ai_interactions) > 0)
+        ? Number(assignment.min_ai_interactions)
+        : 1;
+      if (validCount < minRequired) {
+        throw new Error(`AI_DECLARATION_REQUIRED: Bài tập yêu cầu khai báo AI Audit Log tối thiểu ${minRequired} lượt tương tác hợp lệ (hiện có: ${validCount})`);
+      }
     }
 
     // 3. Upload files lên S3
