@@ -1,62 +1,156 @@
 const { pool, withTransaction } = require('../../config/db.config');
 
 const ClassesRepository = {
+
   /**
-   * Lấy danh sách lớp học có phân trang và filter
+   * Lấy danh sách lớp học có phân trang và bộ lọc.
+   * - Admin: xem tất cả lớp
+   * - Lecturer: chỉ xem lớp mình phụ trách
+   * - Student: chỉ xem lớp đang tham gia
+   * - Hỗ trợ lọc theo semester code hoặc semester UUID
    */
-  async findClasses({ page, limit, search, include_inactive, role, userId }) {
-    page = Number(page) || 1;
-    limit = Number(limit) || 10;
+  async findClasses({
+    page,
+    limit,
+    search,
+    include_inactive,
+    semester,
+    semester_id,
+    role,
+    userId
+  }) {
+    page = Math.max(1, Number(page) || 1);
+    limit = Math.max(1, Number(limit) || 10);
+
     const offset = (page - 1) * limit;
     const params = [];
-    let query = `
-      SELECT c.*, s.name as subject_name, s.code as subject_code, sem.name as semester_name, u.full_name as lecturer_name 
-      FROM classes c 
-      JOIN subjects s ON c.subject_id = s.id 
-      JOIN semesters sem ON c.semester_id = sem.id 
-      JOIN user_profiles u ON c.lecturer_id = u.user_id
-    `;
-
     const whereConditions = [];
 
-    // Filter by active status
-    if (!include_inactive) {
+    let query = `
+    SELECT
+      c.*,
+      s.name AS subject_name,
+      s.code AS subject_code,
+      sem.name AS semester_name,
+      sem.code AS semester_code,
+      u.full_name AS lecturer_name
+    FROM classes c
+    JOIN subjects s
+      ON c.subject_id = s.id
+    JOIN semesters sem
+      ON c.semester_id = sem.id
+    JOIN user_profiles u
+      ON c.lecturer_id = u.user_id
+  `;
+
+    // 1. Filter active status
+    // Supports both validated booleans and raw query strings.
+    const includeInactive =
+      include_inactive === true || include_inactive === 'true';
+
+    if (!includeInactive) {
       whereConditions.push(`c.is_active = true`);
     }
 
-    // Filter by role
+    // 2. Filter by role
     if (role === 'lecturer') {
-      whereConditions.push(`c.lecturer_id = $${params.length + 1}`);
       params.push(userId);
+
+      whereConditions.push(
+        `c.lecturer_id = $${params.length}`
+      );
     } else if (role === 'student') {
-      query += ` JOIN class_members cm ON c.id = cm.class_id`;
-      whereConditions.push(`cm.student_id = $${params.length + 1}`);
+      query += `
+      JOIN class_members cm
+        ON c.id = cm.class_id
+    `;
+
       params.push(userId);
-      whereConditions.push(`cm.status = 'active'`);
+
+      whereConditions.push(
+        `cm.student_id = $${params.length}`
+      );
+
+      whereConditions.push(
+        `cm.status = 'active'`
+      );
     }
 
-    // Filter by search
+    // 3. Filter by semester code
+    if (semester) {
+      params.push(semester);
+
+      whereConditions.push(
+        `sem.code = $${params.length}`
+      );
+    }
+
+    // 4. Filter by semester UUID
+    if (semester_id) {
+      params.push(semester_id);
+
+      whereConditions.push(
+        `c.semester_id = $${params.length}`
+      );
+    }
+
+    // 5. Filter by search
     if (search) {
-      whereConditions.push(`(c.class_code ILIKE $${params.length + 1} OR s.name ILIKE $${params.length + 1})`);
       params.push(`%${search}%`);
+
+      whereConditions.push(`
+      (
+        c.class_code ILIKE $${params.length}
+        OR s.name ILIKE $${params.length}
+        OR s.code ILIKE $${params.length}
+      )
+    `);
     }
 
+    // 6. Combine WHERE conditions
     if (whereConditions.length > 0) {
-      query += ` WHERE ` + whereConditions.join(' AND ');
+      query += `
+      WHERE ${whereConditions.join(' AND ')}
+    `;
     }
 
-    // Count total
-    const countQuery = `SELECT COUNT(*) FROM (${query}) as total`;
-    const totalResult = await pool.query(countQuery, params);
-    const total = parseInt(totalResult.rows[0].count, 10);
+    // 7. Count before pagination
+    const countQuery = `
+    SELECT COUNT(*)::int AS total
+    FROM (${query}) AS filtered_classes
+  `;
 
-    // Add pagination
-    query += ` ORDER BY c.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(limit, offset);
+    const countResult = await pool.query(
+      countQuery,
+      params
+    );
 
-    const { rows } = await pool.query(query, params);
-    return { data: rows, total };
+    const total = countResult.rows[0].total;
+
+    // 8. Pagination
+    params.push(limit);
+    const limitPosition = params.length;
+
+    params.push(offset);
+    const offsetPosition = params.length;
+
+    query += `
+    ORDER BY c.created_at DESC, c.id
+    LIMIT $${limitPosition}
+    OFFSET $${offsetPosition}
+  `;
+
+    const { rows } = await pool.query(
+      query,
+      params
+    );
+
+    return {
+      data: rows,
+      total
+    };
   },
+
 
   /**
    * Lấy chi tiết lớp học

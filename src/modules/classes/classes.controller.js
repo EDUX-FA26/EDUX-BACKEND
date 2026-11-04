@@ -1,19 +1,31 @@
 const ClassesService = require('./classes.service');
 
 const ClassesController = {
+
   async getClasses(req, res, next) {
     try {
-      // Assuming validation middleware attaches validated query to req.validatedQuery or we use req.query directly
-      // However, we should validate it here or assume route middleware does it.
-      // Usually validation middleware passes data to req.body / req.query but Zod needs explicit parse.
-      // Assuming a generic validate middleware was used, or we do it here if missing. 
-      // We will assume route handles validation and data is in req.query.
-      
-      const { page = 1, limit = 10, search, include_inactive } = req.query;
-      
-      const result = await ClassesService.getClasses({ page, limit, search, include_inactive }, req.user);
-      
-      const totalPages = Math.ceil(result.total / limit);
+      const {
+        page = 1,
+        limit = 10,
+        search,
+        include_inactive = false,
+        semester,
+        semester_id
+      } = req.validatedQuery ?? req.query;
+
+      const result = await ClassesService.getClasses(
+        {
+          page,
+          limit,
+          search,
+          include_inactive,
+          semester,
+          semester_id
+        },
+        req.user
+      );
+
+      const totalPages = Math.ceil(result.total / Number(limit));
 
       res.status(200).json({
         success: true,
@@ -29,6 +41,7 @@ const ClassesController = {
       next(error);
     }
   },
+
 
   async getClassById(req, res, next) {
     try {
@@ -137,7 +150,7 @@ const ClassesController = {
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="Class_${classData.class_code}_Members.xlsx"`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
