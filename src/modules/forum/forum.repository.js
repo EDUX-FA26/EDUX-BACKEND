@@ -69,7 +69,7 @@ const ForumRepository = {
     return rows.map((row) => row.id);
   },
 
-  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', classId = '', type = '', sort = 'latest' }) {
+  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', subjectId = '', classId = '', type = '', sort = 'latest', time = 'all' }) {
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(50, Math.max(1, Number(limit) || 10));
     const offset = (safePage - 1) * safeLimit;
@@ -83,9 +83,15 @@ const ForumRepository = {
     if (q) { params.push(`%${q}%`); conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`); }
     if (author === 'lecturer' || author === 'student' || author === 'admin') {
       params.push(author); conditions.push(`u.role = $${params.length}`);
+    } else if (author === 'anonymous') {
+      conditions.push('fp.is_anonymous = true');
     } else if (author) {
       params.push(`%${author}%`); conditions.push(`(COALESCE(up.full_name, '') ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
     }
+    if (subjectId) { params.push(subjectId); conditions.push(`fp.subject_id = $${params.length}`); }
+    if (time === 'today') conditions.push(`fp.created_at >= CURRENT_DATE`);
+    else if (time === 'week') conditions.push(`fp.created_at >= CURRENT_DATE - INTERVAL '7 days'`);
+    else if (time === 'month') conditions.push(`fp.created_at >= CURRENT_DATE - INTERVAL '30 days'`);
     if (classId) { params.push(classId); conditions.push(`EXISTS (SELECT 1 FROM forum_post_classes filter_fpc WHERE filter_fpc.post_id = fp.id AND filter_fpc.class_id = $${params.length})`); }
     if (type === 'CONFESSION' || type === 'DISCUSSION') { params.push(type); conditions.push(`fp.post_type = $${params.length}`); }
     if (type === 'FLASHCARD') conditions.push('fp.flashcard_deck_id IS NOT NULL');
