@@ -1,7 +1,7 @@
 const { pool } = require('../../config/db.config');
 
 const postSelect = `
-  SELECT fp.id, fp.title, fp.content, fp.visibility, fp.post_type, fp.is_anonymous, fp.view_count, fp.is_pinned, fp.comments_locked,
+  SELECT fp.id, fp.title, fp.content, fp.visibility, fp.post_type, fp.is_anonymous, fp.attachments, fp.view_count, fp.is_pinned, fp.comments_locked,
          fp.subject_id, fp.flashcard_deck_id, fp.created_at, fp.updated_at,
          u.id AS author_id, u.role AS author_role, up.full_name AS author_name,
          s.code AS subject_code, s.name AS subject_name,
@@ -98,11 +98,11 @@ const ForumRepository = {
     return { ...result.rows[0], comments: comments.rows };
   },
 
-  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [], postType = 'DISCUSSION', isAnonymous = false }) {
+  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [], postType = 'DISCUSSION', isAnonymous = false, attachments = [] }) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility, post_type, is_anonymous) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility, postType, isAnonymous]);
+      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility, post_type, is_anonymous, attachments) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility, postType, isAnonymous, JSON.stringify(attachments || [])]);
       for (const classId of classIds) await client.query('INSERT INTO forum_post_classes (post_id, class_id) VALUES ($1, $2)', [rows[0].id, classId]);
       await client.query('COMMIT');
       return rows[0];

@@ -13,7 +13,8 @@ const ForumService = {
     if (visibility === 'CLASS_ONLY' && !classIds.length) throw Object.assign(new Error('At least one class is required for class-only posts'), { status: 400 });
     const allowedClassIds = await Repo.findAllowedClassIds({ userId: user.id, role: user.role, classIds });
     if (allowedClassIds.length !== classIds.length) throw Object.assign(new Error('You can only share posts with classes you teach'), { status: 403 });
-    const post = await Repo.createPost({ ...body, authorId: user.id, visibility, postType, isAnonymous: Boolean(body.isAnonymous), classIds: allowedClassIds });
+    const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 5).filter((item) => item && item.name && item.dataUrl && String(item.dataUrl).length <= 3_000_000) : [];
+    const post = await Repo.createPost({ ...body, authorId: user.id, visibility, postType, isAnonymous: Boolean(body.isAnonymous), attachments, classIds: allowedClassIds });
     // Notify the public audience or only members/lecturers of selected classes.
     // failure must not roll back a successfully-created forum post.
     try {
