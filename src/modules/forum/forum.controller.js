@@ -2,6 +2,7 @@ const Service = require('./forum.service');
 const ok = (res, data, message = 'OK', status = 200) => res.status(status).json({ success: true, message, data });
 
 const ForumController = {
+  stats: async (req, res, next) => { try { const data = await Service.stats(req.user); return data ? ok(res, data, 'Forum stats') : res.status(404).json({ success: false, message: 'User not found' }); } catch (e) { return next(e); } },
   list: async (req, res, next) => { try { return ok(res, await Service.list(req.user, req.query), 'Forum posts'); } catch (e) { return next(e); } },
   get: async (req, res, next) => { try { const data = await Service.get(req.user, req.params.id); return data ? ok(res, data, 'Forum post') : res.status(404).json({ success: false, message: 'Forum post not found' }); } catch (e) { return next(e); } },
   create: async (req, res, next) => { try { return ok(res, await Service.create(req.user, req.body), 'Forum post created', 201); } catch (e) { return next(e); } },

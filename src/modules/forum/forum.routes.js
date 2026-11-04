@@ -3,6 +3,7 @@ const controller = require('./forum.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 
 router.use(authenticate);
+router.get('/stats/me', controller.stats);
 router.get('/posts', controller.list);
 router.get('/posts/:id', controller.get);
 router.post('/posts', controller.create);

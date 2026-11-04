@@ -22,6 +22,19 @@ const postSelect = `
 `;
 
 const ForumRepository = {
+  async getUserStats(userId) {
+    const { rows } = await pool.query(`
+      SELECT u.id, COALESCE(up.full_name, u.email) AS display_name,
+             (SELECT COUNT(*)::int FROM forum_posts WHERE author_id = u.id) AS post_count,
+             (SELECT COALESCE(SUM(x.like_count), 0)::int FROM (
+               SELECT COUNT(*)::int AS like_count FROM forum_posts fp2
+               LEFT JOIN forum_post_likes fpl2 ON fpl2.post_id = fp2.id
+               WHERE fp2.author_id = u.id GROUP BY fp2.id
+             ) x) AS reaction_score
+      FROM users u LEFT JOIN user_profiles up ON up.user_id = u.id WHERE u.id = $1`, [userId]);
+    return rows[0] || null;
+  },
+
   async findAllowedClassIds({ userId, role, classIds }) {
     if (!classIds.length) return [];
     const { rows } = await pool.query(`SELECT id FROM classes WHERE id = ANY($1::uuid[]) AND ($2 = 'admin' OR lecturer_id = $3)`, [classIds, role, userId]);

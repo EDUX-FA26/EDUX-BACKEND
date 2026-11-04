@@ -2,13 +2,13 @@ const Repo = require('./forum.repository');
 const NotificationsRepository = require('../notifications/notifications.repository');
 
 const ForumService = {
+  stats(user) { return Repo.getUserStats(user.id); },
   list(user, query) { return Repo.listPosts({ userId: user.id, role: user.role, ...query }); },
   get(user, id) { return Repo.findPostById(id, user.id, user.role); },
   async create(user, body) {
-    const isStudentConfession = user.role === 'student';
     if (!['lecturer', 'admin', 'student'].includes(user.role)) throw Object.assign(new Error('You are not allowed to create forum posts'), { status: 403 });
-    const visibility = isStudentConfession ? 'PUBLIC' : (body.visibility === 'CLASS_ONLY' ? 'CLASS_ONLY' : 'PUBLIC');
-    const postType = isStudentConfession ? 'CONFESSION' : (body.postType === 'CONFESSION' ? 'CONFESSION' : 'DISCUSSION');
+    const visibility = user.role === 'student' ? 'PUBLIC' : (body.visibility === 'CLASS_ONLY' ? 'CLASS_ONLY' : 'PUBLIC');
+    const postType = body.postType === 'CONFESSION' ? 'CONFESSION' : 'DISCUSSION';
     const classIds = Array.isArray(body.classIds) ? [...new Set(body.classIds)] : [];
     if (visibility === 'CLASS_ONLY' && !classIds.length) throw Object.assign(new Error('At least one class is required for class-only posts'), { status: 400 });
     const allowedClassIds = await Repo.findAllowedClassIds({ userId: user.id, role: user.role, classIds });
