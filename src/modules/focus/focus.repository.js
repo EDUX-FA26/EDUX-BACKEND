@@ -56,15 +56,15 @@ const FocusRepository = {
   async insert(client, s) {
     const { rows } = await client.query(
       `INSERT INTO focus_sessions (
-         user_id, todo_id, status, phase, phase_seq,
+         user_id, todo_id, timer_mode, status, phase, phase_seq,
          phase_elapsed_ms, phase_resumed_at,
          focus_minutes, short_break_minutes, long_break_minutes, long_break_every,
          note, started_at
        )
-       VALUES ($1, $2, 'IN_PROGRESS', 'FOCUS', 1, 0, $3, $4, $5, $6, $7, $8, $3)
+       VALUES ($1, $2, $3, 'IN_PROGRESS', 'FOCUS', 1, 0, $4, $5, $6, $7, $8, $9, $4)
        RETURNING id`,
       [
-        s.userId, s.todoId, s.now,
+        s.userId, s.todoId, s.timerMode || 'pomodoro', s.now,
         s.focusMinutes, s.shortBreakMinutes, s.longBreakMinutes, s.longBreakEvery,
         s.note || '',
       ]
@@ -80,6 +80,7 @@ const FocusRepository = {
          phase_elapsed_ms = $5, phase_resumed_at = $6,
          completed_pomodoros = $7, focus_ms = $8,
          note = $9, todo_id = $10, ended_at = $11,
+         focus_minutes = $12, short_break_minutes = $13, long_break_minutes = $14,
          updated_at = NOW()
        WHERE id = $1`,
       [
@@ -87,6 +88,7 @@ const FocusRepository = {
         s.phase_elapsed_ms, s.phase_resumed_at,
         s.completed_pomodoros, s.focus_ms,
         s.note, s.todo_id, s.ended_at,
+        s.focus_minutes, s.short_break_minutes, s.long_break_minutes,
       ]
     );
   },

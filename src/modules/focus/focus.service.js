@@ -81,6 +81,7 @@ const FocusService = {
   async start(userId, input, now = new Date()) {
     const prefs = rowToPreferences(await Repo.getPreferences(userId));
     const config = {
+      timerMode: input.timerMode || 'pomodoro',
       focusMinutes: input.focusMinutes ?? prefs.focusMinutes,
       shortBreakMinutes: input.shortBreakMinutes ?? prefs.shortBreakMinutes,
       longBreakMinutes: input.longBreakMinutes ?? prefs.longBreakMinutes,
@@ -158,6 +159,14 @@ const FocusService = {
     const row = await mutateSession(userId, id, now, async (s) => {
       if (isEnded(s)) throw new AppError('SESSION_ALREADY_ENDED', 409);
       return Timer.resume(s, now); // đang chạy → không đổi (idempotent)
+    });
+    return viewOf(row, now);
+  },
+
+  async adjust(userId, id, { deltaMinutes }, now = new Date()) {
+    const row = await mutateSession(userId, id, now, async (s) => {
+      if (isEnded(s)) throw new AppError('SESSION_ALREADY_ENDED', 409);
+      return Timer.adjust(s, deltaMinutes, now);
     });
     return viewOf(row, now);
   },
