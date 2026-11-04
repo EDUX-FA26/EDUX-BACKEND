@@ -1,11 +1,5 @@
 const authorizeRoles = (...allowedRoles) => {
   return (req, res, next) => {
-    console.log('[RBAC]', {
-      method: req.method,
-      url: req.originalUrl,
-      userRole: req.user?.role,
-      allowedRoles,
-    });
 
     if (!req.user || !req.user.role) {
       return res.status(401).json({

@@ -4,7 +4,9 @@ const adminRepository = require("./admin.repository");
 const authRepository = require("../auth/auth.repository");
 const notificationsRepository = require("../notifications/notifications.repository");
 const { getIO } = require("../../config/socket.config");
-
+const {
+  emitCreatedNotifications,
+} = require('../notifications/notifications.realtime');
 const AdminService = {
   /**
    * UC 86 — Tạo user mới với role tùy chọn (admin, lecturer, student)
@@ -115,41 +117,53 @@ const AdminService = {
   /**
    * UC 90 — Broadcast Notification
    */
+
   async broadcastNotification(data) {
     const { title, message, target } = data;
 
-    // 1. Lấy danh sách user IDs theo target
-    const userIds = await adminRepository.findUserIdsByTarget(target);
-    if (userIds.length === 0) return { success: true, count: 0 };
+    // 1. Lấy danh sách người nhận
+    const userIds =
+      await adminRepository.findUserIdsByTarget(target);
 
-    // 2. Format notifications for bulk insert
+    if (userIds.length === 0) {
+      return {
+        success: true,
+        count: 0,
+      };
+    }
+
+    // 2. Chuẩn bị notifications
     const notifications = userIds.map(userId => ({
       userId,
       title,
       message,
       type: "system_announcement",
       related_entity_type: "admin_broadcast",
-      related_entity_id: null
+      related_entity_id: null,
     }));
 
-    // 3. Bulk insert vào database
-    const createdNotifications = await notificationsRepository.bulkCreate(notifications);
+    // 3. Lưu notification vào PostgreSQL
+    const createdNotifications =
+      await notificationsRepository.bulkCreate(notifications);
 
-    // 4. Emit realtime event via Socket.IO
-    const io = getIO();
-    if (io) {
-      if (target === "all") {
-        io.emit("new_notification", { title, message, type: "system_announcement" });
-      } else {
-        // Emit tới từng user trong room của họ (mỗi user join room `user_${id}`)
-        userIds.forEach(userId => {
-          io.to(`user_${userId}`).emit("new_notification", { title, message, type: "system_announcement" });
-        });
-      }
+    // 4. Phát sự kiện realtime
+    // Không làm thất bại API nếu socket gặp lỗi
+    try {
+      emitCreatedNotifications(createdNotifications);
+    } catch (error) {
+      console.error(
+        "[ADMIN BROADCAST REALTIME]",
+        error.message
+      );
     }
 
-    return { success: true, count: createdNotifications.length };
+    // 5. Trả kết quả
+    return {
+      success: true,
+      count: createdNotifications.length,
+    };
   },
+
 
   /**
    * Lấy danh sách các thông báo hệ thống đã gửi
@@ -165,7 +179,7 @@ const AdminService = {
   async importExcelData(fileBuffer) {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
-    
+
     const sheet = workbook.worksheets[0];
     if (!sheet) {
       throw Object.assign(new Error("File Excel không hợp lệ"), { status: 400 });
@@ -185,7 +199,7 @@ const AdminService = {
         // 8: Mã Giảng Viên
         // 9: Tên Giảng Viên
         // 10: Email Giảng Viên
-        
+
         const studentCode = row.getCell(1).value?.toString().trim();
         const studentName = row.getCell(2).value?.toString().trim();
         const studentEmail = row.getCell(3).value?.toString().trim();
