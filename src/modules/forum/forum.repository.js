@@ -28,10 +28,16 @@ const ForumRepository = {
     const { rows } = await pool.query(`
       SELECT u.id, COALESCE(up.full_name, u.email) AS display_name,
              (SELECT COUNT(*)::int FROM forum_posts WHERE author_id = u.id) AS post_count,
-             (SELECT (COALESCE(SUM(x.like_count), 0) + (SELECT COUNT(*) FROM forum_comments WHERE author_id = u.id))::int FROM (
+             (SELECT COUNT(*)::int FROM forum_comments WHERE author_id = u.id) AS comment_count,
+             (SELECT COALESCE(SUM(x.like_count), 0)::int FROM (
                SELECT COUNT(*)::int AS like_count FROM forum_posts fp2
                LEFT JOIN forum_post_likes fpl2 ON fpl2.post_id = fp2.id
                WHERE fp2.author_id = u.id GROUP BY fp2.id
+             ) x) AS like_count,
+             (SELECT (COALESCE(SUM(x.like_count), 0) + (SELECT COUNT(*) FROM forum_comments WHERE author_id = u.id))::int FROM (
+               SELECT COUNT(*)::int AS like_count FROM forum_posts fp3
+               LEFT JOIN forum_post_likes fpl3 ON fpl3.post_id = fp3.id
+               WHERE fp3.author_id = u.id GROUP BY fp3.id
              ) x) AS reaction_score
       FROM users u LEFT JOIN user_profiles up ON up.user_id = u.id WHERE u.id = $1`, [userId]);
     return rows[0] || null;
@@ -75,11 +81,15 @@ const ForumRepository = {
       WHERE access_fpc.post_id = fp.id AND (access_cm.student_id IS NOT NULL OR access_c.lecturer_id = $1)
     ))`];
     if (q) { params.push(`%${q}%`); conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`); }
-    if (author) { params.push(`%${author}%`); conditions.push(`(COALESCE(up.full_name, '') ILIKE $${params.length} OR u.email ILIKE $${params.length})`); }
+    if (author === 'lecturer' || author === 'student' || author === 'admin') {
+      params.push(author); conditions.push(`u.role = $${params.length}`);
+    } else if (author) {
+      params.push(`%${author}%`); conditions.push(`(COALESCE(up.full_name, '') ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
+    }
     if (classId) { params.push(classId); conditions.push(`EXISTS (SELECT 1 FROM forum_post_classes filter_fpc WHERE filter_fpc.post_id = fp.id AND filter_fpc.class_id = $${params.length})`); }
     if (type === 'CONFESSION' || type === 'DISCUSSION') { params.push(type); conditions.push(`fp.post_type = $${params.length}`); }
     if (type === 'FLASHCARD') conditions.push('fp.flashcard_deck_id IS NOT NULL');
-    else conditions.push('fp.flashcard_deck_id IS NULL');
+    else if (type !== 'ALL') conditions.push('fp.flashcard_deck_id IS NULL');
     const where = `WHERE ${conditions.join(' AND ')}`;
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp JOIN users u ON u.id = fp.author_id LEFT JOIN user_profiles up ON up.user_id = u.id ${where}`, params);
     const limitParam = params.length + 1;
