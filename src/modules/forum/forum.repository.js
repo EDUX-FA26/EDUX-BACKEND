@@ -78,6 +78,7 @@ const ForumRepository = {
     if (author) { params.push(`%${author}%`); conditions.push(`(COALESCE(up.full_name, '') ILIKE $${params.length} OR u.email ILIKE $${params.length})`); }
     if (classId) { params.push(classId); conditions.push(`EXISTS (SELECT 1 FROM forum_post_classes filter_fpc WHERE filter_fpc.post_id = fp.id AND filter_fpc.class_id = $${params.length})`); }
     if (type === 'CONFESSION' || type === 'DISCUSSION') { params.push(type); conditions.push(`fp.post_type = $${params.length}`); }
+    if (type === 'FLASHCARD') conditions.push('fp.flashcard_deck_id IS NOT NULL');
     const where = `WHERE ${conditions.join(' AND ')}`;
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp JOIN users u ON u.id = fp.author_id LEFT JOIN user_profiles up ON up.user_id = u.id ${where}`, params);
     const limitParam = params.length + 1;
