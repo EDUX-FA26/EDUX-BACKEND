@@ -2,15 +2,20 @@ const Repo = require('./forum.repository');
 const NotificationsRepository = require('../notifications/notifications.repository');
 
 const ForumService = {
-  list(user, query) { return Repo.listPosts({ userId: user.id, ...query }); },
-  get(user, id) { return Repo.findPostById(id, user.id); },
+  list(user, query) { return Repo.listPosts({ userId: user.id, role: user.role, ...query }); },
+  get(user, id) { return Repo.findPostById(id, user.id, user.role); },
   async create(user, body) {
     if (!['lecturer', 'admin'].includes(user.role)) throw Object.assign(new Error('Only lecturers or admins can create forum posts'), { status: 403 });
-    const post = await Repo.createPost({ authorId: user.id, ...body });
-    // Public forum posts notify every other active EDUX account. Notification
+    const visibility = body.visibility === 'CLASS_ONLY' ? 'CLASS_ONLY' : 'PUBLIC';
+    const classIds = Array.isArray(body.classIds) ? [...new Set(body.classIds)] : [];
+    if (visibility === 'CLASS_ONLY' && !classIds.length) throw Object.assign(new Error('At least one class is required for class-only posts'), { status: 400 });
+    const allowedClassIds = await Repo.findAllowedClassIds({ userId: user.id, role: user.role, classIds });
+    if (allowedClassIds.length !== classIds.length) throw Object.assign(new Error('You can only share posts with classes you teach'), { status: 403 });
+    const post = await Repo.createPost({ authorId: user.id, ...body, visibility, classIds: allowedClassIds });
+    // Notify the public audience or only members/lecturers of selected classes.
     // failure must not roll back a successfully-created forum post.
     try {
-      const userIds = await NotificationsRepository.findActiveUserIdsExcept(user.id);
+      const userIds = await Repo.findAudienceUserIds(post.id, user.id);
       await NotificationsRepository.bulkCreate(userIds.map((userId) => ({
         userId,
         title: 'Bài đăng mới trên diễn đàn',

@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS forum_post_likes (
   PRIMARY KEY (post_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS forum_post_classes (
+  post_id UUID NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
+  class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  PRIMARY KEY (post_id, class_id)
+);
+
 CREATE INDEX IF NOT EXISTS forum_posts_created_at_idx ON forum_posts (created_at DESC);
 CREATE INDEX IF NOT EXISTS forum_posts_subject_idx ON forum_posts (subject_id);
 CREATE INDEX IF NOT EXISTS forum_comments_post_idx ON forum_comments (post_id, created_at);
+CREATE INDEX IF NOT EXISTS forum_post_classes_class_idx ON forum_post_classes (class_id, post_id);

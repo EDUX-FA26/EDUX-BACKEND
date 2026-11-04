@@ -6,6 +6,9 @@ const postSelect = `
          u.id AS author_id, u.role AS author_role, up.full_name AS author_name,
          s.code AS subject_code, s.name AS subject_name,
          fd.title AS flashcard_title,
+         COALESCE((SELECT json_agg(json_build_object('id', c2.id, 'code', c2.class_code) ORDER BY c2.class_code)
+                   FROM forum_post_classes fpc2 JOIN classes c2 ON c2.id = fpc2.class_id
+                   WHERE fpc2.post_id = fp.id), '[]'::json) AS target_classes,
          COUNT(DISTINCT fpl.user_id)::int AS like_count,
          COUNT(DISTINCT fc.id)::int AS comment_count,
          EXISTS (SELECT 1 FROM forum_post_likes mine WHERE mine.post_id = fp.id AND mine.user_id = $1) AS liked_by_me
@@ -19,30 +22,56 @@ const postSelect = `
 `;
 
 const ForumRepository = {
-  async listPosts({ userId, page = 1, limit = 10, q = '' }) {
-    const offset = (Number(page) - 1) * Number(limit);
-    const params = [userId];
-    const conditions = [`fp.visibility = 'PUBLIC'`];
-    if (q) {
-      params.push(`%${q}%`);
-      conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`);
-    }
-    const where = `WHERE ${conditions.join(' AND ')}`;
-    // The count query does not use the current-user parameter from postSelect.
-    // Passing it when there is no search placeholder causes PostgreSQL's
-    // "bind message supplies 1 parameters, but prepared statement requires 0".
-    const countWhere = q
-      ? `WHERE fp.visibility = 'PUBLIC' AND (fp.title ILIKE $1 OR fp.content ILIKE $1)`
-      : `WHERE fp.visibility = 'PUBLIC'`;
-    const countParams = q ? [`%${q}%`] : [];
-    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp ${countWhere}`, countParams);
-    const dataParams = [...params, Number(limit), offset];
-    const result = await pool.query(`${postSelect} ${where} GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title ORDER BY fp.is_pinned DESC, fp.created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`, dataParams);
-    return { data: result.rows, total: count.rows[0].total };
+  async findAllowedClassIds({ userId, role, classIds }) {
+    if (!classIds.length) return [];
+    const { rows } = await pool.query(`SELECT id FROM classes WHERE id = ANY($1::uuid[]) AND ($2 = 'admin' OR lecturer_id = $3)`, [classIds, role, userId]);
+    return rows.map((row) => row.id);
   },
 
-  async findPostById(id, userId) {
-    const result = await pool.query(`${postSelect} WHERE fp.id = $2 GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title`, [userId, id]);
+  async findAudienceUserIds(postId, authorId) {
+    const { rows } = await pool.query(`
+      SELECT DISTINCT u.id
+      FROM users u
+      WHERE u.is_active = true AND u.id <> $2 AND (
+        EXISTS (SELECT 1 FROM forum_posts fp WHERE fp.id = $1 AND fp.visibility = 'PUBLIC')
+        OR EXISTS (
+          SELECT 1 FROM forum_post_classes fpc
+          JOIN class_members cm ON cm.class_id = fpc.class_id AND cm.student_id = u.id AND cm.status = 'active'
+          WHERE fpc.post_id = $1
+        )
+        OR EXISTS (
+          SELECT 1 FROM forum_post_classes fpc
+          JOIN classes c ON c.id = fpc.class_id AND c.lecturer_id = u.id
+          WHERE fpc.post_id = $1
+        )
+      )`, [postId, authorId]);
+    return rows.map((row) => row.id);
+  },
+
+  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', classId = '' }) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(50, Math.max(1, Number(limit) || 10));
+    const offset = (safePage - 1) * safeLimit;
+    const params = [userId, role];
+    const conditions = [`(fp.visibility = 'PUBLIC' OR $2 = 'admin' OR EXISTS (
+      SELECT 1 FROM forum_post_classes access_fpc
+      LEFT JOIN class_members access_cm ON access_cm.class_id = access_fpc.class_id AND access_cm.student_id = $1 AND access_cm.status = 'active'
+      LEFT JOIN classes access_c ON access_c.id = access_fpc.class_id
+      WHERE access_fpc.post_id = fp.id AND (access_cm.student_id IS NOT NULL OR access_c.lecturer_id = $1)
+    ))`];
+    if (q) { params.push(`%${q}%`); conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`); }
+    if (author) { params.push(`%${author}%`); conditions.push(`(COALESCE(up.full_name, '') ILIKE $${params.length} OR u.email ILIKE $${params.length})`); }
+    if (classId) { params.push(classId); conditions.push(`EXISTS (SELECT 1 FROM forum_post_classes filter_fpc WHERE filter_fpc.post_id = fp.id AND filter_fpc.class_id = $${params.length})`); }
+    const where = `WHERE ${conditions.join(' AND ')}`;
+    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp JOIN users u ON u.id = fp.author_id LEFT JOIN user_profiles up ON up.user_id = u.id ${where}`, params);
+    const limitParam = params.length + 1;
+    const offsetParam = params.length + 2;
+    const result = await pool.query(`${postSelect} ${where} GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title ORDER BY fp.is_pinned DESC, fp.created_at DESC LIMIT $${limitParam} OFFSET $${offsetParam}`, [...params, safeLimit, offset]);
+    return { data: result.rows, page: safePage, limit: safeLimit, total: count.rows[0].total, totalPages: Math.max(1, Math.ceil(count.rows[0].total / safeLimit)) };
+  },
+
+  async findPostById(id, userId, role) {
+    const result = await pool.query(`${postSelect} WHERE fp.id = $2 AND (fp.visibility = 'PUBLIC' OR $3 = 'admin' OR EXISTS (SELECT 1 FROM forum_post_classes fpc_access LEFT JOIN class_members cm_access ON cm_access.class_id = fpc_access.class_id AND cm_access.student_id = $1 AND cm_access.status = 'active' LEFT JOIN classes c_access ON c_access.id = fpc_access.class_id WHERE fpc_access.post_id = fp.id AND (cm_access.student_id IS NOT NULL OR c_access.lecturer_id = $1))) GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title`, [userId, id, role]);
     if (!result.rows[0]) return null;
     const comments = await pool.query(`
       SELECT fc.id, fc.parent_id, fc.content, fc.created_at, fc.updated_at,
@@ -53,9 +82,15 @@ const ForumRepository = {
     return { ...result.rows[0], comments: comments.rows };
   },
 
-  async createPost({ authorId, title, content, subjectId, flashcardDeckId }) {
-    const { rows } = await pool.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null]);
-    return rows[0];
+  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [] }) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility]);
+      for (const classId of classIds) await client.query('INSERT INTO forum_post_classes (post_id, class_id) VALUES ($1, $2)', [rows[0].id, classId]);
+      await client.query('COMMIT');
+      return rows[0];
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   },
 
   async deletePost(id, userId, isAdmin) {
