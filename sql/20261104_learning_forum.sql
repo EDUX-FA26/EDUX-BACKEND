@@ -1,0 +1,34 @@
+CREATE TABLE IF NOT EXISTS forum_posts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(200) NOT NULL,
+  content TEXT NOT NULL,
+  subject_id UUID REFERENCES subjects(id) ON DELETE SET NULL,
+  flashcard_deck_id UUID REFERENCES flashcard_decks(id) ON DELETE SET NULL,
+  visibility VARCHAR(20) NOT NULL DEFAULT 'PUBLIC' CHECK (visibility IN ('PUBLIC', 'CLASS_ONLY', 'PRIVATE')),
+  is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+  comments_locked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS forum_comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  post_id UUID NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_id UUID REFERENCES forum_comments(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS forum_post_likes (
+  post_id UUID NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (post_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS forum_posts_created_at_idx ON forum_posts (created_at DESC);
+CREATE INDEX IF NOT EXISTS forum_posts_subject_idx ON forum_posts (subject_id);
+CREATE INDEX IF NOT EXISTS forum_comments_post_idx ON forum_comments (post_id, created_at);

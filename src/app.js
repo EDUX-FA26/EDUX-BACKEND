@@ -26,6 +26,7 @@ const communicationsRoutes = require("./modules/communications/communications.ro
 const focusRoutes = require("./modules/focus/focus.routes");
 const todosRoutes = require("./modules/todos/todos.routes");
 const aiChatRoutes = require("./modules/ai-chat/aiChat.routes");
+const forumRoutes = require("./modules/forum/forum.routes");
 
 
 // =========================
@@ -92,6 +93,7 @@ app.use("/api/communications", communicationsRoutes);
 app.use("/api/focus", focusRoutes);
 app.use("/api/todos", todosRoutes);
 app.use("/api/ai-chat", aiChatRoutes);
+app.use("/api/forum", forumRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
