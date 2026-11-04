@@ -18,21 +18,29 @@ const pomodoroConfig = {
 const page = z.coerce.number().int().min(1).default(1);
 const limit = z.coerce.number().int().min(1).max(100).default(20);
 const sessionStatus = z.enum(['IN_PROGRESS', 'PAUSED', 'COMPLETED', 'CANCELLED']);
+const timerModeEnum = z.enum(['pomodoro', 'stopwatch']);
 
 const schemas = {
-  idParams: z.object({ id: z.uuid('id phải là UUID hợp lệ') }),
+  idParams: z.object({ id: z.string().uuid('id phải là UUID hợp lệ') }),
 
   startSession: z
     .object({
-      todoId: z.uuid().nullish(),
+      timerMode: timerModeEnum.default('pomodoro').optional(),
+      todoId: z.string().uuid('todoId phải là UUID hợp lệ').nullish(),
       note: z.string().trim().max(1000).optional(),
       ...pomodoroConfig,
     })
     .strict(),
 
+  adjustSession: z
+    .object({
+      deltaMinutes: z.number().int().min(-60).max(60),
+    })
+    .strict(),
+
   patchSession: z
     .object({
-      todoId: z.uuid().nullable().optional(),
+      todoId: z.string().uuid('todoId phải là UUID hợp lệ').nullable().optional(),
       note: z.string().trim().max(1000).optional(),
       status: z.literal('CANCELLED').optional(),
       resetPhase: z.literal(true).optional(),
@@ -48,7 +56,7 @@ const schemas = {
 
   listSessionsQuery: z.object({
     status: sessionStatus.optional(),
-    todoId: z.uuid().optional(),
+    todoId: z.string().uuid().optional(),
     from: dateStr.optional(),
     to: dateStr.optional(),
     page,
@@ -56,7 +64,7 @@ const schemas = {
   }),
 
   historyQuery: z.object({
-    todoId: z.uuid().optional(),
+    todoId: z.string().uuid().optional(),
     from: dateStr.optional(),
     to: dateStr.optional(),
     page,
@@ -94,4 +102,3 @@ const schemas = {
 };
 
 module.exports = schemas;
-

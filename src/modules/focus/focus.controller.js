@@ -28,6 +28,9 @@ const FocusController = {
   resume: async (req, res) =>
     ok(res, await FocusService.resume(req.user.id, req.valid.params.id), 'Focus session resumed'),
 
+  adjust: async (req, res) =>
+    ok(res, await FocusService.adjust(req.user.id, req.valid.params.id, req.valid.body), 'Focus session adjusted'),
+
   finish: async (req, res) =>
     ok(res, await FocusService.finish(req.user.id, req.valid.params.id, req.valid.body), 'Focus session finished'),
 
@@ -48,4 +51,3 @@ const FocusController = {
 };
 
 module.exports = FocusController;
-

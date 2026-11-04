@@ -20,6 +20,7 @@ router.get('/sessions/:id', parseRequest({ params: v.idParams }), ctrl.getSessio
 router.patch('/sessions/:id', parseRequest({ params: v.idParams, body: v.patchSession }), ctrl.patchSession);
 router.post('/sessions/:id/pause', parseRequest({ params: v.idParams, body: v.emptyBody }), ctrl.pause);
 router.post('/sessions/:id/resume', parseRequest({ params: v.idParams, body: v.emptyBody }), ctrl.resume);
+router.post('/sessions/:id/adjust', parseRequest({ params: v.idParams, body: v.adjustSession }), ctrl.adjust);
 router.post('/sessions/:id/finish', parseRequest({ params: v.idParams, body: v.finishSession }), ctrl.finish);
 
 // ── Nhóm D — Thống kê ────────────────────────────────────
@@ -34,4 +35,3 @@ router.put('/preferences', parseRequest({ body: v.putPreferences }), ctrl.putPre
 router.use(appErrorHandler);
 
 module.exports = router;
-
