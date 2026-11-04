@@ -90,7 +90,7 @@ const ForumRepository = {
     const result = await pool.query(`${postSelect} WHERE fp.id = $2 AND (fp.visibility = 'PUBLIC' OR $3 = 'admin' OR EXISTS (SELECT 1 FROM forum_post_classes fpc_access LEFT JOIN class_members cm_access ON cm_access.class_id = fpc_access.class_id AND cm_access.student_id = $1 AND cm_access.status = 'active' LEFT JOIN classes c_access ON c_access.id = fpc_access.class_id WHERE fpc_access.post_id = fp.id AND (cm_access.student_id IS NOT NULL OR c_access.lecturer_id = $1))) GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title`, [userId, id, role]);
     if (!result.rows[0]) return null;
     const comments = await pool.query(`
-      SELECT fc.id, fc.parent_id, fc.content, fc.created_at, fc.updated_at,
+      SELECT fc.id, fc.parent_id, fc.content, fc.attachments, fc.created_at, fc.updated_at,
              fc.author_id, up.full_name AS author_name, u.role AS author_role
       FROM forum_comments fc JOIN users u ON u.id = fc.author_id
       LEFT JOIN user_profiles up ON up.user_id = u.id
@@ -124,8 +124,8 @@ const ForumRepository = {
     return { liked: true };
   },
 
-  async addComment({ postId, userId, parentId, content }) {
-    const { rows } = await pool.query(`INSERT INTO forum_comments (post_id, author_id, parent_id, content) SELECT $1,$2,$3,$4 WHERE EXISTS (SELECT 1 FROM forum_posts WHERE id = $1 AND comments_locked = false) RETURNING id, post_id, author_id, parent_id, content, created_at`, [postId, userId, parentId || null, content]);
+  async addComment({ postId, userId, parentId, content, attachments = [] }) {
+    const { rows } = await pool.query(`INSERT INTO forum_comments (post_id, author_id, parent_id, content, attachments) SELECT $1,$2,$3,$4,$5 WHERE EXISTS (SELECT 1 FROM forum_posts WHERE id = $1 AND comments_locked = false) RETURNING id, post_id, author_id, parent_id, content, attachments, created_at`, [postId, userId, parentId || null, content, JSON.stringify(attachments || [])]);
     return rows[0] || null;
   },
 

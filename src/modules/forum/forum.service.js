@@ -44,7 +44,8 @@ const ForumService = {
     return result;
   },
   async comment(user, id, body) {
-    const result = await Repo.addComment({ postId: id, userId: user.id, ...body });
+    const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 5).filter((item) => item && item.name && item.dataUrl && String(item.dataUrl).length <= 3_000_000) : [];
+    const result = await Repo.addComment({ postId: id, userId: user.id, ...body, attachments });
     if (!result) throw Object.assign(new Error('Post not found or comments are locked'), { status: 400 });
     return result;
   },
