@@ -119,6 +119,14 @@ const SubmissionService = {
       let existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
       let result;
 
+      // Nếu resubmit mà không tải lên file mới, giữ nguyên file của version mới nhất trước đó
+      if (existingSubmission && filesMeta.length === 0) {
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
+        if (latestVer && latestVer.files) {
+          versionData.files = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+        }
+      }
+
       if (!existingSubmission) {
         const submissionData = {
           id: uuidv4(),
