@@ -40,7 +40,9 @@ app.use(
   })
 );
 
-app.use(express.json());
+// Forum attachments are sent as small data URLs together with the post/comment.
+// Keep a bounded request size while allowing multiple images or documents.
+app.use(express.json({ limit: '20mb' }));
 
 app.use(express.urlencoded({ extended: true }));
 
