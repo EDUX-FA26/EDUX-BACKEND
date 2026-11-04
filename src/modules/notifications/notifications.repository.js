@@ -132,6 +132,14 @@ const NotificationsRepository = {
     `;
     const { rows } = await pool.query(query, params);
     return rows;
+  },
+
+  async findActiveUserIdsExcept(userId) {
+    const { rows } = await pool.query(
+      `SELECT id FROM users WHERE is_active = true AND id <> $1`,
+      [userId]
+    );
+    return rows.map((row) => row.id);
   }
 };
 

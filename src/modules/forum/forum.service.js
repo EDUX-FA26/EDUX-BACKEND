@@ -1,11 +1,28 @@
 const Repo = require('./forum.repository');
+const NotificationsRepository = require('../notifications/notifications.repository');
 
 const ForumService = {
   list(user, query) { return Repo.listPosts({ userId: user.id, ...query }); },
   get(user, id) { return Repo.findPostById(id, user.id); },
   async create(user, body) {
     if (!['lecturer', 'admin'].includes(user.role)) throw Object.assign(new Error('Only lecturers or admins can create forum posts'), { status: 403 });
-    return Repo.createPost({ authorId: user.id, ...body });
+    const post = await Repo.createPost({ authorId: user.id, ...body });
+    // Public forum posts notify every other active EDUX account. Notification
+    // failure must not roll back a successfully-created forum post.
+    try {
+      const userIds = await NotificationsRepository.findActiveUserIdsExcept(user.id);
+      await NotificationsRepository.bulkCreate(userIds.map((userId) => ({
+        userId,
+        title: 'Bài đăng mới trên diễn đàn',
+        message: `${user.full_name || user.email || 'Một giảng viên'} đã đăng: ${body.title}`,
+        type: 'FORUM_POST',
+        related_entity_type: 'forum_post',
+        related_entity_id: post.id,
+      })));
+    } catch (notificationError) {
+      console.error('Forum post notification failed:', notificationError.message);
+    }
+    return post;
   },
   async remove(user, id) {
     const result = await Repo.deletePost(id, user.id, user.role === 'admin');
