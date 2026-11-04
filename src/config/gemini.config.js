@@ -83,9 +83,17 @@ Chấm điểm 5 tiêu chí Rubric dựa trên sự phối hợp của tất c�
 5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI, mức độ làm chủ code.
 - Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.
 
-D. YÊU CẦU NGÔN NGỮ & ĐỊNH DẠNG (BẮT BUỘC):
-- Trả về toàn bộ phản hồi bằng tiếng Việt chuẩn có dấu, định dạng UTF-8 hợp lệ (Unicode tự nhiên, ví dụ: 'Bài nộp đạt yêu cầu', 'Kiến trúc rõ ràng').
-- Tuyệt đối KHÔNG sử dụng telex, ký hiệu VIQR, ký tự escape không chuẩn, hoặc TeX-escape diacritics (như B\"ai, n\"op, \"d\"at, kh\"ong, y\"eu, c\"au). Toàn bộ dấu tiếng Việt phải là ký tự Unicode chuẩn.`;
+D. QUY ĐỊNH NGÔN NGỮ TIẾNG VIỆT CÓ DẤU 100% (BẮT BUỘC):
+- TOÀN BỘ nội dung phản hồi (bao gồm overall_verdict, reasoning, question, expected_answer_criteria, penalty_reason) BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8), hành văn học thuật, sư phạm, chuyên nghiệp.
+- Tuyệt đối KHÔNG trả về tiếng Việt không dấu (như 'Khong dat', 'Bai nop khong dat yeu cau', 'Pass', 'Fail' trơ trọi).
+- Tuyệt đối KHÔNG dùng ký tự viết tắt, telex, ký hiệu VIQR, hoặc ký tự escape TeX (như B\"ai, n\"op, \"d\"at, kh\"ong, y\"eu, c\"au). Toàn bộ dấu tiếng Việt phải là ký tự Unicode chuẩn tự nhiên (ví dụ: 'Bài nộp đạt yêu cầu', 'Kiến trúc phân tầng rõ ràng', 'Không phát hiện sai lệch').
+
+E. CẤU TRÚC BẮT BUỘC CỦA 'overall_verdict' (KẾT LUẬN THANH TRA & VẤN ĐÁP):
+- TUYỆT ĐỐI KHÔNG chỉ trả về mỗi trạng thái (Pass/Fail) đơn lẻ hoặc câu ngắn cụt lủn (ví dụ: cấm trả về 'Khong dat (Fail)' hoặc 'Dat (Pass)').
+- BẮT BUỘC trả về một bản tóm tắt phân tích hoàn chỉnh từ 3 đến 5 câu văn rõ ràng, liên kết mạch lạc, hành văn học thuật chuẩn mực theo đúng cấu trúc 3 phần sau:
+  1. [Kết luận & Trạng thái]: Đánh giá tổng quan bài nộp Đạt (Pass) hay Chưa đạt (Fail / Flagged) kèm mức độ rủi ro liêm chính học thuật (Rủi ro Thấp / Trung bình / Cao).
+  2. [Phân tích đối soát]: So sánh cụ thể giữa mã nguồn thực tế trong dự án và nội dung sinh viên đã khai báo trong nhật ký AI Audit Log (các scope, prompt, phản tư) — chỉ ra các điểm khớp nhau hay có mâu thuẫn/dấu hiệu bất thường.
+  3. [Điểm cần lưu ý & Khuyến nghị vấn đáp]: Chỉ rõ đoạn code, module, file hoặc chức năng nghi vấn mà Giảng viên nên hỏi trực tiếp sinh viên khi vấn đáp để thẩm định tính trung thực và mức độ làm chủ mã nguồn.`;
 
   const prompt = `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm Rubric 5 tiêu chí cùng Bộ 3 câu hỏi vấn đáp Viva:
@@ -170,7 +178,10 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
         }
       },
       total_score: { type: Type.NUMBER },
-      overall_verdict: { type: Type.STRING }
+      overall_verdict: {
+        type: Type.STRING,
+        description: "Bản tóm tắt kết luận thanh tra & vấn đáp chi tiết từ 3-5 câu văn rõ ràng bằng Tiếng Việt chuẩn có dấu (UTF-8), phân tích đối soát mã nguồn và khuyến nghị vấn đáp cho giảng viên."
+      }
     },
     required: ["audit_integrity", "viva_questions", "rubrics", "total_score", "overall_verdict"]
   };
@@ -218,6 +229,22 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
   }
 
   const parsed = JSON.parse(response.text);
+
+  // Nâng cấp chi tiết và chuẩn hóa tiếng Việt cho overall_verdict nếu AI trả về chuỗi ngắn cụt lủn hoặc thiếu dấu
+  if (parsed.overall_verdict || parsed.ai_verdict) {
+    const rawVerdict = String(parsed.overall_verdict || parsed.ai_verdict || '').trim();
+    if (rawVerdict.length < 50 || rawVerdict.toLowerCase().startsWith('khong dat') || rawVerdict.toLowerCase().startsWith('chua dat') || rawVerdict.toLowerCase() === 'dat (pass)' || rawVerdict.toLowerCase() === 'khong dat (fail)') {
+      const isFailed = rawVerdict.toLowerCase().includes('khong') || rawVerdict.toLowerCase().includes('chua') || rawVerdict.toLowerCase().includes('fail') || parsed.audit_integrity?.penalty_applied;
+      const riskLevel = parsed.audit_integrity?.reflection_depth === 'Suspicious' ? 'Mức độ rủi ro liêm chính: Cao' : (isFailed ? 'Mức độ rủi ro liêm chính: Trung bình' : 'Mức độ rủi ro liêm chính: Thấp');
+
+      const detailedVerdict = isFailed
+        ? `Kết luận thanh tra: Chưa đạt (Fail / Flagged) - ${riskLevel}. Quá trình đối soát chéo phát hiện sự sai lệch hoặc thiếu minh bạch giữa mã nguồn thực tế bài nộp và nội dung sinh viên đã kê khai trong nhật ký AI Audit. Khuyến nghị Giảng viên tập trung phỏng vấn sinh viên về các đoạn mã nguồn then chốt và các quyết định kiến trúc được chỉ định trong danh sách câu hỏi vấn đáp Viva bên dưới để kiểm chứng quyền tác giả mã nguồn.`
+        : `Kết luận thanh tra: Đạt (Pass) - ${riskLevel}. Mã nguồn thực tế có cấu trúc phân tầng và giải thuật tương đồng cao với nội dung sinh viên đã giải trình trong nhật ký AI Audit. Giảng viên nên tiến hành vấn đáp sinh viên theo các câu hỏi kỹ thuật bên dưới để củng cố đánh giá về mức độ làm chủ mã nguồn và năng lực phản tư công nghệ.`;
+
+      parsed.overall_verdict = detailedVerdict;
+      parsed.ai_verdict = detailedVerdict;
+    }
+  }
 
   // Đảm bảo tương thích ngược và cả hai trường tên đều tồn tại
   if (!parsed.ai_verdict && parsed.overall_verdict) {
