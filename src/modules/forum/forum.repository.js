@@ -6,6 +6,8 @@ const postSelect = `
          u.id AS author_id, u.role AS author_role, up.full_name AS author_name,
          s.code AS subject_code, s.name AS subject_name,
          fd.title AS flashcard_title,
+         (SELECT COUNT(*)::int FROM forum_posts fp_author WHERE fp_author.author_id = u.id) AS author_post_count,
+         (SELECT (COALESCE((SELECT COUNT(*) FROM forum_post_likes fpl_author JOIN forum_posts fp_like ON fp_like.id = fpl_author.post_id WHERE fp_like.author_id = u.id), 0) + COALESCE((SELECT COUNT(*) FROM forum_comments fc_author WHERE fc_author.author_id = u.id), 0))::int) AS author_reaction_score,
          COALESCE((SELECT json_agg(json_build_object('id', c2.id, 'code', c2.class_code) ORDER BY c2.class_code)
                    FROM forum_post_classes fpc2 JOIN classes c2 ON c2.id = fpc2.class_id
                    WHERE fpc2.post_id = fp.id), '[]'::json) AS target_classes,
