@@ -12,7 +12,7 @@ const postSelect = `
                    FROM forum_post_classes fpc2 JOIN classes c2 ON c2.id = fpc2.class_id
                    WHERE fpc2.post_id = fp.id), '[]'::json) AS target_classes,
          COUNT(DISTINCT fpl.user_id)::int AS like_count,
-         COUNT(DISTINCT fc.id)::int AS comment_count,
+         (SELECT COUNT(*)::int FROM forum_comments fc_count WHERE fc_count.post_id = fp.id) AS comment_count,
          EXISTS (SELECT 1 FROM forum_post_likes mine WHERE mine.post_id = fp.id AND mine.user_id = $1) AS liked_by_me
   FROM forum_posts fp
   JOIN users u ON u.id = fp.author_id
