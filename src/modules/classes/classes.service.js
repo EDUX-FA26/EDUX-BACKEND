@@ -62,8 +62,9 @@ const ClassesService = {
     return await ClassesRepository.delete(id);
   },
 
+
   async getMembers(classId, user) {
-    // verify access using getClassById logic
+    // Kiểm tra quyền truy cập lớp
     await this.getClassById(classId, user);
 
     const rows = await ClassesRepository.findMembers(classId);
@@ -78,15 +79,20 @@ const ClassesService = {
         status: 'not_started'
       };
 
-      // Tính toán lại streak thực tế nếu record streak tồn tại và đang active
-      if (row.current_streak !== null && row.current_streak !== undefined && row.is_active !== false) {
-        const calculated = LearningStreakService.calculateCurrentStreak({
-          current_streak: parseInt(row.current_streak, 10) || 0,
-          longest_streak: parseInt(row.longest_streak, 10) || 0,
-          last_activity_date: row.last_activity_date,
-          recovery_used: parseInt(row.recovery_used, 10) || 0,
-          recovery_month: row.recovery_month, // ✅ ĐÃ BỔ SUNG
-        });
+      // Tính lại Streak theo logic hiện tại
+      if (
+        row.current_streak !== null &&
+        row.current_streak !== undefined &&
+        row.is_active !== false
+      ) {
+        const calculated =
+          LearningStreakService.calculateCurrentStreak({
+            current_streak: parseInt(row.current_streak, 10) || 0,
+            longest_streak: parseInt(row.longest_streak, 10) || 0,
+            last_activity_date: row.last_activity_date,
+            recovery_used: parseInt(row.recovery_used, 10) || 0,
+            recovery_month: row.recovery_month
+          });
 
         streakInfo = {
           currentStreak: calculated.currentStreak,
@@ -98,14 +104,24 @@ const ClassesService = {
         };
       }
 
+      // Tách trạng thái Streak và trạng thái thành viên
+      const { status: streakStatus, ...streakData } = streakInfo;
+
       return {
         studentId: row.student_id,
+
+        // Trạng thái tham gia lớp
         status: row.status,
+        membershipStatus: row.status,
+
         email: row.email,
         fullName: row.full_name,
         studentCode: row.student_code,
         departmentName: row.department_name,
-        ...streakInfo,
+
+        // Thông tin Streak
+        ...streakData,
+        streakStatus
       };
     });
   },
@@ -224,7 +240,80 @@ const ClassesService = {
     worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
     return { workbook, classData };
-  }
+  },
+
+  async sendBulkNotification(classId, user, payload) {
+    // Chỉ cho phép Lecturer / Admin.
+    if (!['lecturer', 'admin'].includes(user?.role)) {
+      throw new Error('FORBIDDEN');
+    }
+
+    // Kiểm tra quyền truy cập lớp.
+    // Lecturer chỉ được thao tác với lớp mình phụ trách.
+    await ClassesService.getClassById(classId, user);
+
+    const { studentIds, title, message } = payload || {};
+
+    if (
+      !Array.isArray(studentIds) ||
+      studentIds.length === 0 ||
+      studentIds.length > 100 ||
+      studentIds.some(id => typeof id !== 'string' || !isUuid(id)) ||
+      typeof title !== 'string' ||
+      typeof message !== 'string' ||
+      !title.trim() ||
+      !message.trim() ||
+      title.trim().length > 200 ||
+      message.trim().length > 5000
+    ) {
+      throw new Error('INVALID_NOTIFICATION_PAYLOAD');
+    }
+
+    const uniqueStudentIds = [...new Set(studentIds)];
+
+    // Lấy danh sách thành viên từ Backend, không tin danh sách
+    // do Frontend gửi lên.
+    const members = await ClassesService.getMembers(classId, user);
+
+    const activeMemberIds = new Set(
+      members
+        .filter(member => member.membershipStatus === 'active')
+        .map(member => member.studentId)
+    );
+
+    // Từ chối toàn bộ request nếu có người nhận không hợp lệ.
+    const invalidStudentIds = uniqueStudentIds.filter(
+      studentId => !activeMemberIds.has(studentId)
+    );
+
+    if (invalidStudentIds.length > 0) {
+      throw new Error('INVALID_RECIPIENTS');
+    }
+
+    // Tạo một notification cho mỗi sinh viên.
+    const notifications = uniqueStudentIds.map(studentId => ({
+      userId: studentId,
+      title: title.trim(),
+      message: message.trim(),
+      type: 'system_announcement',
+      related_entity_type: 'class',
+      related_entity_id: classId,
+    }));
+
+    // Sử dụng Repository đã có của EduX.
+    const created = await NotificationsRepository.bulkCreate(
+      notifications
+    );
+
+    return {
+      classId,
+      sentCount: created.length,
+      requestedCount: uniqueStudentIds.length,
+      notificationIds: created.map(item => item.id),
+    };
+  },
+
 };
+
 
 module.exports = ClassesService;

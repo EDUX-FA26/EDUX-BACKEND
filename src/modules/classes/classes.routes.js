@@ -6,7 +6,9 @@ const classesController = require('./classes.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const { validate } = require('../../middlewares/validate.middleware');
 const { getClassesQuery, createClass, updateClass, getMembersQuery } = require('./classes.validation');
-
+const classHealthController = require(
+  '../class-health/classHealth.controller'
+);
 const upload = multer({ storage: multer.memoryStorage() });
 
 const authorize = (...roles) => (req, res, next) => {
@@ -17,6 +19,22 @@ const authorize = (...roles) => (req, res, next) => {
 };
 
 router.use(authenticate);
+// ==========================================
+// CLASS HEALTH DASHBOARD
+// Admin / Lecturer only
+// ==========================================
+
+router.get(
+  '/:id/health/snapshot',
+  authorize('admin', 'lecturer'),
+  classHealthController.getSnapshot
+);
+
+router.post(
+  '/:id/health/notify',
+  authorize('admin', 'lecturer'),
+  classHealthController.sendBulkNotification
+);
 
 // Classes CRUD
 router.get('/', validate(getClassesQuery, 'query'), classesController.getClasses);
