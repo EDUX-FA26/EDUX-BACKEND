@@ -15,7 +15,9 @@ const ForumService = {
         userId,
         title: 'Bài đăng mới trên diễn đàn',
         message: `${user.full_name || user.email || 'Một giảng viên'} đã đăng: ${body.title}`,
-        type: 'FORUM_POST',
+        // Keep the existing notifications.type constraint; the related entity
+        // still identifies this notification as a forum post.
+        type: 'system_announcement',
         related_entity_type: 'forum_post',
         related_entity_id: post.id,
       })));
