@@ -137,23 +137,51 @@ const SubmissionRepository = {
         g.id as grade_id,
         g.score,
         g.max_score,
-        g.feedback
+        g.feedback,
+        g.rubrics,
+        ae.evaluation_data as ai_evaluation_data,
+        ae.rubric_scores as ai_rubric_scores,
+        ae.viva_questions as ai_viva_questions,
+        ae.total_score as ai_total_score,
+        ae.overall_verdict as ai_overall_verdict,
+        ae.evaluated_at as ai_evaluated_at
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
       JOIN assignments a ON s.assignment_id = a.id
       LEFT JOIN LATERAL (
-        SELECT id, score, max_score, feedback
+        SELECT id, score, max_score, feedback, rubrics
         FROM grades
         WHERE submission_id = s.id
         ORDER BY created_at DESC
         LIMIT 1
       ) g ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT id, evaluation_data, rubric_scores, viva_questions, total_score, overall_verdict, evaluated_at
+        FROM ai_evaluations
+        WHERE submission_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) ae ON TRUE
       WHERE s.id = $1
     `;
     const { rows: subRows } = await pool.query(subQuery, [id]);
     if (subRows.length === 0) return null;
     const submission = subRows[0];
+
+    // Parse JSON fields if returned as string
+    if (submission.rubrics && typeof submission.rubrics === 'string') {
+      try { submission.rubrics = JSON.parse(submission.rubrics); } catch (e) {}
+    }
+    if (submission.ai_evaluation_data && typeof submission.ai_evaluation_data === 'string') {
+      try { submission.ai_evaluation_data = JSON.parse(submission.ai_evaluation_data); } catch (e) {}
+    }
+    if (submission.ai_rubric_scores && typeof submission.ai_rubric_scores === 'string') {
+      try { submission.ai_rubric_scores = JSON.parse(submission.ai_rubric_scores); } catch (e) {}
+    }
+    if (submission.ai_viva_questions && typeof submission.ai_viva_questions === 'string') {
+      try { submission.ai_viva_questions = JSON.parse(submission.ai_viva_questions); } catch (e) {}
+    }
 
     let versionQuery = `SELECT * FROM submission_versions WHERE submission_id = $1`;
     if (!includeHistory) {

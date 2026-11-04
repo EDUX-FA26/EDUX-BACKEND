@@ -81,7 +81,11 @@ Chấm điểm 5 tiêu chí Rubric dựa trên sự phối hợp của tất c�
 3. abstraction: Abstraction & System Modeling (Max: 2.0) - Mô hình hóa thực thể, giao diện API, lược đồ C4/ERD tương ứng.
 4. algorithmic_thinking: Algorithmic Thinking, Logic & Data Flow (Max: 2.5) - Luồng dữ liệu, thuật toán xử lý nghiệp vụ cụ thể trong từng module.
 5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI, mức độ làm chủ code.
-- Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.`;
+- Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.
+
+D. YÊU CẦU NGÔN NGỮ & ĐỊNH DẠNG (BẮT BUỘC):
+- Trả về toàn bộ phản hồi bằng tiếng Việt chuẩn có dấu, định dạng UTF-8 hợp lệ (Unicode tự nhiên, ví dụ: 'Bài nộp đạt yêu cầu', 'Kiến trúc rõ ràng').
+- Tuyệt đối KHÔNG sử dụng telex, ký hiệu VIQR, ký tự escape không chuẩn, hoặc TeX-escape diacritics (như B\"ai, n\"op, \"d\"at, kh\"ong, y\"eu, c\"au). Toàn bộ dấu tiếng Việt phải là ký tự Unicode chuẩn.`;
 
   const prompt = `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm Rubric 5 tiêu chí cùng Bộ 3 câu hỏi vấn đáp Viva:
@@ -249,7 +253,55 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     });
   }
 
-  return parsed;
+  return sanitizeObjectStrings(parsed);
+}
+
+function cleanVietnameseEncoding(str) {
+  if (typeof str !== 'string') return str;
+  return str
+    .replace(/B"ai/g, 'Bài')
+    .replace(/b"ai/g, 'bài')
+    .replace(/n"op/g, 'nộp')
+    .replace(/kh"ong/g, 'không')
+    .replace(/"d"at/g, 'đạt')
+    .replace(/y"eu/g, 'yêu')
+    .replace(/c"au/g, 'cầu')
+    .replace(/k"y/g, 'kỹ')
+    .replace(/thu"at/g, 'thuật')
+    .replace(/c"ot/g, 'cốt')
+    .replace(/l~oi/g, 'lõi')
+    .replace(/c"an/g, 'cần')
+    .replace(/th"uc/g, 'thực')
+    .replace(/hi"en/g, 'hiện')
+    .replace(/di"em/g, 'điểm')
+    .replace(/ti"eu/g, 'tiêu')
+    .replace(/ch"i/g, 'chí')
+    .replace(/d"anh/g, 'đánh')
+    .replace(/gi"a/g, 'giá')
+    .replace(/m"a/g, 'mã')
+    .replace(/ngu"on/g, 'nguồn')
+    .replace(/t"ap/g, 'tập')
+    .replace(/h"oc/g, 'học')
+    .replace(/ph"an/g, 'phân')
+    .replace(/t"ich/g, 'tích')
+    .replace(/"d/g, 'đ')
+    .replace(/"D/g, 'Đ')
+    .replace(/\\"d/g, 'đ')
+    .replace(/\\"D/g, 'Đ');
+}
+
+function sanitizeObjectStrings(obj) {
+  if (!obj) return obj;
+  if (typeof obj === 'string') return cleanVietnameseEncoding(obj);
+  if (Array.isArray(obj)) return obj.map(sanitizeObjectStrings);
+  if (typeof obj === 'object') {
+    const res = {};
+    for (const [k, v] of Object.entries(obj)) {
+      res[k] = sanitizeObjectStrings(v);
+    }
+    return res;
+  }
+  return obj;
 }
 
 module.exports = {

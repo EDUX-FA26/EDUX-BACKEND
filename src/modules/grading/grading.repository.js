@@ -31,17 +31,18 @@ const GradingRepository = {
   /**
    * Tạo grade mới
    */
-  async create({ submission_id, assignment_id, student_id, class_id, score, max_score, feedback, graded_by }) {
+  async create({ submission_id, assignment_id, student_id, class_id, score, max_score, feedback, graded_by, rubrics }) {
     const query = `
       INSERT INTO grades
         (submission_id, assignment_id, student_id, class_id,
-         score, max_score, feedback, graded_by, graded_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+         score, max_score, feedback, graded_by, graded_at, rubrics)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
       RETURNING *
     `;
     const { rows } = await pool.query(query, [
       submission_id, assignment_id, student_id, class_id,
       score, max_score, feedback, graded_by,
+      rubrics ? JSON.stringify(rubrics) : null,
     ]);
     return rows[0];
   },
@@ -80,7 +81,7 @@ const GradingRepository = {
   /**
    * Cập nhật grade (partial update)
    */
-  async update(id, { score, max_score, feedback }) {
+  async update(id, { score, max_score, feedback, rubrics }) {
     const fields = [];
     const values = [];
     let idx = 1;
@@ -88,6 +89,7 @@ const GradingRepository = {
     if (score !== undefined) { fields.push(`score     = $${idx++}`); values.push(score); }
     if (max_score !== undefined) { fields.push(`max_score = $${idx++}`); values.push(max_score); }
     if (feedback !== undefined) { fields.push(`feedback  = $${idx++}`); values.push(feedback); }
+    if (rubrics !== undefined) { fields.push(`rubrics   = $${idx++}`); values.push(rubrics ? JSON.stringify(rubrics) : null); }
 
     if (fields.length === 0) return null;
 
@@ -101,6 +103,79 @@ const GradingRepository = {
       RETURNING *
     `;
     const { rows } = await pool.query(query, values);
+    return rows[0];
+  },
+
+  /**
+   * Tìm AI evaluation snapshot theo submission_id
+   */
+  async findAiEvaluationBySubmissionId(submissionId) {
+    const query = `
+      SELECT *
+      FROM ai_evaluations
+      WHERE submission_id = $1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    const { rows } = await pool.query(query, [submissionId]);
+    return rows[0] || null;
+  },
+
+  /**
+   * Lưu AI evaluation snapshot vào DB
+   */
+  async saveAiEvaluation({
+    submission_id,
+    submission_version_id,
+    assignment_id,
+    student_id,
+    class_id,
+    pattern = 'collaborative_usage',
+    risk_level = 'low',
+    transparency_score = 95.0,
+    summary = '',
+    evaluation_data = null,
+    rubric_scores = null,
+    viva_questions = null,
+    total_score = null,
+    overall_verdict = ''
+  }) {
+    const query = `
+      INSERT INTO ai_evaluations
+        (submission_id, submission_version_id, assignment_id, student_id, class_id,
+         pattern, risk_level, transparency_score, summary,
+         evaluation_data, rubric_scores, viva_questions, total_score, overall_verdict, evaluated_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+      ON CONFLICT (submission_version_id) DO UPDATE SET
+        pattern = EXCLUDED.pattern,
+        risk_level = EXCLUDED.risk_level,
+        transparency_score = EXCLUDED.transparency_score,
+        summary = EXCLUDED.summary,
+        evaluation_data = EXCLUDED.evaluation_data,
+        rubric_scores = EXCLUDED.rubric_scores,
+        viva_questions = EXCLUDED.viva_questions,
+        total_score = EXCLUDED.total_score,
+        overall_verdict = EXCLUDED.overall_verdict,
+        evaluated_at = NOW(),
+        updated_at = NOW()
+      RETURNING *
+    `;
+    const { rows } = await pool.query(query, [
+      submission_id,
+      submission_version_id,
+      assignment_id,
+      student_id,
+      class_id,
+      pattern,
+      risk_level,
+      transparency_score,
+      summary,
+      evaluation_data ? JSON.stringify(evaluation_data) : null,
+      rubric_scores ? JSON.stringify(rubric_scores) : null,
+      viva_questions ? JSON.stringify(viva_questions) : null,
+      total_score,
+      overall_verdict
+    ]);
     return rows[0];
   },
 
