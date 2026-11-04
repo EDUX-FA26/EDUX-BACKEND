@@ -8,6 +8,9 @@ const SubmissionController = {
       const result = await SubmissionService.submitAssignment(assignmentId, req.user, files, req.body);
       res.status(201).json({ success: true, data: result });
     } catch (error) {
+      if (error.message.startsWith('AI_DECLARATION_REQUIRED') || error.message === 'SUBMISSION_EMPTY_CONTENT') {
+        return res.status(400).json({ success: false, message: error.message });
+      }
       if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'DEADLINE_PASSED_AND_LATE_SUBMISSION_NOT_ALLOWED'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }

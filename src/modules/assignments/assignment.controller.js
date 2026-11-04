@@ -9,20 +9,21 @@ const AssignmentController = {
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
+      next(error);
     }
   },
 
   async updateAssignment(req, res, next) {
     try {
       const { id } = req.params;
-      const assignment = await AssignmentService.updateAssignment(id, req.body, req.user);
+      const files = req.files || [];
+      const assignment = await AssignmentService.updateAssignment(id, req.body, files, req.user);
       res.status(200).json({ success: true, data: assignment });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
+      next(error);
     }
   },
 
@@ -35,7 +36,7 @@ const AssignmentController = {
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
+      next(error);
     }
   },
 
@@ -47,7 +48,7 @@ const AssignmentController = {
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
+      next(error);
     }
   },
 
@@ -60,29 +61,25 @@ const AssignmentController = {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'ASSIGNMENT_NOT_PUBLISHED') return res.status(403).json({ success: false, message: 'Assignment is not published yet' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
-      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
+      next(error);
     }
   },
 
   async getAssignments(req, res, next) {
     try {
       const result = await AssignmentService.getAssignments(req.query, req.user);
-      
-      const page = Number(req.query.page) || 1;
-      const limit = Number(req.query.limit) || 10;
-      
-      res.status(200).json({
-        success: true,
+      res.status(200).json({ 
+        success: true, 
         data: result.data,
         pagination: {
-          page,
-          limit,
+          page: req.query.page,
+          limit: req.query.limit,
           total: result.total,
-          totalPages: Math.ceil(result.total / limit) || 1
+          totalPages: Math.ceil(result.total / req.query.limit)
         }
       });
     } catch (error) {
-      require('fs').appendFileSync('C:/Users/Admin/OneDrive/Desktop/sep/EDUX-BACKEND/api-error.log', new Date().toISOString() + '\n' + (error.stack || error.toString()) + '\n\n'); next(error);
+      next(error);
     }
   }
 };

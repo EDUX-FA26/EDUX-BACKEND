@@ -49,6 +49,7 @@ router.get(
 router.patch(
   '/:id', 
   authorize('admin', 'lecturer'), 
+  upload.array('materials'),
   validate(updateAssignmentSchema), 
   AssignmentController.updateAssignment
 );

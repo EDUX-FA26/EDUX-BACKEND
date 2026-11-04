@@ -70,8 +70,20 @@ router.patch(
   SubmissionController.reviewSubmission
 );
 
-// AI Audit Rubric: POST /api/submissions/:submissionId/ai-rubric
+// AI Audit Rubric: POST /api/submissions/:submissionId/ai-rubric or /api/submissions/:submissionId/evaluate
 router.post(
+  '/:submissionId/ai-rubric',
+  authorize('admin', 'lecturer'),
+  gradingController.handleAuditRubric
+);
+
+router.post(
+  '/:submissionId/evaluate',
+  authorize('admin', 'lecturer'),
+  gradingController.handleAuditRubric
+);
+
+router.get(
   '/:submissionId/ai-rubric',
   authorize('admin', 'lecturer'),
   gradingController.handleAuditRubric

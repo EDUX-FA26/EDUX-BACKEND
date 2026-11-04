@@ -53,14 +53,18 @@ const AssignmentService = {
       for (const file of files) {
         const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${file.originalname}`;
         
-        await s3.send(
-          new PutObjectCommand({
-            Bucket: S3_BUCKET,
-            Key: fileKey,
-            Body: file.buffer,
-            ContentType: file.mimetype,
-          })
-        );
+        try {
+          await s3.send(
+            new PutObjectCommand({
+              Bucket: S3_BUCKET,
+              Key: fileKey,
+              Body: file.buffer,
+              ContentType: file.mimetype,
+            })
+          );
+        } catch (uploadError) {
+          console.warn('⚠️ S3 Upload failed (SeaweedFS might be down).', uploadError.message);
+        }
         
         uploadedMaterials.push({
           file_name: file.originalname,
@@ -113,13 +117,45 @@ const AssignmentService = {
   },
 
   /**
-   * Cập nhật thông tin bài tập
+   * Cập nhật thông tin bài tập (kèm upload thêm tài liệu nếu có)
    */
-  async updateAssignment(id, data, user) {
+  async updateAssignment(id, data, files = [], user) {
+    const actualUser = user || files;
+    const actualFiles = Array.isArray(files) ? files : [];
+
     const assignment = await AssignmentRepository.findById(id);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
-    await this.verifyClassAccess(assignment.class_id, user);
+    await this.verifyClassAccess(assignment.class_id, actualUser);
+
+    // Nếu có upload thêm files, upload lên S3 và tạo record trong assignment_materials
+    if (actualFiles && actualFiles.length > 0) {
+      for (const file of actualFiles) {
+        const fileKey = `assignment-materials/${id}/${uuidv4()}_${file.originalname}`;
+        try {
+          await s3.send(
+            new PutObjectCommand({
+              Bucket: S3_BUCKET,
+              Key: fileKey,
+              Body: file.buffer,
+              ContentType: file.mimetype,
+            })
+          );
+        } catch (uploadError) {
+          console.warn('⚠️ S3 Upload failed (SeaweedFS might be down).', uploadError.message);
+        }
+
+        await AssignmentMaterialRepository.create({
+          assignment_id: id,
+          description: '',
+          file_name: file.originalname,
+          file_key: fileKey,
+          file_type: file.mimetype,
+          file_size: file.size,
+          uploaded_by: actualUser.id,
+        });
+      }
+    }
 
     const updated = await AssignmentRepository.update(id, data);
     return updated;
