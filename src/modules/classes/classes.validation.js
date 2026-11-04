@@ -7,6 +7,11 @@ const classSchemas = {
     limit: z.string().regex(/^\d+$/).transform(Number).default('10'),
     search: z.string().optional(),
     include_inactive: z.enum(['true', 'false']).transform(val => val === 'true').default('false'),
+    // Lọc theo mã học kỳ, ví dụ FALL2026
+    semester: z.string().trim().min(1).optional(),
+
+    // Hoặc lọc trực tiếp theo UUID học kỳ
+    semester_id: z.string().uuid().optional(),
   }),
 
   // Payload for POST /api/classes
