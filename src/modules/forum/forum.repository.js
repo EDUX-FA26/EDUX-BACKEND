@@ -28,7 +28,11 @@ const ForumRepository = {
       conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`);
     }
     const where = `WHERE ${conditions.join(' AND ')}`;
-    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp ${where}`, params);
+    // The count query does not use the current-user parameter from postSelect.
+    // Passing it when there is no search placeholder causes PostgreSQL's
+    // "bind message supplies 1 parameters, but prepared statement requires 0".
+    const countParams = q ? [params[1]] : [];
+    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp ${where}`, countParams);
     const dataParams = [...params, Number(limit), offset];
     const result = await pool.query(`${postSelect} ${where} GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title ORDER BY fp.is_pinned DESC, fp.created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`, dataParams);
     return { data: result.rows, total: count.rows[0].total };
