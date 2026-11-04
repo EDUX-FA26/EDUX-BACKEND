@@ -21,7 +21,7 @@ const createAssignmentSchema = z.object({
   ai_declaration_required: parseBoolean.default(true),
   min_ai_interactions: z.coerce.number().min(0).optional().default(1),
   max_ai_interactions: z.coerce.number().min(0).optional().default(20),
-  allow_late_submission: parseBoolean.default(true),
+  allow_late_submission: parseBoolean.default(false),
   publish_status: z.enum(['draft', 'published', 'closed']).default('draft'),
 });
 
