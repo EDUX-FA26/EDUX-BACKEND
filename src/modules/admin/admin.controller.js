@@ -204,4 +204,42 @@ AdminController.getClassStudents = async (req, res, next) => {
   }
 };
 
+AdminController.getLecturers = async (req, res, next) => {
+  try {
+    const lecturers = await adminService.getLecturers();
+    res.status(200).json({ success: true, data: lecturers });
+  } catch (error) {
+    next(error);
+  }
+};
+
+AdminController.removeClassStudent = async (req, res, next) => {
+  try {
+    const { id: classId, studentId } = req.params;
+    await adminService.removeClassStudent(classId, studentId);
+    res.status(200).json({ success: true, message: "Đã xóa sinh viên khỏi lớp" });
+  } catch (error) {
+    if (error.status === 404) {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    next(error);
+  }
+};
+
+AdminController.importUsers = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Vui lòng đính kèm file Excel hoặc CSV" });
+    }
+    const result = await adminService.importUsersData(req.file.buffer, req.file.originalname);
+    res.status(200).json({
+      success: true,
+      message: `Đã tạo ${result.importedUsers} tài khoản; bỏ qua ${result.skippedUsers} bản ghi.`,
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = AdminController;

@@ -15,6 +15,8 @@ router.use(authenticate, authorize(["admin"]));
 
 // Import Excel để tự động tạo user và lớp
 router.post("/users/import", upload.single("file"), adminController.importExcel);
+router.post("/users/import-list", upload.single("file"), adminController.importUsers);
+router.post("/classes/import", upload.single("file"), adminController.importExcel);
 
 // UC — Lấy danh sách users (phục vụ giao diện quản lý)
 router.get("/users", adminController.getAllUsers);
@@ -38,8 +40,15 @@ router.post("/notifications/broadcast", validate(broadcastNotificationSchema), a
 // Lấy danh sách lớp học
 router.get("/classes", adminController.getAllClasses);
 
+// Lấy danh sách giảng viên đang hoạt động
+router.get("/lecturers", adminController.getLecturers);
+
 // Lấy danh sách sinh viên trong lớp
 router.get("/classes/:id/students", adminController.getClassStudents);
+
+// Xóa sinh viên khỏi lớp học (SRS 3.7.7)
+router.delete("/classes/:id/students/:studentId", adminController.removeClassStudent);
+router.delete("/classes/:id/members/:studentId", adminController.removeClassStudent);
 
 // Cập nhật lớp học
 router.patch("/classes/:id", adminController.updateClass);

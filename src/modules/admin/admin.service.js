@@ -254,6 +254,61 @@ const AdminService = {
   async getClassStudents(classId) {
     return await adminRepository.getClassStudents(classId);
   },
+
+  async getLecturers() {
+    return await adminRepository.getLecturers();
+  },
+
+  async removeClassStudent(classId, studentId) {
+    const removed = await adminRepository.removeClassStudent(classId, studentId);
+    if (!removed) {
+      const error = new Error("Không tìm thấy sinh viên trong lớp");
+      error.status = 404;
+      throw error;
+    }
+    return { success: true };
+  },
+
+  async importUsersData(fileBuffer, filename) {
+    const workbook = new ExcelJS.Workbook();
+    const isZip = fileBuffer.length > 2 && fileBuffer[0] === 0x50 && fileBuffer[1] === 0x4B;
+    if (isZip) {
+      await workbook.xlsx.load(fileBuffer);
+    } else {
+      const { Readable } = require("stream");
+      await workbook.csv.read(Readable.from([fileBuffer.toString("utf8")]));
+    }
+    const sheet = workbook.worksheets[0];
+    if (!sheet) {
+      throw Object.assign(new Error("File không có worksheet dữ liệu"), { status: 400 });
+    }
+
+    const records = [];
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) {
+        const fullName = row.getCell(1).value?.toString().trim();
+        const email = row.getCell(2).value?.toString().trim();
+        const role = row.getCell(3).value?.toString().trim()?.toLowerCase() || 'student';
+        const studentCode = row.getCell(4).value?.toString().trim();
+
+        if (fullName && email && email.includes('@')) {
+          records.push({
+            rowNumber,
+            full_name: fullName,
+            email,
+            role: ['student', 'lecturer', 'admin'].includes(role) ? role : 'student',
+            student_code: studentCode || null
+          });
+        }
+      }
+    });
+
+    if (records.length === 0) {
+      throw Object.assign(new Error("Sheet không có dữ liệu người dùng hợp lệ"), { status: 400 });
+    }
+
+    return await adminRepository.processUserListImport(records);
+  },
 };
 
 module.exports = AdminService;

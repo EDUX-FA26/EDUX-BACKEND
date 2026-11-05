@@ -37,6 +37,18 @@ const AdminRepository = {
       ];
       const profileResult = await client.query(profileQuery, profileValues);
 
+      // 3. Kế thừa các thông báo hệ thống toàn trường đã phát (SRS 3.7.2 / 3.7.5)
+      await client.query(
+        `INSERT INTO notifications
+           (user_id, title, message, type, related_entity_type, related_entity_id)
+         SELECT $1, title, message, 'system_announcement', related_entity_type, related_entity_id
+         FROM notifications
+         WHERE type = 'system_announcement'
+           AND (related_entity_type LIKE 'admin_broadcast:all' OR related_entity_type = 'admin_broadcast' OR related_entity_type IS NULL)
+         GROUP BY title, message, related_entity_type, related_entity_id`,
+        [newUser.id]
+      );
+
       return {
         ...newUser,
         profile: profileResult.rows[0],
@@ -303,6 +315,18 @@ const AdminRepository = {
           [userId, fullName, role === 'student' ? code : null, deptId]
         );
 
+        // Kế thừa các thông báo hệ thống toàn trường đã phát (SRS 3.7.2)
+        await client.query(
+          `INSERT INTO notifications
+             (user_id, title, message, type, related_entity_type, related_entity_id)
+           SELECT $1, title, message, 'system_announcement', related_entity_type, related_entity_id
+           FROM notifications
+           WHERE type = 'system_announcement'
+             AND (related_entity_type LIKE 'admin_broadcast:all' OR related_entity_type = 'admin_broadcast' OR related_entity_type IS NULL)
+           GROUP BY title, message, related_entity_type, related_entity_id`,
+          [userId]
+        );
+
         userCache[email] = userId;
         importedUsers++;
         return userId;
@@ -412,6 +436,18 @@ const AdminRepository = {
         await client.query(
           'INSERT INTO user_profiles (user_id, full_name, student_code, department_id) VALUES ($1, $2, $3, $4)',
           [userId, fullName, role === 'student' ? code : null, deptId]
+        );
+
+        // Kế thừa các thông báo hệ thống toàn trường đã phát (SRS 3.7.2)
+        await client.query(
+          `INSERT INTO notifications
+             (user_id, title, message, type, related_entity_type, related_entity_id)
+           SELECT $1, title, message, 'system_announcement', related_entity_type, related_entity_id
+           FROM notifications
+           WHERE type = 'system_announcement'
+             AND (related_entity_type LIKE 'admin_broadcast:all' OR related_entity_type = 'admin_broadcast' OR related_entity_type IS NULL)
+           GROUP BY title, message, related_entity_type, related_entity_id`,
+          [userId]
         );
 
         userCache[email] = userId;
@@ -589,6 +625,97 @@ const AdminRepository = {
     `;
     const result = await pool.query(query, [classId]);
     return result.rows;
+  },
+
+  async getLecturers() {
+    const result = await pool.query(`
+      SELECT u.id, u.email, up.full_name
+      FROM users u
+      LEFT JOIN user_profiles up ON up.user_id = u.id
+      WHERE u.role = 'lecturer' AND u.is_active = TRUE
+      ORDER BY up.full_name NULLS LAST, u.email
+    `);
+    return result.rows;
+  },
+
+  async removeClassStudent(classId, studentId) {
+    const result = await pool.query(
+      'DELETE FROM class_members WHERE class_id = $1 AND student_id = $2 RETURNING id',
+      [classId, studentId]
+    );
+    return result.rowCount > 0;
+  },
+
+  async processUserListImport(records) {
+    return await withTransaction(async (client) => {
+      const results = [];
+      const credentials = [];
+      let importedUsers = 0;
+      const defaultPasswordHash = await bcrypt.hash('Edux@123', 10);
+
+      for (const record of records) {
+        await client.query("SAVEPOINT admin_user_import");
+        try {
+          const userResult = await client.query(
+            `INSERT INTO users (email, username, password_hash, role)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (email) DO NOTHING
+             RETURNING id`,
+            [record.email, record.username || record.email.split('@')[0], defaultPasswordHash, record.role || 'student']
+          );
+
+          if (userResult.rowCount === 0) {
+            await client.query("ROLLBACK TO SAVEPOINT admin_user_import");
+            results.push({ row: record.rowNumber, email: record.email, status: "skipped", reason: "Email đã tồn tại" });
+            await client.query("RELEASE SAVEPOINT admin_user_import");
+            continue;
+          }
+
+          const userId = userResult.rows[0].id;
+
+          const profileResult = await client.query(
+            `INSERT INTO user_profiles (user_id, full_name, student_code, department_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (student_code) DO NOTHING
+             RETURNING user_id`,
+            [userId, record.full_name, record.student_code || null, record.department_id || null]
+          );
+
+          if (profileResult.rowCount === 0) {
+            await client.query("ROLLBACK TO SAVEPOINT admin_user_import");
+            results.push({ row: record.rowNumber, email: record.email, status: "skipped", reason: "Mã sinh viên đã tồn tại" });
+            await client.query("RELEASE SAVEPOINT admin_user_import");
+            continue;
+          }
+
+          // Kế thừa thông báo phát thanh toàn trường
+          await client.query(
+            `INSERT INTO notifications
+               (user_id, title, message, type, related_entity_type)
+             SELECT $1, title, message, 'system_announcement', 'admin_broadcast:all'
+             FROM notifications
+             WHERE type = 'system_announcement'
+             GROUP BY title, message`,
+            [userId]
+          );
+
+          await client.query("RELEASE SAVEPOINT admin_user_import");
+          importedUsers++;
+          credentials.push({ email: record.email, role: record.role || 'student', password: 'Edux@123' });
+          results.push({
+            row: record.rowNumber,
+            email: record.email,
+            status: "created"
+          });
+        } catch (error) {
+          await client.query("ROLLBACK TO SAVEPOINT admin_user_import");
+          await client.query("RELEASE SAVEPOINT admin_user_import");
+          results.push({ row: record.rowNumber, email: record.email, status: "skipped", reason: error.message });
+        }
+      }
+
+      return { importedUsers, skippedUsers: results.length - importedUsers, results, credentials };
+    });
   }
 };
 
