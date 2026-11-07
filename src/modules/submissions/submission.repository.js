@@ -255,10 +255,33 @@ const SubmissionRepository = {
   /**
    * Lấy version cụ thể hoặc mới nhất để check file
    */
-  async findLatestVersion(submissionId) {
+  async findLatestVersion(submissionId, client = pool) {
     const query = `SELECT * FROM submission_versions WHERE submission_id = $1 AND is_latest = TRUE`;
-    const { rows } = await pool.query(query, [submissionId]);
+    const { rows } = await client.query(query, [submissionId]);
     return rows[0];
+  },
+
+  /**
+   * Cập nhật chỉ phần ghi chú / khai báo AI cho draft
+   */
+  async updateDraftNote(submissionId, versionId, note, client = pool) {
+    const versionQuery = `
+      UPDATE submission_versions
+      SET note = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const { rows: versionRows } = await client.query(versionQuery, [note || '', versionId]);
+
+    const subQuery = `
+      UPDATE submissions
+      SET updated_at = NOW()
+      WHERE id = $1
+      RETURNING *;
+    `;
+    const { rows: subRows } = await client.query(subQuery, [submissionId]);
+
+    return { submission: subRows[0], version: versionRows[0] };
   },
 
   /**

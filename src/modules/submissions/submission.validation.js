@@ -21,8 +21,16 @@ const reviewSubmissionSchema = z.object({
   feedback: z.string().optional()
 });
 
+// Schema cho auto-save draft declarations
+const saveDraftDeclarationsSchema = z.object({
+  ai_declarations: z.any().optional(),
+  scopes: z.any().optional(),
+  note: z.string().optional()
+});
+
 module.exports = {
   submitSubmissionSchema,
   queryAssignmentSubmissionsSchema,
-  reviewSubmissionSchema
+  reviewSubmissionSchema,
+  saveDraftDeclarationsSchema
 };

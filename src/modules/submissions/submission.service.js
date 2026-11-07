@@ -513,7 +513,290 @@ const SubmissionService = {
   async getStudentSubmissionForAssignment(assignmentId, studentId) {
     const sub = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, studentId);
     if (!sub) return null;
-    return await SubmissionRepository.findById(sub.id, true);
+    const detailed = await SubmissionRepository.findById(sub.id, true);
+    if (!detailed) return null;
+
+    if (detailed.versions && detailed.versions.length > 0) {
+      detailed.versions = detailed.versions.map(v => {
+        let parsedFiles = v.files;
+        if (typeof parsedFiles === 'string') {
+          try {
+            parsedFiles = JSON.parse(parsedFiles);
+          } catch (e) {
+            parsedFiles = [];
+          }
+        }
+        return {
+          ...v,
+          files: Array.isArray(parsedFiles) ? parsedFiles : []
+        };
+      });
+
+      const latestVer = detailed.versions.find(v => v.is_latest) || detailed.versions[0];
+      if (latestVer) {
+        detailed.latest_files = latestVer.files;
+        detailed.latest_note = latestVer.note;
+      }
+    }
+
+    return detailed;
+  },
+
+  /**
+   * 1. Silent Auto-Save Draft File
+   * Upload file ngay lập tức lên SeaweedFS / S3 và lưu vào DB ở trạng thái draft
+   */
+  async saveDraftFile(assignmentId, user, uploadedFiles = [], body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Upload file lên S3 / SeaweedFS
+    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+
+    // 3. Transaction DB
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      let result;
+
+      if (!existingSubmission) {
+        // Chưa có bản ghi: tạo mới draft với latest_version_no = 1
+        const submissionData = {
+          id: uuidv4(),
+          uuid: uuidv4(),
+          assignment_id: assignmentId,
+          student_id: user.id,
+          status: 'draft'
+        };
+        const versionData = {
+          files: filesMeta,
+          note: body.note || ''
+        };
+        result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
+      } else {
+        // Đã có bản ghi: kiểm tra khóa
+        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+        if (lockedStatuses.includes(existingSubmission.status)) {
+          throw new Error('SUBMISSION_LOCKED');
+        }
+
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, client);
+        if (!latestVer) {
+          throw new Error('VERSION_NOT_FOUND');
+        }
+
+        let finalFiles = filesMeta;
+        if (body.action === 'append') {
+          let currentFiles = [];
+          if (latestVer.files) {
+            try {
+              currentFiles = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+            } catch (e) {
+              currentFiles = [];
+            }
+          }
+          finalFiles = [...(Array.isArray(currentFiles) ? currentFiles : []), ...filesMeta];
+        }
+
+        const finalNote = latestVer.note || body.note || '';
+
+        // Cập nhật version hiện tại mà không làm đổi version
+        result = await SubmissionRepository.updateDraftSubmission(
+          existingSubmission.id,
+          latestVer.id,
+          finalFiles,
+          finalNote,
+          client
+        );
+      }
+
+      await client.query('COMMIT');
+      return {
+        submission_id: result.submission.id,
+        status: result.submission.status,
+        file: filesMeta[0] || null,
+        files: filesMeta,
+        version: result.version
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
+   * 2. Silent Auto-Save Draft Declarations (Debounced text/JSON)
+   * Cập nhật trường khai báo AI vào bản ghi draft hiện có mà không làm đổi version
+   */
+  async saveDraftDeclarations(assignmentId, user, body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Định dạng note từ declarations / scopes
+    let draftNote = body.note;
+    if (!draftNote) {
+      const scopes = body.scopes || (body.ai_declarations ? [{
+        id: 'scope-default',
+        scopeId: 'scope-default',
+        title: 'Khai báo chung',
+        scope_title: 'Khai báo chung',
+        declarations: body.ai_declarations
+      }] : null);
+
+      if (scopes || body.ai_declarations) {
+        draftNote = JSON.stringify({
+          version: '2.0',
+          scopes: scopes,
+          declarations: body.ai_declarations || scopes?.[0]?.declarations || {},
+          isDraft: true,
+          savedAt: new Date().toISOString()
+        });
+      } else {
+        draftNote = '';
+      }
+    }
+
+    // 3. Transaction DB
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      let result;
+
+      if (!existingSubmission) {
+        // Chưa có bản ghi: tạo mới draft với latest_version_no = 1
+        const submissionData = {
+          id: uuidv4(),
+          uuid: uuidv4(),
+          assignment_id: assignmentId,
+          student_id: user.id,
+          status: 'draft'
+        };
+        const versionData = {
+          files: [],
+          note: draftNote
+        };
+        result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
+      } else {
+        // Đã có bản ghi: kiểm tra khóa
+        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+        if (lockedStatuses.includes(existingSubmission.status)) {
+          throw new Error('SUBMISSION_LOCKED');
+        }
+
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, client);
+        if (!latestVer) {
+          throw new Error('VERSION_NOT_FOUND');
+        }
+
+        // Cập nhật note vào version hiện tại
+        result = await SubmissionRepository.updateDraftNote(
+          existingSubmission.id,
+          latestVer.id,
+          draftNote,
+          client
+        );
+      }
+
+      await client.query('COMMIT');
+      return {
+        submission_id: result.submission.id,
+        status: result.submission.status,
+        note: draftNote,
+        version: result.version
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
+   * Xóa file trong bản nháp draft của assignment
+   */
+  async removeDraftFile(assignmentId, user) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_DELETE');
+    }
+
+    const submission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id);
+    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+
+    const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+    if (lockedStatuses.includes(submission.status)) {
+      throw new Error('SUBMISSION_LOCKED');
+    }
+
+    const latestVer = await SubmissionRepository.findLatestVersion(submission.id);
+    if (!latestVer) throw new Error('VERSION_NOT_FOUND');
+
+    let currentFiles = [];
+    if (latestVer.files) {
+      try {
+        currentFiles = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+      } catch (e) {
+        currentFiles = [];
+      }
+    }
+
+    if (Array.isArray(currentFiles)) {
+      for (const f of currentFiles) {
+        if (f.key) {
+          try {
+            await s3.send(
+              new DeleteObjectCommand({
+                Bucket: S3_BUCKET,
+                Key: f.key,
+              })
+            );
+          } catch (err) {
+            console.warn('⚠️ S3 delete failed:', err.message);
+          }
+        }
+      }
+    }
+
+    const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVer.id, []);
+    return {
+      submission_id: submission.id,
+      files: [],
+      version: updatedVersion
+    };
   }
 };
 

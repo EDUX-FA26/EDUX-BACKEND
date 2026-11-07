@@ -1,6 +1,55 @@
 const SubmissionService = require('./submission.service');
 
 const SubmissionController = {
+  async saveDraftFile(req, res, next) {
+    try {
+      const { assignmentId } = req.params;
+      const files = req.files ? (Array.isArray(req.files) ? req.files : Object.values(req.files).flat()) : (req.file ? [req.file] : []);
+      const result = await SubmissionService.saveDraftFile(assignmentId, req.user, files, req.body);
+      res.status(200).json({ success: true, data: result, message: 'Draft file saved successfully' });
+    } catch (error) {
+      if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED'].includes(error.message)) {
+        return res.status(403).json({ success: false, message: error.message });
+      }
+      if (['ASSIGNMENT_NOT_FOUND', 'ASSIGNMENT_NOT_PUBLISHED'].includes(error.message)) {
+        return res.status(404).json({ success: false, message: error.message });
+      }
+      next(error);
+    }
+  },
+
+  async saveDraftDeclarations(req, res, next) {
+    try {
+      const { assignmentId } = req.params;
+      const result = await SubmissionService.saveDraftDeclarations(assignmentId, req.user, req.body);
+      res.status(200).json({ success: true, data: result, message: 'Draft declarations saved successfully' });
+    } catch (error) {
+      if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED'].includes(error.message)) {
+        return res.status(403).json({ success: false, message: error.message });
+      }
+      if (['ASSIGNMENT_NOT_FOUND', 'ASSIGNMENT_NOT_PUBLISHED'].includes(error.message)) {
+        return res.status(404).json({ success: false, message: error.message });
+      }
+      next(error);
+    }
+  },
+
+  async removeDraftFile(req, res, next) {
+    try {
+      const { assignmentId } = req.params;
+      const result = await SubmissionService.removeDraftFile(assignmentId, req.user);
+      res.status(200).json({ success: true, data: result, message: 'Draft file removed successfully' });
+    } catch (error) {
+      if (['ONLY_STUDENT_CAN_DELETE', 'FORBIDDEN', 'SUBMISSION_LOCKED'].includes(error.message)) {
+        return res.status(403).json({ success: false, message: error.message });
+      }
+      if (['SUBMISSION_NOT_FOUND', 'VERSION_NOT_FOUND'].includes(error.message)) {
+        return res.status(404).json({ success: false, message: error.message });
+      }
+      next(error);
+    }
+  },
+
   async saveDraft(req, res, next) {
     try {
       const { assignmentId } = req.params;

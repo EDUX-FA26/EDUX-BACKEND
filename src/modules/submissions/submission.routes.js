@@ -8,7 +8,8 @@ const { validate } = require('../../middlewares/validate.middleware');
 const {
   submitSubmissionSchema,
   queryAssignmentSubmissionsSchema,
-  reviewSubmissionSchema
+  reviewSubmissionSchema,
+  saveDraftDeclarationsSchema
 } = require('./submission.validation');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -48,6 +49,35 @@ router.post(
   upload.array('files'),
   validate(submitSubmissionSchema),
   SubmissionController.saveDraft
+);
+
+// 1a. Silent Auto-Save Draft File (chỉ cho student)
+router.post(
+  '/:assignmentId/draft-file',
+  authorize('student'),
+  upload.any(),
+  SubmissionController.saveDraftFile
+);
+
+// 1b. Xóa file bản nháp (chỉ cho student)
+router.delete(
+  '/:assignmentId/draft-file',
+  authorize('student'),
+  SubmissionController.removeDraftFile
+);
+
+// 1c. Silent Auto-Save Draft Declarations (Debounced text/JSON - chỉ cho student)
+router.patch(
+  '/:assignmentId/draft-declarations',
+  authorize('student'),
+  validate(saveDraftDeclarationsSchema),
+  SubmissionController.saveDraftDeclarations
+);
+router.post(
+  '/:assignmentId/draft-declarations',
+  authorize('student'),
+  validate(saveDraftDeclarationsSchema),
+  SubmissionController.saveDraftDeclarations
 );
 
 // 2. Nộp bài chính thức (Submit Final - chỉ cho student)
