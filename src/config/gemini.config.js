@@ -355,8 +355,7 @@ LƯU Ý QUAN TRỌNG:
   "relevance_status": "MATCH" | "MISMATCH_OR_SUSPICIOUS",
   "relevance_reason": "string",
   "diagnostic_warnings": ["string"],
-  "micro_suggestions": ["string"],
-  "tone_message": "string"
+  "micro_suggestions": ["string"]
 }`;
 
   const prompt = `
@@ -394,13 +393,9 @@ ${studentDeclarations || "Sinh viên chưa khai báo hoặc không sử dụng A
         type: Type.ARRAY,
         items: { type: Type.STRING },
         description: "Các câu hỏi định hướng hoặc gợi ý ngắn để sinh viên tự rà soát và hoàn thiện bài"
-      },
-      tone_message: {
-        type: Type.STRING,
-        description: "Lời nhắn khích lệ học tập tích cực, mang tính sư phạm và xây dựng"
       }
     },
-    required: ["relevance_status", "relevance_reason", "diagnostic_warnings", "micro_suggestions", "tone_message"]
+    required: ["relevance_status", "relevance_reason", "diagnostic_warnings", "micro_suggestions"]
   };
 
   const generateConfig = {
