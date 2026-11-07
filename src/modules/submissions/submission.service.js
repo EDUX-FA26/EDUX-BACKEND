@@ -6,6 +6,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { v4: uuidv4 } = require('uuid');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
+const { preSubmissionSanityCheckWithGemini } = require('../../config/gemini.config');
 
 const SubmissionService = {
   /**
@@ -797,6 +798,153 @@ const SubmissionService = {
       files: [],
       version: updatedVersion
     };
+  },
+
+  /**
+   * Helper trích xuất nội dung mã nguồn phục vụ Pre-submission Sanity Check
+   */
+  async extractCodeForSanityCheck(filesList) {
+    const AdmZip = require('adm-zip');
+    if (!Array.isArray(filesList) || filesList.length === 0) return '';
+
+    const zipFile = filesList.find(f =>
+      (f.name || f.filename || '').toLowerCase().endsWith('.zip') ||
+      (f.key || '').toLowerCase().endsWith('.zip')
+    );
+
+    if (zipFile && zipFile.key) {
+      try {
+        const command = new GetObjectCommand({ Bucket: S3_BUCKET, Key: zipFile.key });
+        const res = await s3.send(command);
+        const chunks = [];
+        for await (const chunk of res.Body) {
+          chunks.push(chunk);
+        }
+        const zipBuffer = Buffer.concat(chunks);
+        const zip = new AdmZip(zipBuffer);
+        const entries = zip.getEntries();
+
+        const fileListOverview = [];
+        const codeSnippets = [];
+
+        for (const entry of entries) {
+          if (
+            entry.isDirectory ||
+            entry.entryName.includes('.git/') ||
+            entry.entryName.includes('node_modules/') ||
+            entry.entryName.includes('__MACOSX/')
+          ) continue;
+
+          fileListOverview.push(`- ${entry.entryName} (${entry.header.size} bytes)`);
+
+          const isCode = /\.(py|js|ts|tsx|jsx|java|cpp|c|cs|html|css|json|md|sql)$/i.test(entry.entryName);
+          if (isCode && codeSnippets.length < 8) {
+            const content = entry.getData().toString('utf8');
+            const trimmed = content.slice(0, 3000);
+            codeSnippets.push(`\n[TỆP: ${entry.entryName}]\n${trimmed}`);
+          }
+        }
+
+        return `Cấu trúc tệp tin dự án:\n${fileListOverview.slice(0, 50).join('\n')}\n\nNội dung các tệp mã nguồn mẫu:\n${codeSnippets.join('\n\n')}`;
+      } catch (err) {
+        console.warn('⚠️ Lỗi đọc zip từ S3 cho sanity check:', err.message);
+      }
+    }
+
+    // Trường hợp nộp file code đơn lẻ
+    const singleCodeFile = filesList.find(f =>
+      /\.(py|js|ts|tsx|jsx|java|cpp|c|cs|html|css|json|md|sql)$/i.test(f.name || f.filename || '')
+    );
+    if (singleCodeFile && singleCodeFile.key) {
+      try {
+        const command = new GetObjectCommand({ Bucket: S3_BUCKET, Key: singleCodeFile.key });
+        const res = await s3.send(command);
+        const chunks = [];
+        for await (const chunk of res.Body) {
+          chunks.push(chunk);
+        }
+        const codeBuffer = Buffer.concat(chunks);
+        const content = codeBuffer.toString('utf8');
+        return `[TỆP: ${singleCodeFile.name}]\n${content.slice(0, 8000)}`;
+      } catch (err) {
+        console.warn('⚠️ Lỗi đọc file code đơn lẻ từ S3 cho sanity check:', err.message);
+      }
+    }
+
+    return filesList.map(f => `- Tệp: ${f.name} (${f.size} bytes)`).join('\n');
+  },
+
+  /**
+   * Pre-submission AI Sanity Check
+   * Chẩn đoán nhanh bài làm bản nháp theo yêu cầu của sinh viên (On-demand)
+   */
+  async sanityCheck(assignmentId, user, body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Lấy submission draft hiện tại
+    const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id);
+    let filesList = [];
+    let noteData = body.note || '';
+
+    if (existingSubmission) {
+      const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
+      if (latestVer?.files) {
+        try {
+          filesList = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+        } catch (e) {
+          filesList = [];
+        }
+      }
+      if (!noteData && latestVer?.note) {
+        noteData = latestVer.note;
+      }
+    }
+
+    if (!Array.isArray(filesList) || filesList.length === 0) {
+      throw new Error('NO_SUBMISSION_FILE');
+    }
+
+    // 3. Trích xuất code
+    const sourceCode = await this.extractCodeForSanityCheck(filesList);
+
+    // 4. Trích xuất khai báo AI
+    let studentDeclarationsSummary = '';
+    const scopesData = body.scopes || (body.ai_declarations ? [{ declarations: body.ai_declarations }] : null);
+    if (scopesData) {
+      studentDeclarationsSummary = JSON.stringify(scopesData, null, 2);
+    } else if (noteData) {
+      try {
+        const normalized = normalizeAuditData(noteData);
+        studentDeclarationsSummary = JSON.stringify(normalized, null, 2);
+      } catch (e) {
+        studentDeclarationsSummary = typeof noteData === 'string' ? noteData : JSON.stringify(noteData);
+      }
+    }
+
+    // 5. Gọi AI chẩn đoán
+    const sanityResult = await preSubmissionSanityCheckWithGemini({
+      assignmentTitle: assignment.title,
+      assignmentDescription: `${assignment.description || ''}\n${assignment.instructions || ''}`,
+      sourceCode,
+      studentDeclarations: studentDeclarationsSummary,
+    });
+
+    return sanityResult;
   }
 };
 

@@ -50,6 +50,25 @@ const SubmissionController = {
     }
   },
 
+  async sanityCheck(req, res, next) {
+    try {
+      const { assignmentId } = req.params;
+      const result = await SubmissionService.sanityCheck(assignmentId, req.user, req.body);
+      res.status(200).json({ success: true, data: result, message: 'Sanity check completed successfully' });
+    } catch (error) {
+      if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS'].includes(error.message)) {
+        return res.status(403).json({ success: false, message: error.message });
+      }
+      if (['ASSIGNMENT_NOT_FOUND', 'ASSIGNMENT_NOT_PUBLISHED'].includes(error.message)) {
+        return res.status(404).json({ success: false, message: error.message });
+      }
+      if (error.message === 'NO_SUBMISSION_FILE') {
+        return res.status(400).json({ success: false, message: 'Vui lòng tải lên tệp bài làm trước khi kiểm tra nhanh bằng AI.' });
+      }
+      next(error);
+    }
+  },
+
   async saveDraft(req, res, next) {
     try {
       const { assignmentId } = req.params;
