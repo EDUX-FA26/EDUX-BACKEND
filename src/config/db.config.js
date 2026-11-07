@@ -37,6 +37,26 @@ async function connectDB() {
       console.warn("⚠️ Focus sessions timer_mode migration notice:", migErr.message);
     }
 
+    // Auto-check và cập nhật submissions_status_check hỗ trợ 'draft'
+    try {
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint 
+            WHERE conrelid = 'submissions'::regclass AND conname = 'submissions_status_check'
+              AND pg_get_constraintdef(oid) NOT LIKE '%draft%'
+          ) THEN
+            ALTER TABLE submissions DROP CONSTRAINT submissions_status_check;
+            ALTER TABLE submissions ADD CONSTRAINT submissions_status_check 
+              CHECK (status IN ('draft', 'pending', 'submitted', 'resubmitted', 'late', 'evaluated', 'reviewed', 'graded', 'flagged', 'withdrawn'));
+          END IF;
+        END $$;
+      `);
+    } catch (migErr) {
+      console.warn("⚠️ Submissions status constraint migration notice:", migErr.message);
+    }
+
     console.log("✅ PostgreSQL connected");
 
     client.release();

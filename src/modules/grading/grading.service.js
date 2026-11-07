@@ -144,7 +144,7 @@ const GradingService = {
   async createGrade({ submissionId, score, maxScore, feedback, rubrics }, user) {
     // 1. Lấy submission + context
     const submission = await GradingRepository.findSubmissionById(submissionId);
-    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+    if (!submission || submission.submission_status === 'draft') throw new Error('SUBMISSION_NOT_FOUND');
 
     // 2. Kiểm tra quyền (lecturer của class đó)
     assertLecturer(user, submission.lecturer_id);
@@ -342,7 +342,7 @@ const GradingService = {
 
     // 1. Lấy toàn bộ thông tin bài nộp, đề bài, version từ Database thực tế
     const auditData = await GradingRepository.getSubmissionAuditData(submissionId);
-    if (!auditData) {
+    if (!auditData || auditData.submission_status === 'draft') {
       throw new Error('SUBMISSION_NOT_FOUND');
     }
 

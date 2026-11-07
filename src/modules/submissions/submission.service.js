@@ -9,78 +9,13 @@ const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 
 const SubmissionService = {
   /**
-   * Sinh viên nộp bài / nộp lại bài
+   * Helper tải file lên S3
    */
-  async submitAssignment(assignmentId, user, uploadedFiles, body) {
-    if (user.role !== 'student') {
-      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
-    }
-
-    // 1. Kiểm tra assignment và enrollment
-    const assignment = await AssignmentRepository.findById(assignmentId);
-    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
-    if (assignment.publish_status !== 'published') {
-      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
-    }
-
-    const { rows: memberRows } = await pool.query(
-      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
-    );
-    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
-
-    // 2. Check deadline
-    const now = new Date();
-    const deadline = new Date(assignment.deadline);
-    let status = 'submitted';
-
-    if (now > deadline) {
-      if (!assignment.allow_late_submission) {
-        throw new Error('DEADLINE_PASSED_AND_LATE_SUBMISSION_NOT_ALLOWED');
-      }
-      status = 'late';
-    }
-
-    // 2.1. Kiểm tra nội dung bài nộp (không được để trống cả file lẫn ghi chú)
-    const hasFiles = Boolean(uploadedFiles && uploadedFiles.length > 0);
-    const hasNote = Boolean(body && body.note && body.note.trim().length > 0);
-    if (!hasFiles && !hasNote) {
-      throw new Error('SUBMISSION_EMPTY_CONTENT');
-    }
-
-    // 2.2. Kiểm tra yêu cầu khai báo AI Audit Log nếu được bật
-    if (assignment.ai_declaration_required) {
-      const auditData = normalizeAuditData(body?.note);
-      let validCount = 0;
-      if (auditData && Array.isArray(auditData.scopes)) {
-        for (const scope of auditData.scopes) {
-          if (scope && scope.declarations) {
-            for (const key of Object.keys(scope.declarations)) {
-              const item = scope.declarations[key];
-              const prompt = (item.prompt || item.prompt_used || '').trim();
-              const response = (item.response || item.responseSummary || '').trim();
-              const reflection = (item.reflection || item.studentReflection || '').trim();
-              if (prompt.length > 0 && response.length > 0 && reflection.length > 0) {
-                validCount++;
-              }
-            }
-          }
-        }
-      }
-
-      const minRequired = (assignment.min_ai_interactions != null && Number(assignment.min_ai_interactions) > 0)
-        ? Number(assignment.min_ai_interactions)
-        : 1;
-      if (validCount < minRequired) {
-        throw new Error(`AI_DECLARATION_REQUIRED: Bài tập yêu cầu khai báo AI Audit Log tối thiểu ${minRequired} lượt tương tác hợp lệ (hiện có: ${validCount})`);
-      }
-    }
-
-    // 3. Upload files lên S3
+  async uploadFilesToS3(assignmentId, userId, uploadedFiles) {
     const filesMeta = [];
     for (const file of uploadedFiles) {
       const fileId = uuidv4();
-      const fileKey = `submissions/${assignmentId}/${user.id}/${fileId}_${file.originalname}`;
+      const fileKey = `submissions/${assignmentId}/${userId}/${fileId}_${file.originalname}`;
       
       try {
         await s3.send(
@@ -104,30 +39,243 @@ const SubmissionService = {
         uploaded_at: new Date().toISOString()
       });
     }
+    return filesMeta;
+  },
 
-    const versionData = {
-      files: filesMeta,
-      note: body.note || '',
-      status
-    };
+  /**
+   * Sinh viên lưu bản nháp (Save Draft)
+   * - Bỏ qua kiểm tra deadline (hoặc lưu draft trước deadline mà chưa tính nộp muộn)
+   * - Không bắt buộc hoàn thành đủ rubric AI hay bắt buộc có file ngay
+   * - Nếu chưa có: tạo mới status = 'draft', latest_version_no = 1
+   * - Nếu đã có status = 'draft': cập nhật trực tiếp version hiện tại mà không tăng major version
+   */
+  async saveDraft(assignmentId, user, uploadedFiles = [], body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
 
-    // 4. Transaction lưu DB
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Upload file lên S3 nếu có
+    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+
+    // Chuẩn bị note/declarations
+    let draftNote = body.note || '';
+    if (!draftNote && body.ai_declarations) {
+      try {
+        draftNote = typeof body.ai_declarations === 'string'
+          ? body.ai_declarations
+          : JSON.stringify({ declarations: body.ai_declarations });
+      } catch (e) {
+        draftNote = '';
+      }
+    }
+
+    // 3. Transaction DB
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      
-      let existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
       let result;
 
-      // Nếu resubmit mà không tải lên file mới, giữ nguyên file của version mới nhất trước đó
-      if (existingSubmission && filesMeta.length === 0) {
+      if (!existingSubmission) {
+        // Tạo mới submission draft
+        const submissionData = {
+          id: uuidv4(),
+          uuid: uuidv4(),
+          assignment_id: assignmentId,
+          student_id: user.id,
+          status: 'draft'
+        };
+        const versionData = {
+          files: filesMeta,
+          note: draftNote
+        };
+        result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
+      } else {
+        // Đã có submission
+        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+        if (lockedStatuses.includes(existingSubmission.status)) {
+          throw new Error('SUBMISSION_LOCKED');
+        }
+
         const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
-        if (latestVer && latestVer.files) {
-          versionData.files = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+        let currentFiles = [];
+        if (latestVer?.files) {
+          try {
+            currentFiles = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+          } catch (e) {
+            currentFiles = [];
+          }
+        }
+
+        let finalFiles = filesMeta.length > 0 ? filesMeta : currentFiles;
+        if (body.clear_files === 'true' || body.clear_files === true) {
+          finalFiles = [];
+        }
+
+        const finalNote = draftNote !== undefined ? draftNote : (latestVer?.note || '');
+
+        if (existingSubmission.status === 'draft') {
+          // Update trực tiếp draft hiện tại, không tăng version
+          result = await SubmissionRepository.updateDraftSubmission(
+            existingSubmission.id,
+            latestVer.id,
+            finalFiles,
+            finalNote,
+            client
+          );
+        } else {
+          // Bài đã từng nộp chính thức, lưu cập nhật dở dang vào version hiện tại
+          result = await SubmissionRepository.updateDraftSubmission(
+            existingSubmission.id,
+            latestVer.id,
+            finalFiles,
+            finalNote,
+            client
+          );
         }
       }
 
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
+   * Sinh viên nộp bài chính thức (Submit Final)
+   * - Kiểm tra deadline (hoặc allow_late_submission)
+   * - Bắt buộc kiểm tra file hợp lệ và khai báo AI (nếu yêu cầu)
+   * - Đóng băng version, chốt status = 'submitted' hoặc 'late', submitted_at = NOW()
+   */
+  async submitFinal(assignmentId, user, uploadedFiles = [], body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Kiểm tra deadline
+    const now = new Date();
+    const deadline = new Date(assignment.deadline);
+    let status = 'submitted';
+
+    if (now > deadline) {
+      if (!assignment.allow_late_submission) {
+        throw new Error('DEADLINE_PASSED_AND_LATE_SUBMISSION_NOT_ALLOWED');
+      }
+      status = 'late';
+    }
+
+    // 3. Upload files mới lên S3 (nếu có)
+    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+
+    // 4. Transaction lưu DB và kiểm tra ràng buộc hoàn tất
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+
+      // Xác định file có hiệu lực (từ file vừa tải lên hoặc từ version trước đó)
+      let effectiveFiles = filesMeta;
+      let existingLatestVer = null;
+
+      if (existingSubmission) {
+        existingLatestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
+        if (filesMeta.length === 0 && existingLatestVer?.files) {
+          try {
+            effectiveFiles = typeof existingLatestVer.files === 'string'
+              ? JSON.parse(existingLatestVer.files)
+              : existingLatestVer.files;
+          } catch (e) {
+            effectiveFiles = [];
+          }
+        }
+      }
+
+      // Xác định note có hiệu lực
+      let effectiveNote = body.note || '';
+      if (!effectiveNote && body.ai_declarations) {
+        try {
+          effectiveNote = typeof body.ai_declarations === 'string'
+            ? body.ai_declarations
+            : JSON.stringify({ declarations: body.ai_declarations });
+        } catch (e) {
+          effectiveNote = '';
+        }
+      }
+      if (!effectiveNote && existingLatestVer?.note) {
+        effectiveNote = existingLatestVer.note;
+      }
+
+      // 4.1. Kiểm tra nội dung bài nộp (không được để trống cả file lẫn ghi chú)
+      const hasFiles = Boolean(effectiveFiles && effectiveFiles.length > 0);
+      const hasNote = Boolean(effectiveNote && effectiveNote.trim().length > 0);
+      if (!hasFiles && !hasNote) {
+        throw new Error('SUBMISSION_EMPTY_CONTENT');
+      }
+
+      // 4.2. Kiểm tra yêu cầu khai báo AI Audit Log nếu được bật
+      if (assignment.ai_declaration_required) {
+        const auditData = normalizeAuditData(effectiveNote);
+        let validCount = 0;
+        if (auditData && Array.isArray(auditData.scopes)) {
+          for (const scope of auditData.scopes) {
+            if (scope && scope.declarations) {
+              for (const key of Object.keys(scope.declarations)) {
+                const item = scope.declarations[key];
+                const prompt = (item.prompt || item.prompt_used || '').trim();
+                const response = (item.response || item.responseSummary || '').trim();
+                const reflection = (item.reflection || item.studentReflection || '').trim();
+                if (prompt.length > 0 && response.length > 0 && reflection.length > 0) {
+                  validCount++;
+                }
+              }
+            }
+          }
+        }
+
+        const minRequired = (assignment.min_ai_interactions != null && Number(assignment.min_ai_interactions) > 0)
+          ? Number(assignment.min_ai_interactions)
+          : 1;
+        if (validCount < minRequired) {
+          throw new Error(`AI_DECLARATION_REQUIRED: Bài tập yêu cầu khai báo AI Audit Log tối thiểu ${minRequired} lượt tương tác hợp lệ (hiện có: ${validCount})`);
+        }
+      }
+
+      let result;
+
       if (!existingSubmission) {
+        // Chưa có submission: Tạo mới trực tiếp ở trạng thái submitted / late
         const submissionData = {
           id: uuidv4(),
           uuid: uuidv4(),
@@ -135,9 +283,29 @@ const SubmissionService = {
           student_id: user.id,
           status
         };
+        const versionData = {
+          files: effectiveFiles,
+          note: effectiveNote,
+          status
+        };
         result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
+      } else if (existingSubmission.status === 'draft') {
+        // Đang ở trạng thái DRAFT: Đóng băng và chuyển sang submitted / late
+        result = await SubmissionRepository.finalizeDraftSubmission(
+          existingSubmission.id,
+          existingLatestVer.id,
+          status,
+          effectiveFiles,
+          effectiveNote,
+          client
+        );
       } else {
-        // Resubmit
+        // Đã từng nộp trước đó: Resubmit tạo version mới
+        const versionData = {
+          files: effectiveFiles,
+          note: effectiveNote,
+          status: (status === 'late' ? 'late' : 'resubmitted')
+        };
         result = await SubmissionRepository.addSubmissionVersion(existingSubmission.id, versionData, client);
       }
 
@@ -149,6 +317,18 @@ const SubmissionService = {
     } finally {
       client.release();
     }
+  },
+
+  /**
+   * Sinh viên nộp bài / nộp lại bài / lưu bản nháp
+   * Tự động điều hướng theo query hoặc body is_draft
+   */
+  async submitAssignment(assignmentId, user, uploadedFiles, body = {}) {
+    const isDraft = body.is_draft === true || body.is_draft === 'true';
+    if (isDraft) {
+      return await this.saveDraft(assignmentId, user, uploadedFiles, body);
+    }
+    return await this.submitFinal(assignmentId, user, uploadedFiles, body);
   },
 
   /**
@@ -203,10 +383,17 @@ const SubmissionService = {
       throw new Error('FORBIDDEN');
     }
     
-    if (user.role === 'lecturer') {
-      const assignment = await AssignmentRepository.findById(submission.assignment_id);
-      if (assignment.lecturer_id !== user.id) {
-        throw new Error('FORBIDDEN');
+    // Giảng viên / Admin: Tuyệt đối không nhìn thấy bài đang ở trạng thái draft
+    if (user.role === 'lecturer' || user.role === 'admin') {
+      if (submission.status === 'draft') {
+        throw new Error('SUBMISSION_NOT_FOUND');
+      }
+
+      if (user.role === 'lecturer') {
+        const assignment = await AssignmentRepository.findById(submission.assignment_id);
+        if (assignment.lecturer_id !== user.id) {
+          throw new Error('FORBIDDEN');
+        }
       }
     }
 
@@ -223,6 +410,11 @@ const SubmissionService = {
 
     const submission = await SubmissionRepository.findById(submissionId, false);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+
+    // Không thể đánh giá bài nháp
+    if (submission.status === 'draft') {
+      throw new Error('SUBMISSION_NOT_FOUND');
+    }
 
     if (user.role === 'lecturer') {
       const assignment = await AssignmentRepository.findById(submission.assignment_id);
@@ -246,10 +438,17 @@ const SubmissionService = {
       throw new Error('FORBIDDEN');
     }
 
-    if (user.role === 'lecturer') {
-      const assignment = await AssignmentRepository.findById(submission.assignment_id);
-      if (assignment.lecturer_id !== user.id) {
-        throw new Error('FORBIDDEN');
+    // Giảng viên không được tải file từ bài nháp
+    if (user.role === 'lecturer' || user.role === 'admin') {
+      if (submission.status === 'draft') {
+        throw new Error('SUBMISSION_NOT_FOUND');
+      }
+
+      if (user.role === 'lecturer') {
+        const assignment = await AssignmentRepository.findById(submission.assignment_id);
+        if (assignment.lecturer_id !== user.id) {
+          throw new Error('FORBIDDEN');
+        }
       }
     }
 
@@ -306,6 +505,298 @@ const SubmissionService = {
    */
   async getMySubmissions(studentId, query) {
     return await SubmissionRepository.findMySubmissions(studentId, query);
+  },
+
+  /**
+   * Lấy chi tiết bài nộp của student cho 1 assignment cụ thể (kể cả draft)
+   */
+  async getStudentSubmissionForAssignment(assignmentId, studentId) {
+    const sub = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, studentId);
+    if (!sub) return null;
+    const detailed = await SubmissionRepository.findById(sub.id, true);
+    if (!detailed) return null;
+
+    if (detailed.versions && detailed.versions.length > 0) {
+      detailed.versions = detailed.versions.map(v => {
+        let parsedFiles = v.files;
+        if (typeof parsedFiles === 'string') {
+          try {
+            parsedFiles = JSON.parse(parsedFiles);
+          } catch (e) {
+            parsedFiles = [];
+          }
+        }
+        return {
+          ...v,
+          files: Array.isArray(parsedFiles) ? parsedFiles : []
+        };
+      });
+
+      const latestVer = detailed.versions.find(v => v.is_latest) || detailed.versions[0];
+      if (latestVer) {
+        detailed.latest_files = latestVer.files;
+        detailed.latest_note = latestVer.note;
+      }
+    }
+
+    return detailed;
+  },
+
+  /**
+   * 1. Silent Auto-Save Draft File
+   * Upload file ngay lập tức lên SeaweedFS / S3 và lưu vào DB ở trạng thái draft
+   */
+  async saveDraftFile(assignmentId, user, uploadedFiles = [], body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Upload file lên S3 / SeaweedFS
+    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+
+    // 3. Transaction DB
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      let result;
+
+      if (!existingSubmission) {
+        // Chưa có bản ghi: tạo mới draft với latest_version_no = 1
+        const submissionData = {
+          id: uuidv4(),
+          uuid: uuidv4(),
+          assignment_id: assignmentId,
+          student_id: user.id,
+          status: 'draft'
+        };
+        const versionData = {
+          files: filesMeta,
+          note: body.note || ''
+        };
+        result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
+      } else {
+        // Đã có bản ghi: kiểm tra khóa
+        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+        if (lockedStatuses.includes(existingSubmission.status)) {
+          throw new Error('SUBMISSION_LOCKED');
+        }
+
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, client);
+        if (!latestVer) {
+          throw new Error('VERSION_NOT_FOUND');
+        }
+
+        let finalFiles = filesMeta;
+        if (body.action === 'append') {
+          let currentFiles = [];
+          if (latestVer.files) {
+            try {
+              currentFiles = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+            } catch (e) {
+              currentFiles = [];
+            }
+          }
+          finalFiles = [...(Array.isArray(currentFiles) ? currentFiles : []), ...filesMeta];
+        }
+
+        const finalNote = latestVer.note || body.note || '';
+
+        // Cập nhật version hiện tại mà không làm đổi version
+        result = await SubmissionRepository.updateDraftSubmission(
+          existingSubmission.id,
+          latestVer.id,
+          finalFiles,
+          finalNote,
+          client
+        );
+      }
+
+      await client.query('COMMIT');
+      return {
+        submission_id: result.submission.id,
+        status: result.submission.status,
+        file: filesMeta[0] || null,
+        files: filesMeta,
+        version: result.version
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
+   * 2. Silent Auto-Save Draft Declarations (Debounced text/JSON)
+   * Cập nhật trường khai báo AI vào bản ghi draft hiện có mà không làm đổi version
+   */
+  async saveDraftDeclarations(assignmentId, user, body = {}) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status !== 'published') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
+      [assignment.class_id, user.id]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Định dạng note từ declarations / scopes
+    let draftNote = body.note;
+    if (!draftNote) {
+      const scopes = body.scopes || (body.ai_declarations ? [{
+        id: 'scope-default',
+        scopeId: 'scope-default',
+        title: 'Khai báo chung',
+        scope_title: 'Khai báo chung',
+        declarations: body.ai_declarations
+      }] : null);
+
+      if (scopes || body.ai_declarations) {
+        draftNote = JSON.stringify({
+          version: '2.0',
+          scopes: scopes,
+          declarations: body.ai_declarations || scopes?.[0]?.declarations || {},
+          isDraft: true,
+          savedAt: new Date().toISOString()
+        });
+      } else {
+        draftNote = '';
+      }
+    }
+
+    // 3. Transaction DB
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      let result;
+
+      if (!existingSubmission) {
+        // Chưa có bản ghi: tạo mới draft với latest_version_no = 1
+        const submissionData = {
+          id: uuidv4(),
+          uuid: uuidv4(),
+          assignment_id: assignmentId,
+          student_id: user.id,
+          status: 'draft'
+        };
+        const versionData = {
+          files: [],
+          note: draftNote
+        };
+        result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
+      } else {
+        // Đã có bản ghi: kiểm tra khóa
+        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+        if (lockedStatuses.includes(existingSubmission.status)) {
+          throw new Error('SUBMISSION_LOCKED');
+        }
+
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, client);
+        if (!latestVer) {
+          throw new Error('VERSION_NOT_FOUND');
+        }
+
+        // Cập nhật note vào version hiện tại
+        result = await SubmissionRepository.updateDraftNote(
+          existingSubmission.id,
+          latestVer.id,
+          draftNote,
+          client
+        );
+      }
+
+      await client.query('COMMIT');
+      return {
+        submission_id: result.submission.id,
+        status: result.submission.status,
+        note: draftNote,
+        version: result.version
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
+   * Xóa file trong bản nháp draft của assignment
+   */
+  async removeDraftFile(assignmentId, user) {
+    if (user.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_DELETE');
+    }
+
+    const submission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id);
+    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+
+    const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
+    if (lockedStatuses.includes(submission.status)) {
+      throw new Error('SUBMISSION_LOCKED');
+    }
+
+    const latestVer = await SubmissionRepository.findLatestVersion(submission.id);
+    if (!latestVer) throw new Error('VERSION_NOT_FOUND');
+
+    let currentFiles = [];
+    if (latestVer.files) {
+      try {
+        currentFiles = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+      } catch (e) {
+        currentFiles = [];
+      }
+    }
+
+    if (Array.isArray(currentFiles)) {
+      for (const f of currentFiles) {
+        if (f.key) {
+          try {
+            await s3.send(
+              new DeleteObjectCommand({
+                Bucket: S3_BUCKET,
+                Key: f.key,
+              })
+            );
+          } catch (err) {
+            console.warn('⚠️ S3 delete failed:', err.message);
+          }
+        }
+      }
+    }
+
+    const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVer.id, []);
+    return {
+      submission_id: submission.id,
+      files: [],
+      version: updatedVersion
+    };
   }
 };
 
