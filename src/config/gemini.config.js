@@ -331,7 +331,125 @@ function sanitizeObjectStrings(obj) {
   return obj;
 }
 
+/**
+ * 3. Hàm chuyên dụng: Chẩn đoán kiểm tra nhanh bài làm bản nháp của sinh viên trước khi nộp (Pre-submission AI Sanity Check)
+ * - Non-blocking: Chỉ cảnh báo/gợi ý định hướng, KHÔNG chấm điểm
+ * - Response JSON schema chuẩn tiếng Việt UTF-8
+ */
+async function preSubmissionSanityCheckWithGemini({ assignmentTitle, assignmentDescription, sourceCode, studentDeclarations }) {
+  const apiKey = process.env.GEMINI_API_KEY_PRE_CHECK_SUBMIT || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY_MISSING: Chưa cấu hình GEMINI_API_KEY_PRE_CHECK_SUBMIT hoặc GEMINI_API_KEY trong file .env");
+  }
+
+  const ai = await getGeminiClient(apiKey);
+
+  const systemInstruction = `Bạn là Trợ lý AI Chuyên gia Kiểm toán & Hướng dẫn học tập Kỹ thuật Phần mềm (Academic Sanity Auditor). Nhiệm vụ của bạn là đọc và chẩn đoán nhanh bài làm bản nháp (Draft) của sinh viên dựa trên yêu cầu đề bài, sau đó đưa ra các nhận xét mang tính chất định hướng, cảnh báo sớm và gợi ý cải thiện.
+
+LƯU Ý QUAN TRỌNG:
+1. Bạn KHÔNG ĐƯỢC chấm điểm, KHÔNG ĐƯỢC quy đổi thang điểm, và KHÔNG ĐƯỢC dùng ngôn ngữ phán xét hay cấm đoán. Hãy đóng vai trò là một người cố vấn khách quan.
+2. TOÀN BỘ nội dung phản hồi BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8), câu từ rõ ràng, sư phạm.
+3. TUYỆT ĐỐI KHÔNG VIẾT HỘ CODE HOẶC GIẢI HỘ BÀI TẬP. Chỉ gợi mở tư duy để sinh viên tự sửa.
+4. Trả về đúng định dạng JSON chuẩn theo schema sau:
+{
+  "relevance_status": "MATCH" | "MISMATCH_OR_SUSPICIOUS",
+  "relevance_reason": "string",
+  "diagnostic_warnings": ["string"],
+  "micro_suggestions": ["string"],
+  "tone_message": "string"
+}`;
+
+  const prompt = `
+Hãy chẩn đoán nhanh bài làm bản nháp của sinh viên trước khi nộp theo các thông tin sau:
+
+[1. YÊU CẦU ĐỀ BÀI TỪ GIẢNG VIÊN]:
+Tiêu đề: ${assignmentTitle || "Không có tiêu đề"}
+Mô tả & Yêu cầu: ${assignmentDescription || "Xây dựng dự án phần mềm theo yêu cầu."}
+
+[2. BÀI NỘP THỰC TẾ CỦA SINH VIÊN]:
+${sourceCode || "Chưa có nội dung mã nguồn được trích xuất."}
+
+[3. KHAI BÁO AI AUDIT LOG CỦA SINH VIÊN]:
+${studentDeclarations || "Sinh viên chưa khai báo hoặc không sử dụng AI."}
+`;
+
+  const sanityCheckResponseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      relevance_status: {
+        type: Type.STRING,
+        enum: ["MATCH", "MISMATCH_OR_SUSPICIOUS"],
+        description: "Đánh giá bài làm có đúng đề bài yêu cầu hay không"
+      },
+      relevance_reason: {
+        type: Type.STRING,
+        description: "Giải thích ngắn gọn lý do tại sao bài làm khớp hoặc nghi ngờ lệch đề bài"
+      },
+      diagnostic_warnings: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Danh sách các cảnh báo rủi ro, lỗ hổng kỹ thuật, điểm mù hoặc lỗi logic tiềm ẩn"
+      },
+      micro_suggestions: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Các câu hỏi định hướng hoặc gợi ý ngắn để sinh viên tự rà soát và hoàn thiện bài"
+      },
+      tone_message: {
+        type: Type.STRING,
+        description: "Lời nhắn khích lệ học tập tích cực, mang tính sư phạm và xây dựng"
+      }
+    },
+    required: ["relevance_status", "relevance_reason", "diagnostic_warnings", "micro_suggestions", "tone_message"]
+  };
+
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    responseMimeType: "application/json",
+    responseSchema: sanityCheckResponseSchema,
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_PRE_CHECK_SUBMIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const fallbackModel = "gemini-3.5-flash-lite";
+
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: primaryModel,
+      contents: prompt,
+      config: generateConfig,
+    });
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404)) {
+      console.warn(`[Gemini Sanity Check] Model ${primaryModel} gặp lỗi, chuyển sang ${fallbackModel}...`);
+      response = await ai.models.generateContent({
+        model: fallbackModel,
+        contents: prompt,
+        config: generateConfig,
+      });
+    } else {
+      throw err;
+    }
+  }
+
+  const parsed = JSON.parse(response.text);
+  return sanitizeObjectStrings(parsed);
+}
+
 module.exports = {
   askGemini,
   evaluateRubricWithGemini,
+  preSubmissionSanityCheckWithGemini,
 };

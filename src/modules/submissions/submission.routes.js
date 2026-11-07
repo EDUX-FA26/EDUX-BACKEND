@@ -80,6 +80,13 @@ router.post(
   SubmissionController.saveDraftDeclarations
 );
 
+// 1d. Pre-submission AI Sanity Check (chỉ cho student, on-demand)
+router.post(
+  '/:assignmentId/sanity-check',
+  authorize('student'),
+  SubmissionController.sanityCheck
+);
+
 // 2. Nộp bài chính thức (Submit Final - chỉ cho student)
 router.post(
   '/:assignmentId/submit-final',
