@@ -50,6 +50,9 @@ const createClassSchema = z.object({
   subject_id: z.string().uuid("ID môn học không hợp lệ"),
   lecturer_id: z.string().uuid("ID giảng viên không hợp lệ"),
   max_students: z.coerce.number().int().min(1, "Sĩ số tối đa phải lớn hơn 0").max(500).default(30),
+  schedule_text: z.string().trim().max(255).optional(),
+  start_date: z.string().trim().optional(),
+  total_slots: z.coerce.number().int().min(1).max(60).default(20).optional(),
 });
 
 const addClassStudentSchema = z.object({

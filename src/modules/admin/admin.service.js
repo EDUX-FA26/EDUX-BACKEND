@@ -174,7 +174,7 @@ const AdminService = {
 
   /**
    * Import dữ liệu Lớp học ĐÃ ĐƯỢC XẾP SẴN
-   * (Gồm sinh viên, môn học, kỳ học, ngành, giảng viên)
+   * (Gồm sinh viên, môn học, kỳ học, ngành, giảng viên, lịch slot học theo ngày giờ)
    */
   async importExcelData(fileBuffer) {
     const workbook = new ExcelJS.Workbook();
@@ -185,31 +185,65 @@ const AdminService = {
       throw Object.assign(new Error("File Excel không hợp lệ"), { status: 400 });
     }
 
+    // Kiểm tra nếu có sheet phụ "Slots" hoặc "Lịch Học" định nghĩa từng buổi học cụ thể
+    const explicitSlotsByClass = {};
+    const slotSheet = workbook.worksheets.find((ws, idx) =>
+      idx > 0 && /slot|lịch|lich|session/i.test(ws.name || "")
+    );
+    if (slotSheet) {
+      slotSheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          const classCode = row.getCell(1).value?.toString().trim()?.toUpperCase();
+          const slotNo = Number(row.getCell(2).value) || rowNumber - 1;
+          const dateVal = row.getCell(3).value;
+          const timeVal = row.getCell(4).value?.toString().trim();
+          const titleVal = row.getCell(5).value?.toString().trim();
+          const contentVal = row.getCell(6).value?.toString().trim();
+          if (classCode) {
+            if (!explicitSlotsByClass[classCode]) explicitSlotsByClass[classCode] = [];
+            explicitSlotsByClass[classCode].push({
+              slot_number: slotNo,
+              date: dateVal,
+              time: timeVal,
+              title: titleVal,
+              content: contentVal,
+            });
+          }
+        }
+      });
+    }
+
     const records = [];
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber > 1) { // Bỏ qua dòng tiêu đề
-        // Cấu trúc dự kiến (10 cột):
+        // Cấu trúc (10 cột chuẩn + 3 cột Slot ngày giờ tùy chọn):
         // 1: Mã Sinh Viên
         // 2: Tên Sinh Viên
         // 3: Email Sinh Viên
-        // 4: Mã Ngành (Major)
+        // 4: Mã Ngành / Khoa (Major)
         // 5: Kỳ Học (Term/Semester)
         // 6: Mã Lớp (Class Code)
         // 7: Mã Môn Học (Subject Code)
         // 8: Mã Giảng Viên
         // 9: Tên Giảng Viên
         // 10: Email Giảng Viên
+        // 11: Lịch / Ca Slot Học (VD: "T3 (09:30-11:45) • T5 (07:00-09:15)" hoặc "08/09/2026 09:30-11:45; 10/09/2026 07:00-09:15")
+        // 12: Ngày Bắt Đầu Học (VD: "08/09/2026")
+        // 13: Số Buổi / Tổng Slot (VD: 20)
 
         const studentCode = row.getCell(1).value?.toString().trim();
         const studentName = row.getCell(2).value?.toString().trim();
         const studentEmail = row.getCell(3).value?.toString().trim();
         const major = row.getCell(4).value?.toString().trim();
         const semester = row.getCell(5).value?.toString().trim();
-        const classCode = row.getCell(6).value?.toString().trim();
-        const subjectCode = row.getCell(7).value?.toString().trim();
+        const classCode = row.getCell(6).value?.toString().trim()?.toUpperCase();
+        const subjectCode = row.getCell(7).value?.toString().trim()?.toUpperCase();
         const lecturerCode = row.getCell(8).value?.toString().trim();
         const lecturerName = row.getCell(9).value?.toString().trim();
         const lecturerEmail = row.getCell(10).value?.toString().trim();
+        const slotSchedule = row.getCell(11).value?.toString().trim();
+        const startDate = row.getCell(12).value;
+        const totalSlots = row.getCell(13).value;
 
         if (studentCode && classCode && subjectCode) {
           records.push({
@@ -222,7 +256,11 @@ const AdminService = {
             subjectCode,
             lecturerCode: lecturerCode || 'CHUA_XEP',
             lecturerName: lecturerName || lecturerCode || 'Chưa phân công',
-            lecturerEmail: lecturerEmail || (lecturerCode ? `${lecturerCode.toLowerCase()}@fe.edu.vn` : 'dummy@fe.edu.vn')
+            lecturerEmail: lecturerEmail || (lecturerCode ? `${lecturerCode.toLowerCase()}@fe.edu.vn` : 'dummy@fe.edu.vn'),
+            slotSchedule: slotSchedule || 'T3 (09:30-11:45) • T5 (07:00-09:15)',
+            startDate: startDate || '08/09/2026',
+            totalSlots: Number(totalSlots) || 20,
+            explicitSlots: explicitSlotsByClass[classCode] || [],
           });
         }
       }
@@ -237,7 +275,7 @@ const AdminService = {
   },
 
   /**
-   * Import dữ liệu tự động chia lớp (30 SV/lớp + phân công GV theo Khoa)
+   * Import dữ liệu tự động chia lớp (30 SV/lớp + phân công GV theo Khoa + chia Slot học theo ngày giờ)
    */
   async importAutoAssignExcelData(fileBuffer) {
     const workbook = new ExcelJS.Workbook();
@@ -253,16 +291,20 @@ const AdminService = {
 
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber > 1) {
-        // Hỗ trợ cả file 5 cột (MSSV, Họ tên, Mã khoa, Kỳ học, Mã môn)
-        // hoặc 10 cột (MSSV, Họ tên, Email, Mã khoa, Kỳ học, Mã lớp, Mã môn, Mã GV, Tên GV, Email GV)
+        // Hỗ trợ cả file 5-8 cột (MSSV, Họ tên, Mã khoa, Kỳ học, Mã môn, [Ca Slot học, Ngày bắt đầu, Số buổi])
+        // hoặc 10-13 cột (MSSV, Họ tên, Email, Mã khoa, Kỳ học, Mã lớp, Mã môn, Mã GV, Tên GV, Email GV, [Ca Slot học, Ngày bắt đầu, Số buổi])
         const c1 = row.getCell(1).value?.toString().trim();
         const c2 = row.getCell(2).value?.toString().trim();
         const c3 = row.getCell(3).value?.toString().trim();
         const c4 = row.getCell(4).value?.toString().trim();
         const c5 = row.getCell(5).value?.toString().trim();
+        const c6 = row.getCell(6).value?.toString().trim();
         const c7 = row.getCell(7).value?.toString().trim();
         const c8 = row.getCell(8).value?.toString().trim();
         const c9 = row.getCell(9).value?.toString().trim();
+        const c11 = row.getCell(11).value?.toString().trim();
+        const c12 = row.getCell(12).value;
+        const c13 = row.getCell(13).value;
 
         const isTenCol = Boolean(c3 && c3.includes('@'));
         const studentCode = c1;
@@ -270,6 +312,9 @@ const AdminService = {
         const departmentCode = isTenCol ? (c4 || 'SE') : (c3 || 'SE');
         const semesterCode = isTenCol ? (c5 || 'FALL2025') : (c4 || 'FALL2025');
         const subjectCode = isTenCol ? (c7 || `${departmentCode}101`) : (c5 || `${departmentCode}101`);
+        const slotSchedule = isTenCol ? c11 : c6;
+        const startDate = isTenCol ? c12 : c7;
+        const totalSlots = isTenCol ? c13 : c8;
 
         if (studentCode && departmentCode && semesterCode) {
           students.push({
@@ -278,6 +323,9 @@ const AdminService = {
             departmentCode: departmentCode.toUpperCase(),
             semesterCode: semesterCode.toUpperCase(),
             subjectCode: subjectCode.toUpperCase(),
+            slotSchedule: slotSchedule || null,
+            startDate: startDate || null,
+            totalSlots: Number(totalSlots) || 20,
           });
         }
 
@@ -292,7 +340,7 @@ const AdminService = {
     });
 
     const lecturerSheet = workbook.worksheets[1];
-    if (lecturerSheet) {
+    if (lecturerSheet && !/slot|lịch|lich|session/i.test(lecturerSheet.name || "")) {
       lecturerSheet.eachRow((row, rowNumber) => {
         if (rowNumber > 1) {
           const lecturerCode = row.getCell(1).value?.toString().trim();
@@ -398,6 +446,14 @@ const AdminService = {
 
   async getClassStudents(classId) {
     return await adminRepository.getClassStudents(classId);
+  },
+
+  async getClassSlots(classId) {
+    return await adminRepository.getClassSlots(classId);
+  },
+
+  async updateClassSlots(classId, payload) {
+    return await adminRepository.updateClassSlots(classId, payload);
   },
 
   async addClassStudent(classId, payload) {

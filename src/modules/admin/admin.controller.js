@@ -285,6 +285,26 @@ AdminController.getClassStudents = async (req, res, next) => {
   }
 };
 
+AdminController.getClassSlots = async (req, res, next) => {
+  try {
+    const classId = req.params.id;
+    const slots = await adminService.getClassSlots(classId);
+    res.status(200).json({ success: true, message: "Lấy danh sách slot học thành công", data: slots });
+  } catch (error) {
+    next(error);
+  }
+};
+
+AdminController.updateClassSlots = async (req, res, next) => {
+  try {
+    const classId = req.params.id;
+    const slots = await adminService.updateClassSlots(classId, req.body);
+    res.status(200).json({ success: true, message: "Cập nhật lịch và chia slot học thành công", data: slots });
+  } catch (error) {
+    next(error);
+  }
+};
+
 AdminController.addClassStudent = async (req, res, next) => {
   try {
     const classId = req.params.id;
