@@ -32,4 +32,9 @@ module.exports = {
     if (!row) throw problem(404, 'Active subject not found');
     return row;
   },
+  async restore(id) {
+    const row = await repository.restore(id);
+    if (!row) throw problem(404, 'Subject not found');
+    return row;
+  },
 };

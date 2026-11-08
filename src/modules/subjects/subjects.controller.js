@@ -13,4 +13,5 @@ module.exports = {
   create: wrap(async (req, res) => res.status(201).json({ success: true, data: await service.create(req.body) })),
   update: wrap(async (req, res) => res.json({ success: true, data: await service.update(req.params.id, req.body) })),
   remove: wrap(async (req, res) => res.json({ success: true, data: await service.remove(req.params.id) })),
+  restore: wrap(async (req, res) => res.json({ success: true, data: await service.restore(req.params.id) })),
 };

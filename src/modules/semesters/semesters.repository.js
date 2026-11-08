@@ -3,7 +3,7 @@ const { pool, withTransaction } = require('../../config/db.config');
 const columns = ['code', 'name', 'academic_year', 'start_date', 'end_date'];
 
 const SemestersRepository = {
-  async list({ page, limit, search, is_active, is_current }) {
+  async list({ page, limit, search, is_active, is_current, is_locked }) {
     const values = [];
     const where = [];
     if (search) {
@@ -18,18 +18,31 @@ const SemestersRepository = {
       values.push(is_current === 'true');
       where.push(`is_current = $${values.length}`);
     }
+    if (is_locked !== undefined) {
+      values.push(is_locked === 'true');
+      where.push(`is_locked = $${values.length}`);
+    }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM semesters ${clause}`, values);
     values.push(limit, (page - 1) * limit);
     const rows = await pool.query(
-      `SELECT * FROM semesters ${clause} ORDER BY start_date DESC, id LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      `SELECT semesters.*,
+              (SELECT COUNT(*)::int FROM classes c WHERE c.semester_id = semesters.id AND c.is_active = true) AS class_count,
+              (SELECT COUNT(DISTINCT cm.student_id)::int FROM classes c JOIN class_members cm ON cm.class_id = c.id WHERE c.semester_id = semesters.id AND c.is_active = true AND (cm.status IS NULL OR cm.status = 'active')) AS student_count
+       FROM semesters ${clause} ORDER BY start_date DESC, id LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values
     );
     return { data: rows.rows, total: count.rows[0].total };
   },
 
   async findById(id, client = pool) {
-    const { rows } = await client.query('SELECT * FROM semesters WHERE id = $1', [id]);
+    const { rows } = await client.query(
+      `SELECT semesters.*,
+              (SELECT COUNT(*)::int FROM classes c WHERE c.semester_id = semesters.id AND c.is_active = true) AS class_count,
+              (SELECT COUNT(DISTINCT cm.student_id)::int FROM classes c JOIN class_members cm ON cm.class_id = c.id WHERE c.semester_id = semesters.id AND c.is_active = true AND (cm.status IS NULL OR cm.status = 'active')) AS student_count
+       FROM semesters WHERE id = $1`,
+      [id]
+    );
     return rows[0];
   },
 
@@ -73,6 +86,12 @@ const SemestersRepository = {
         if (!semester.is_active) return { error: 'SEMESTER_CLOSED' };
         const result = await client.query(
           'UPDATE semesters SET is_active = false, is_current = false, updated_at = NOW() WHERE id = $1 RETURNING *', [id]
+        );
+        return { data: result.rows[0] };
+      }
+      if (action === 'reopen') {
+        const result = await client.query(
+          'UPDATE semesters SET is_active = true, updated_at = NOW() WHERE id = $1 RETURNING *', [id]
         );
         return { data: result.rows[0] };
       }
