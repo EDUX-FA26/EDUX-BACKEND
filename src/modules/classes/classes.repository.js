@@ -173,7 +173,7 @@ const ClassesRepository = {
         id, 
         session_no as slot_number, 
         learning_date as date, 
-        '12:30 - 14:45' as time, 
+        COALESCE(slot_time, '09:30-11:45') as time, 
         title, 
         note as content
       FROM sessions 

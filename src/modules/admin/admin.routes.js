@@ -63,6 +63,10 @@ router.get("/lecturers", adminController.getLecturers);
 router.get("/classes/:id/students", adminController.getClassStudents);
 router.post("/classes/:id/students", validate(addClassStudentSchema), adminController.addClassStudent);
 
+// Lấy và cập nhật danh sách Slot học (20 sessions) của lớp
+router.get("/classes/:id/slots", adminController.getClassSlots);
+router.put("/classes/:id/slots", adminController.updateClassSlots);
+
 // Xóa sinh viên khỏi lớp học (SRS 3.7.7)
 router.delete("/classes/:id/students/:studentId", adminController.removeClassStudent);
 router.delete("/classes/:id/members/:studentId", adminController.removeClassStudent);
