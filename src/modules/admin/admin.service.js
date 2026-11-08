@@ -236,8 +236,153 @@ const AdminService = {
     return await adminRepository.processPreAssignedClassesImport(records);
   },
 
+  /**
+   * Import dữ liệu tự động chia lớp (30 SV/lớp + phân công GV theo Khoa)
+   */
+  async importAutoAssignExcelData(fileBuffer) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(fileBuffer);
+
+    const sheet = workbook.worksheets[0];
+    if (!sheet) {
+      throw Object.assign(new Error("File Excel không hợp lệ"), { status: 400 });
+    }
+
+    const students = [];
+    const lecturers = [];
+
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber > 1) {
+        // Hỗ trợ cả file 5 cột (MSSV, Họ tên, Mã khoa, Kỳ học, Mã môn)
+        // hoặc 10 cột (MSSV, Họ tên, Email, Mã khoa, Kỳ học, Mã lớp, Mã môn, Mã GV, Tên GV, Email GV)
+        const c1 = row.getCell(1).value?.toString().trim();
+        const c2 = row.getCell(2).value?.toString().trim();
+        const c3 = row.getCell(3).value?.toString().trim();
+        const c4 = row.getCell(4).value?.toString().trim();
+        const c5 = row.getCell(5).value?.toString().trim();
+        const c7 = row.getCell(7).value?.toString().trim();
+        const c8 = row.getCell(8).value?.toString().trim();
+        const c9 = row.getCell(9).value?.toString().trim();
+
+        const isTenCol = Boolean(c3 && c3.includes('@'));
+        const studentCode = c1;
+        const fullName = c2 || c1;
+        const departmentCode = isTenCol ? (c4 || 'SE') : (c3 || 'SE');
+        const semesterCode = isTenCol ? (c5 || 'FALL2025') : (c4 || 'FALL2025');
+        const subjectCode = isTenCol ? (c7 || `${departmentCode}101`) : (c5 || `${departmentCode}101`);
+
+        if (studentCode && departmentCode && semesterCode) {
+          students.push({
+            studentCode,
+            fullName,
+            departmentCode: departmentCode.toUpperCase(),
+            semesterCode: semesterCode.toUpperCase(),
+            subjectCode: subjectCode.toUpperCase(),
+          });
+        }
+
+        if (isTenCol && c8) {
+          lecturers.push({
+            lecturerCode: c8,
+            fullName: c9 || c8,
+            departmentCode: (c4 || 'SE').toUpperCase(),
+          });
+        }
+      }
+    });
+
+    const lecturerSheet = workbook.worksheets[1];
+    if (lecturerSheet) {
+      lecturerSheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          const lecturerCode = row.getCell(1).value?.toString().trim();
+          const fullName = row.getCell(2).value?.toString().trim();
+          const departmentCode = row.getCell(3).value?.toString().trim();
+          if (lecturerCode && departmentCode) {
+            lecturers.push({
+              lecturerCode,
+              fullName: fullName || lecturerCode,
+              departmentCode: departmentCode.toUpperCase(),
+            });
+          }
+        }
+      });
+    }
+
+    if (students.length === 0) {
+      throw Object.assign(new Error("Sheet không có dữ liệu sinh viên hợp lệ để tự động xếp lớp"), { status: 400 });
+    }
+
+    return await adminRepository.processAutoAssignExcelImport(students, lecturers);
+  },
+
+  /**
+   * Quản lý Khoa / Bộ môn (Departments)
+   */
+  async getAllDepartments() {
+    return await adminRepository.getAllDepartments();
+  },
+
+  async createDepartment(data) {
+    try {
+      return await adminRepository.createDepartment(data);
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(new Error("Mã khoa đã tồn tại"), { status: 409 });
+      }
+      throw error;
+    }
+  },
+
+  async updateDepartment(id, data) {
+    try {
+      const updated = await adminRepository.updateDepartment(id, data);
+      if (!updated) {
+        throw Object.assign(new Error("Không tìm thấy khoa"), { status: 404 });
+      }
+      return updated;
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(new Error("Mã khoa đã tồn tại"), { status: 409 });
+      }
+      throw error;
+    }
+  },
+
+  async deleteDepartment(id) {
+    const result = await adminRepository.deleteDepartment(id);
+    if (!result) {
+      throw Object.assign(new Error("Không tìm thấy khoa"), { status: 404 });
+    }
+    return result;
+  },
+
+  async createClass(data) {
+    try {
+      return await adminRepository.createClass(data);
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(new Error("Mã lớp đã tồn tại trong học kỳ và môn học này"), { status: 409 });
+      }
+      if (error.code === "23503") {
+        throw Object.assign(new Error("Học kỳ, môn học hoặc giảng viên không tồn tại"), { status: 400 });
+      }
+      throw error;
+    }
+  },
+
   async updateClass(id, data) {
-    return await adminRepository.updateClass(id, data);
+    try {
+      return await adminRepository.updateClass(id, data);
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(new Error("Mã lớp đã tồn tại trong học kỳ và môn học này"), { status: 409 });
+      }
+      if (error.code === "23503") {
+        throw Object.assign(new Error("Học kỳ, môn học hoặc giảng viên không hợp lệ"), { status: 400 });
+      }
+      throw error;
+    }
   },
 
   async deleteClass(id) {
@@ -253,6 +398,10 @@ const AdminService = {
 
   async getClassStudents(classId) {
     return await adminRepository.getClassStudents(classId);
+  },
+
+  async addClassStudent(classId, payload) {
+    return await adminRepository.addClassStudent(classId, payload);
   },
 
   async getLecturers() {

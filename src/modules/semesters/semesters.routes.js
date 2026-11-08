@@ -76,6 +76,13 @@ router.post(
   controller.close
 );
 
+// Reopen semester
+router.post(
+  '/:id/reopen',
+  validateUuidParam,
+  controller.reopen
+);
+
 // Lock semester
 router.post(
   '/:id/lock',

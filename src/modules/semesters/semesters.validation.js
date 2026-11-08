@@ -22,6 +22,7 @@ const listSemesters = z.object({
   search: z.string().trim().max(100).optional(),
   is_active: z.enum(['true', 'false']).optional(),
   is_current: z.enum(['true', 'false']).optional(),
+  is_locked: z.enum(['true', 'false']).optional(),
 }).strict();
 
 module.exports = { createSemester, updateSemester, listSemesters };

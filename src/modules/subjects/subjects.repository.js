@@ -19,7 +19,9 @@ const SubjectsRepository = {
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM subjects s ${clause}`, values);
     values.push(limit, (page - 1) * limit);
     const rows = await pool.query(
-      `SELECT s.*, d.name AS department_name FROM subjects s
+      `SELECT s.*, d.name AS department_name,
+              (SELECT COUNT(*)::int FROM classes c WHERE c.subject_id = s.id AND c.is_active = true) AS class_count
+       FROM subjects s
        LEFT JOIN departments d ON d.id = s.department_id
        ${clause} ORDER BY s.name, s.id LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values
@@ -29,7 +31,9 @@ const SubjectsRepository = {
 
   async findById(id) {
     const { rows } = await pool.query(
-      `SELECT s.*, d.name AS department_name FROM subjects s
+      `SELECT s.*, d.name AS department_name,
+              (SELECT COUNT(*)::int FROM classes c WHERE c.subject_id = s.id AND c.is_active = true) AS class_count
+       FROM subjects s
        LEFT JOIN departments d ON d.id = s.department_id WHERE s.id = $1`, [id]
     );
     return rows[0];
@@ -57,6 +61,13 @@ const SubjectsRepository = {
   async remove(id) {
     const { rows } = await pool.query(
       'UPDATE subjects SET is_active = false, updated_at = NOW() WHERE id = $1 AND is_active = true RETURNING *', [id]
+    );
+    return rows[0];
+  },
+
+  async restore(id) {
+    const { rows } = await pool.query(
+      'UPDATE subjects SET is_active = true, updated_at = NOW() WHERE id = $1 RETURNING *', [id]
     );
     return rows[0];
   },

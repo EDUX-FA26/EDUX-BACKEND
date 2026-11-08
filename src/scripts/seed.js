@@ -53,6 +53,7 @@ async function runSeed() {
             end_date TIMESTAMP WITH TIME ZONE NOT NULL,
             is_current BOOLEAN DEFAULT FALSE,
             is_active BOOLEAN DEFAULT TRUE,
+            is_locked BOOLEAN NOT NULL DEFAULT FALSE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
