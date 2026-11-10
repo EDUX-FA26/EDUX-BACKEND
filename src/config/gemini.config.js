@@ -443,8 +443,167 @@ ${studentDeclarations || "Sinh viên chưa khai báo hoặc không sử dụng A
   return sanitizeObjectStrings(parsed);
 }
 
+/**
+ * 4. Hàm chuyên dụng: Phân tích báo cáo sư phạm AI (AI Class Advisor) cho lớp học sau khi bài tập kết thúc hạn nộp
+ * @param {Object} data
+ * @param {string} data.assignmentTitle
+ * @param {string} data.assignmentDescription
+ * @param {string} data.classCode
+ * @param {string} data.subjectName
+ * @param {number} data.totalStudents
+ * @param {number} data.submittedCount
+ * @param {string} data.submissionRateText
+ * @param {string} data.avgTransparency
+ * @param {Array<Object>} data.auditSummaries
+ */
+async function generateClassAiAdvisoryWithGemini({
+  assignmentTitle,
+  assignmentDescription,
+  classCode,
+  subjectName,
+  totalStudents,
+  submittedCount,
+  submissionRateText,
+  avgTransparency,
+  auditSummaries = []
+}) {
+  const apiKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY_MISSING: Chưa cấu hình GEMINI_API_KEY_AUDIT hoặc GEMINI_API_KEY trong file .env");
+  }
+
+  const ai = await getGeminiClient(apiKey);
+
+  const systemInstruction = `Bạn là Chuyên gia Phân tích Giáo dục & Trợ lý Sư phạm thông minh (AI Lecture Advisor) cho giảng viên công nghệ phần mềm.
+
+NHIỆM VỤ:
+Đọc danh sách dữ liệu tổng hợp bài nộp và báo cáo audit của sinh viên trong một lớp học cụ thể sau khi hết hạn nộp bài. Từ đó, tiến hành gom nhóm (cluster) các lỗi phổ biến và đưa ra bản tóm tắt tình hình kèm theo lời khuyên sư phạm mang tính thực tế để giảng viên định hướng nội dung cho buổi học tiếp theo.
+
+NGUYÊN TẮC PHẢN HỒI:
+- BẮT BUỘC sử dụng Tiếng Việt chuẩn có dấu (UTF-8), văn phong học thuật, chuyên nghiệp, hỗ trợ sư phạm.
+- KHÔNG liệt kê chi tiết từng sinh viên một cách dài dòng, mà hãy tập trung vào "bức tranh toàn cảnh" (thống kê vĩ mô và xu hướng lỗi chung của cả lớp).
+- Đưa ra đề xuất cụ thể, hành động được ngay (Ví dụ: đề xuất dành bao nhiêu phút đầu giờ, demo lại chủ đề kỹ thuật nào).
+
+ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC TRẢ VỀ JSON FORMAT THEO SCHEMA):
+{
+  "class_overview": {
+    "submission_rate_text": "string",
+    "avg_ai_transparency": "string"
+  },
+  "common_error_clusters": [
+    "string"
+  ],
+  "next_slot_recommendation": "string"
+}`;
+
+  const prompt = `
+Dưới đây là dữ liệu tổng hợp bài nộp và báo cáo kiểm toán AI của lớp học:
+- Lớp học: ${classCode || "N/A"} (${subjectName || "N/A"})
+- Bài tập: ${assignmentTitle || "Bài tập"}
+- Yêu cầu / Mô tả bài tập: ${assignmentDescription || "N/A"}
+- Tổng số sinh viên trong lớp: ${totalStudents || 0}
+- Số lượng sinh viên đã nộp: ${submittedCount || 0}
+- Tỷ lệ nộp bài tham khảo: ${submissionRateText || `${submittedCount}/${totalStudents} sinh viên đã nộp bài`}
+- Mức độ minh bạch AI trung bình tham khảo: ${avgTransparency || "N/A"}
+
+BÁO CÁO AUDIT & ĐÁNH GIÁ CỦA CÁC BÀI NỘP TRONG LỚP:
+${auditSummaries && auditSummaries.length > 0 
+  ? auditSummaries.map((s, idx) => `[Sinh viên ${idx + 1}]: Điểm minh bạch AI: ${s.transparency || 'N/A'}, Mức độ rủi ro: ${s.risk_level || 'N/A'}, Nhận xét audit/lỗi: ${s.summary || s.verdict || 'Không có mô tả'}`).join('\n')
+  : "Chưa có báo cáo audit chi tiết hoặc lớp chưa có dữ liệu kiểm toán đầy đủ."}
+
+Hãy gom nhóm các cụm lỗi kỹ thuật và phương pháp tiếp cận phổ biến nhất của sinh viên, đồng thời đưa ra lời khuyên thiết thực cho giảng viên trong buổi học kế tiếp.`;
+
+  const advisoryResponseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      class_overview: {
+        type: Type.OBJECT,
+        properties: {
+          submission_rate_text: {
+            type: Type.STRING,
+            description: "Mô tả tỷ lệ nộp bài, ví dụ: '45/48 sinh viên đã nộp bài (93.7%)'"
+          },
+          avg_ai_transparency: {
+            type: Type.STRING,
+            description: "Chỉ số minh bạch AI trung bình, ví dụ: '78% (Mức độ minh bạch khá tốt)'"
+          }
+        },
+        required: ["submission_rate_text", "avg_ai_transparency"]
+      },
+      common_error_clusters: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Danh sách cụm lỗi kỹ thuật hoặc điểm mù chung của lớp"
+      },
+      next_slot_recommendation: {
+        type: Type.STRING,
+        description: "Lời khuyên sư phạm cụ thể cho buổi học (slot) tiếp theo"
+      }
+    },
+    required: ["class_overview", "common_error_clusters", "next_slot_recommendation"]
+  };
+
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    responseMimeType: "application/json",
+    responseSchema: advisoryResponseSchema,
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_ADVISOR || "gemini-1.5-flash";
+  const fallbackModel = process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+  let response;
+  const callModel = async (modelName) => {
+    return await ai.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: generateConfig,
+    });
+  };
+
+  try {
+    response = await callModel(primaryModel);
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404 || String(err.message || '').includes('not found') || String(err.message || '').includes('no longer available'))) {
+      console.warn(`[Gemini Class Advisor] Model ${primaryModel} gặp lỗi (${err.status || err.message}), tự động chuyển sang ${fallbackModel}...`);
+      try {
+        response = await callModel(fallbackModel);
+      } catch (fallbackErr) {
+        if (fallbackErr.status === 503 || fallbackErr.status === 429) {
+          // Retry once sau 1s nếu gặp spike 503/429
+          await new Promise((r) => setTimeout(r, 1200));
+          response = await callModel(fallbackModel);
+        } else {
+          throw fallbackErr;
+        }
+      }
+    } else if (err.status === 503 || err.status === 429) {
+      await new Promise((r) => setTimeout(r, 1200));
+      response = await callModel(primaryModel);
+    } else {
+      throw err;
+    }
+  }
+
+  const parsed = JSON.parse(response.text);
+  return sanitizeObjectStrings(parsed);
+}
+
 module.exports = {
   askGemini,
   evaluateRubricWithGemini,
   preSubmissionSanityCheckWithGemini,
+  generateClassAiAdvisoryWithGemini,
 };
