@@ -9,6 +9,7 @@ const { getClassesQuery, createClass, updateClass, getMembersQuery } = require('
 const classHealthController = require(
   '../class-health/classHealth.controller'
 );
+const classAiAdvisorController = require('./classAiAdvisor.controller');
 const upload = multer({ storage: multer.memoryStorage() });
 
 const authorize = (...roles) => (req, res, next) => {
@@ -34,6 +35,23 @@ router.post(
   '/:id/health/notify',
   authorize('admin', 'lecturer'),
   classHealthController.sendBulkNotification
+);
+
+// ==========================================
+// AI CLASS ADVISOR (UC-LEC-AI-ADVISOR)
+// Admin / Lecturer only
+// ==========================================
+
+router.get(
+  '/:id/ai-advisor',
+  authorize('admin', 'lecturer'),
+  classAiAdvisorController.getAiAdvisor
+);
+
+router.post(
+  '/:id/ai-advisor/refresh',
+  authorize('admin', 'lecturer'),
+  classAiAdvisorController.refreshAiAdvisor
 );
 
 // Classes CRUD

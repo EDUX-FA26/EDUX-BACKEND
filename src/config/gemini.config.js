@@ -443,8 +443,185 @@ ${studentDeclarations || "Sinh viên chưa khai báo hoặc không sử dụng A
   return sanitizeObjectStrings(parsed);
 }
 
+/**
+ * 4. Hàm chuyên dụng: Phân tích báo cáo sư phạm AI (AI Class Advisor) cho lớp học sau khi bài tập kết thúc hạn nộp
+ * @param {Object} data
+ * @param {string} data.assignmentTitle
+ * @param {string} data.assignmentDescription
+ * @param {string} data.classCode
+ * @param {string} data.subjectName
+ * @param {number} data.totalStudents
+ * @param {number} data.submittedCount
+ * @param {string} data.submissionRateText
+ * @param {string} data.avgTransparency
+ * @param {Array<Object>} data.auditSummaries
+ */
+async function generateClassAiAdvisoryWithGemini({
+  assignmentTitle,
+  assignmentDescription,
+  classCode,
+  subjectName,
+  totalStudents,
+  submittedCount,
+  submissionRateText,
+  avgTransparency,
+  auditSummaries = []
+}) {
+  const apiKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY_MISSING: Chưa cấu hình GEMINI_API_KEY_AUDIT hoặc GEMINI_API_KEY trong file .env");
+  }
+
+  const ai = await getGeminiClient(apiKey);
+
+  const systemInstruction = `Bạn là Chuyên gia Phân tích Giáo dục & Trợ lý Sư phạm thông minh (AI Lecture Advisor) cho giảng viên công nghệ phần mềm.
+
+QUY TẮC PHÂN TÍCH THEO DỮ LIỆU THỰC TẾ:
+Hãy tính toán tỷ lệ nộp bài = (total_students_submitted / total_students_enrolled).
+
+TRƯỜNG HỢP 1: TỶ LỆ NỘP BÀI THẤP (< 50% hoặc < 5 bài nộp) -> BẬT "CHẾ ĐỘ ĐÔN ĐỐC TIẾN ĐỘ" (mode: "PROGRESS_REMINDER"):
+- Tuyệt đối KHÔNG lặp đi lặp lại các câu vô nghĩa như "chưa có dữ liệu", "chưa ghi nhận lỗi", "N/A".
+- class_overview: 
+  + submission_rate_text: Nêu rõ tỷ lệ nộp bài thực tế.
+  + avg_ai_transparency: Nếu không có điểm audit thực tế từ sinh viên đã nộp -> BẮT BUỘC TRẢ VỀ null. TUYỆT ĐỐI KHÔNG sinh ra text kiểu "Đang cập nhật", "N/A", "Chưa có dữ liệu". Nếu có điểm audit thực tế, trả về chuỗi điểm phần trăm.
+- common_error_clusters: Chỉ trả về 1 thông điệp súc tích: "Tiến độ nộp bài còn chậm; chưa đủ mẫu dữ liệu audit để tổng hợp cụm lỗi kỹ thuật sâu."
+- next_slot_recommendation: Đưa ra lời khuyên thiết thực: Dành 10-15 phút đầu giờ rà soát khó khăn, nhắc nhở hạn chót và hướng dẫn lại sinh viên quy trình khai báo AI Audit log trước khi nộp.
+
+TRƯỜNG HỢP 2: TỶ LỆ NỘP BÀI ĐỦ LỚN (>= 50%) -> BẬT "CHẾ ĐỘ PHÂN TÍCH CHUYÊN SÂU" (mode: "DEEP_TECHNICAL"):
+- Tách bạch hoàn toàn giữa tiến độ nộp bài và lỗi kỹ thuật.
+- class_overview:
+  + avg_ai_transparency: Trả về chuỗi điểm minh bạch trung bình thực tế nếu có; nếu không có điểm audit -> trả về null.
+- common_error_clusters: Chỉ ra các cụm lỗi lập trình/kiến trúc cụ thể từ báo cáo kiểm toán (ví dụ: quên hash mật khẩu BCrypt, thiếu try-catch ở Service, cấu hình ORM sai, thiếu validation).
+- next_slot_recommendation (Gợi ý Sư phạm Chữa lỗi chung): 
+  + Nếu phát hiện sinh viên cùng gặp một lỗi kỹ thuật giống nhau hoặc liên quan: AI BẮT BUỘC gợi ý giảng viên demo lại kiến thức trọng tâm đó (chỉ rõ thời lượng đầu giờ, ví dụ: 15-20 phút live-coding giải pháp) để chữa dứt điểm lỗi chung cho sinh viên.
+
+ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC TRẢ VỀ JSON FORMAT THEO SCHEMA):
+{
+  "mode": "PROGRESS_REMINDER" | "DEEP_TECHNICAL",
+  "class_overview": {
+    "submission_rate_text": "string (VD: 1/3 sinh viên đã nộp bài (33.3%))",
+    "avg_ai_transparency": null // hoặc string điểm số nếu có data thật
+  },
+  "common_error_clusters": [
+    "string"
+  ],
+  "next_slot_recommendation": "string"
+}`;
+
+  const prompt = `
+Dưới đây là dữ liệu tổng hợp bài nộp và báo cáo kiểm toán AI của lớp học (100% dữ liệu thực từ database):
+- Lớp học: ${classCode || "N/A"} (${subjectName || "N/A"})
+- Bài tập: ${assignmentTitle || "Bài tập"}
+- Yêu cầu / Mô tả bài tập: ${assignmentDescription || "N/A"}
+- Tổng số sinh viên trong lớp (total_students_enrolled): ${totalStudents || 0}
+- Số lượng sinh viên đã nộp (total_students_submitted): ${submittedCount || 0}
+- Tỷ lệ nộp bài thực tế: ${submissionRateText || `${submittedCount}/${totalStudents} sinh viên đã nộp bài`}
+- Mức độ minh bạch AI trung bình thực tế: ${avgTransparency ? avgTransparency : "Không có (chưa có bài nộp nào có điểm audit -> BẮT BUỘC trả về avg_ai_transparency: null)"}
+
+BÁO CÁO AUDIT & ĐÁNH GIÁ CỦA CÁC BÀI NỘP TRONG LỚP:
+${auditSummaries && auditSummaries.length > 0 
+  ? auditSummaries.map((s, idx) => `[Sinh viên ${idx + 1} - ${s.student_name}]: Điểm minh bạch AI: ${s.transparency || 'Chưa có điểm'}, Mức độ rủi ro: ${s.risk_level || 'Chưa đánh giá'}, Nhận xét audit/lỗi: ${s.summary || 'Không có mô tả'}`).join('\n')
+  : "Chưa có bài nộp nào hoặc chưa có báo cáo audit chi tiết."}
+
+Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_REMINDER" hay "DEEP_TECHNICAL") và trả về JSON theo schema.`;
+
+  const advisoryResponseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      mode: {
+        type: Type.STRING,
+        enum: ["PROGRESS_REMINDER", "DEEP_TECHNICAL"],
+        description: "Chế độ: PROGRESS_REMINDER khi tỷ lệ nộp < 50% hoặc < 5 bài nộp; DEEP_TECHNICAL khi tỷ lệ nộp >= 50%"
+      },
+      class_overview: {
+        type: Type.OBJECT,
+        properties: {
+          submission_rate_text: {
+            type: Type.STRING,
+            description: "Mô tả tỷ lệ nộp bài, ví dụ: '1/3 sinh viên đã nộp bài (33.3%)' hoặc '45/48 sinh viên đã nộp bài (93.7%)'"
+          },
+          avg_ai_transparency: {
+            type: Type.STRING,
+            nullable: true,
+            description: "Chỉ số minh bạch AI trung bình nếu có dữ liệu audit thực tế, hoặc null nếu chưa có bài nộp nào có điểm audit. TUYỆT ĐỐI KHÔNG trả về 'Đang cập nhật' hay 'N/A'."
+          }
+        },
+        required: ["submission_rate_text"]
+      },
+      common_error_clusters: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Danh sách cụm lỗi kỹ thuật hoặc thông điệp tiến độ"
+      },
+      next_slot_recommendation: {
+        type: Type.STRING,
+        description: "Lời khuyên sư phạm cụ thể cho buổi học (slot) tiếp theo"
+      }
+    },
+    required: ["mode", "class_overview", "common_error_clusters", "next_slot_recommendation"]
+  };
+
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    responseMimeType: "application/json",
+    responseSchema: advisoryResponseSchema,
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_ADVISOR || "gemini-1.5-flash";
+  const fallbackModel = process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+  let response;
+  const callModel = async (modelName) => {
+    return await ai.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: generateConfig,
+    });
+  };
+
+  try {
+    response = await callModel(primaryModel);
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404 || String(err.message || '').includes('not found') || String(err.message || '').includes('no longer available'))) {
+      console.warn(`[Gemini Class Advisor] Model ${primaryModel} gặp lỗi (${err.status || err.message}), tự động chuyển sang ${fallbackModel}...`);
+      try {
+        response = await callModel(fallbackModel);
+      } catch (fallbackErr) {
+        if (fallbackErr.status === 503 || fallbackErr.status === 429) {
+          // Retry once sau 1s nếu gặp spike 503/429
+          await new Promise((r) => setTimeout(r, 1200));
+          response = await callModel(fallbackModel);
+        } else {
+          throw fallbackErr;
+        }
+      }
+    } else if (err.status === 503 || err.status === 429) {
+      await new Promise((r) => setTimeout(r, 1200));
+      response = await callModel(primaryModel);
+    } else {
+      throw err;
+    }
+  }
+
+  const parsed = JSON.parse(response.text);
+  return sanitizeObjectStrings(parsed);
+}
+
 module.exports = {
   askGemini,
   evaluateRubricWithGemini,
   preSubmissionSanityCheckWithGemini,
+  generateClassAiAdvisoryWithGemini,
 };
