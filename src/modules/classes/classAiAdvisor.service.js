@@ -38,23 +38,36 @@ const ClassAiAdvisorService = {
       };
     }
 
-    const advisories = snapshots.map((row, index) => ({
-      id: row.id,
-      assignment_id: row.assignment_id,
-      assignment_title: row.assignment_title || 'Bài tập',
-      is_latest: index === 0,
-      generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
-      class_overview: {
-        submission_rate_text: row.submission_rate_text || 'Chưa có thông tin nộp bài',
-        avg_ai_transparency: row.avg_ai_transparency || 'N/A'
-      },
-      common_error_clusters: Array.isArray(row.common_error_clusters)
-        ? row.common_error_clusters
-        : (typeof row.common_error_clusters === 'string'
-          ? JSON.parse(row.common_error_clusters)
-          : []),
-      next_slot_recommendation: row.next_slot_recommendation || ''
-    }));
+    const advisories = snapshots.map((row, index) => {
+      const mode = row.mode || row.raw_payload?.mode || 'DEEP_TECHNICAL';
+      const rawTransparency = row.avg_ai_transparency || row.raw_payload?.class_overview?.avg_ai_transparency;
+      const cleanTransparency = (
+        rawTransparency &&
+        rawTransparency !== 'null' &&
+        rawTransparency !== 'N/A' &&
+        !rawTransparency.includes('Đang cập nhật') &&
+        !rawTransparency.includes('Chưa có dữ liệu')
+      ) ? rawTransparency : null;
+
+      return {
+        id: row.id,
+        assignment_id: row.assignment_id,
+        assignment_title: row.assignment_title || 'Bài tập',
+        is_latest: index === 0,
+        mode,
+        generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
+        class_overview: {
+          submission_rate_text: row.submission_rate_text || 'Chưa có thông tin nộp bài',
+          avg_ai_transparency: cleanTransparency
+        },
+        common_error_clusters: Array.isArray(row.common_error_clusters)
+          ? row.common_error_clusters
+          : (typeof row.common_error_clusters === 'string'
+            ? JSON.parse(row.common_error_clusters)
+            : []),
+        next_slot_recommendation: row.next_slot_recommendation || ''
+      };
+    });
 
     return {
       has_data: true,
@@ -87,23 +100,36 @@ const ClassAiAdvisorService = {
     // Lấy lại danh sách snapshot cập nhật mới nhất
     const snapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
 
-    const advisories = snapshots.map((row, index) => ({
-      id: row.id,
-      assignment_id: row.assignment_id,
-      assignment_title: row.assignment_title || 'Bài tập',
-      is_latest: index === 0,
-      generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
-      class_overview: {
-        submission_rate_text: row.submission_rate_text || 'Chưa có thông tin nộp bài',
-        avg_ai_transparency: row.avg_ai_transparency || 'N/A'
-      },
-      common_error_clusters: Array.isArray(row.common_error_clusters)
-        ? row.common_error_clusters
-        : (typeof row.common_error_clusters === 'string'
-          ? JSON.parse(row.common_error_clusters)
-          : []),
-      next_slot_recommendation: row.next_slot_recommendation || ''
-    }));
+    const advisories = snapshots.map((row, index) => {
+      const mode = row.mode || row.raw_payload?.mode || 'DEEP_TECHNICAL';
+      const rawTransparency = row.avg_ai_transparency || row.raw_payload?.class_overview?.avg_ai_transparency;
+      const cleanTransparency = (
+        rawTransparency &&
+        rawTransparency !== 'null' &&
+        rawTransparency !== 'N/A' &&
+        !rawTransparency.includes('Đang cập nhật') &&
+        !rawTransparency.includes('Chưa có dữ liệu')
+      ) ? rawTransparency : null;
+
+      return {
+        id: row.id,
+        assignment_id: row.assignment_id,
+        assignment_title: row.assignment_title || 'Bài tập',
+        is_latest: index === 0,
+        mode,
+        generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
+        class_overview: {
+          submission_rate_text: row.submission_rate_text || 'Chưa có thông tin nộp bài',
+          avg_ai_transparency: cleanTransparency
+        },
+        common_error_clusters: Array.isArray(row.common_error_clusters)
+          ? row.common_error_clusters
+          : (typeof row.common_error_clusters === 'string'
+            ? JSON.parse(row.common_error_clusters)
+            : []),
+        next_slot_recommendation: row.next_slot_recommendation || ''
+      };
+    });
 
     return {
       has_data: true,
@@ -129,17 +155,20 @@ const ClassAiAdvisorService = {
     }
 
     // 3. Tính toán tỷ lệ nộp bài
-    const submissionRatePercent = totalStudents > 0
-      ? ((submittedCount / totalStudents) * 100).toFixed(1)
-      : '0.0';
+    const numericRate = totalStudents > 0
+      ? (submittedCount / totalStudents) * 100
+      : 0;
+    const submissionRatePercent = numericRate.toFixed(1);
     const defaultRateText = `${submittedCount}/${totalStudents} sinh viên đã nộp bài (${submissionRatePercent}%)`;
+    const isLowSubmission = numericRate < 50 || submittedCount < 5;
+    const expectedMode = isLowSubmission ? 'PROGRESS_REMINDER' : 'DEEP_TECHNICAL';
 
-    // 4. Tính toán độ minh bạch AI trung bình từ kết quả audit
+    // 4. Tính toán độ minh bạch AI trung bình từ kết quả audit thực tế
     const validScores = submissions
       .map((s) => (s.transparency_score != null ? Number(s.transparency_score) : null))
       .filter((val) => val !== null && !isNaN(val) && val >= 0);
 
-    let defaultAvgTransparency = 'N/A (Chưa có dữ liệu audit)';
+    let defaultAvgTransparency = null;
     if (validScores.length > 0) {
       const avgScore = Math.round(validScores.reduce((acc, cur) => acc + cur, 0) / validScores.length);
       let transparencyLabel = 'Mức độ minh bạch khá tốt';
@@ -151,14 +180,35 @@ const ClassAiAdvisorService = {
       defaultAvgTransparency = `${avgScore}% (${transparencyLabel})`;
     }
 
-    // 5. Chuẩn bị danh sách audit summaries tóm tắt
-    const auditSummaries = submissions.map((s, idx) => ({
-      student_name: s.student_name || `Sinh viên ${idx + 1}`,
-      transparency: s.transparency_score != null ? `${s.transparency_score}%` : 'N/A',
-      risk_level: s.risk_level || 'Chưa đánh giá',
-      pattern: s.pattern || 'N/A',
-      summary: s.audit_summary || s.overall_verdict || (s.status === 'submitted' ? 'Đã nộp bài, chưa hoàn tất audit' : s.status)
-    }));
+    // 5. Chuẩn bị danh sách audit summaries tóm tắt từ dữ liệu thật
+    const auditSummaries = submissions.map((s, idx) => {
+      let declarationsSummary = '';
+      if (s.ai_declarations_note) {
+        try {
+          const parsed = typeof s.ai_declarations_note === 'string'
+            ? JSON.parse(s.ai_declarations_note)
+            : s.ai_declarations_note;
+          if (parsed?.declarations) {
+            const tools = Object.values(parsed.declarations)
+              .map(d => d.aiTool)
+              .filter(Boolean);
+            if (tools.length) {
+              declarationsSummary = `Đã khai báo AI (${[...new Set(tools)].join(', ')}).`;
+            }
+          }
+        } catch (e) {}
+      }
+
+      const issueDesc = s.audit_summary || s.overall_verdict || declarationsSummary || (s.status === 'submitted' ? 'Đã nộp bài, chưa hoàn tất audit' : `Trạng thái nộp: ${s.status}`);
+
+      return {
+        student_name: s.student_name || `Sinh viên ${idx + 1}`,
+        transparency: s.transparency_score != null ? `${s.transparency_score}%` : null,
+        risk_level: s.risk_level || null,
+        pattern: s.pattern || null,
+        summary: issueDesc
+      };
+    });
 
     // 6. Gọi Gemini AI
     let aiOutput;
@@ -176,29 +226,74 @@ const ClassAiAdvisorService = {
       });
     } catch (aiErr) {
       console.warn(`[ClassAiAdvisorService] Gemini AI failed for assignment ${assignment.id}, using heuristic fallback:`, aiErr.message);
-      aiOutput = {
-        class_overview: {
-          submission_rate_text: defaultRateText,
-          avg_ai_transparency: defaultAvgTransparency
-        },
-        common_error_clusters: [
+      if (isLowSubmission) {
+        aiOutput = {
+          mode: 'PROGRESS_REMINDER',
+          class_overview: {
+            submission_rate_text: defaultRateText,
+            avg_ai_transparency: defaultAvgTransparency
+          },
+          common_error_clusters: [
+            'Tiến độ nộp bài còn chậm; chưa đủ mẫu dữ liệu audit để tổng hợp cụm lỗi kỹ thuật sâu.'
+          ],
+          next_slot_recommendation: 'Giảng viên nên dành 10-15 phút đầu giờ để rà soát khó khăn, nhắc nhở hạn chót và hướng dẫn lại sinh viên quy trình khai báo AI Audit log trước khi nộp.'
+        };
+      } else {
+        const foundErrors = submissions
+          .map(s => s.audit_summary || s.overall_verdict)
+          .filter(Boolean);
+
+        let errorClusters = [
           `Sinh viên còn lúng túng khi xử lý các ràng buộc và luồng xử lý trong bài tập "${assignment.title}"`,
           'Thiếu cơ chế xử lý ngoại lệ tập trung và kiểm tra tính toàn vẹn dữ liệu đầu vào'
-        ],
-        next_slot_recommendation: `Giảng viên nên dành 15-20 phút đầu giờ buổi học tiếp theo để demo lại cấu trúc chuẩn của bài tập "${assignment.title}", đồng thời giải đáp trực tiếp các vướng mắc của sinh viên.`
-      };
+        ];
+
+        let remedyRecommendation = `Giảng viên nên dành 15-20 phút đầu giờ demo lại kiến thức trọng tâm của bài tập "${assignment.title}" và live-code giải pháp để củng cố kiến thức cho sinh viên.`;
+
+        if (foundErrors.length > 0) {
+          const sample = foundErrors[0];
+          if (sample.toLowerCase().includes('mật khẩu') || sample.toLowerCase().includes('bcrypt') || sample.toLowerCase().includes('plain-text')) {
+            errorClusters = [
+              'Lỗi lưu mật khẩu dạng plain-text, chưa tích hợp mã hóa BCrypt/Argon2 an toàn',
+              'Thiếu cơ chế xử lý ngoại lệ trùng lặp dữ liệu (Data Integrity Exception)'
+            ];
+            remedyRecommendation = 'Giảng viên nên dành 15-20 phút đầu giờ demo trực tiếp live-coding giải pháp mã hóa mật khẩu bằng BCrypt và cấu hình Global Exception Handler để chữa dứt điểm lỗi chung cho sinh viên.';
+          }
+        }
+
+        aiOutput = {
+          mode: 'DEEP_TECHNICAL',
+          class_overview: {
+            submission_rate_text: defaultRateText,
+            avg_ai_transparency: defaultAvgTransparency
+          },
+          common_error_clusters: errorClusters,
+          next_slot_recommendation: remedyRecommendation
+        };
+      }
     }
+
+    const finalMode = aiOutput.mode || expectedMode;
+    const finalRawTrans = aiOutput.class_overview?.avg_ai_transparency;
+    const finalAvgTransparency = (
+      finalRawTrans &&
+      finalRawTrans !== 'null' &&
+      finalRawTrans !== 'N/A' &&
+      !String(finalRawTrans).includes('Đang cập nhật') &&
+      !String(finalRawTrans).includes('Chưa có dữ liệu')
+    ) ? finalRawTrans : (defaultAvgTransparency || null);
 
     // 7. Lưu snapshot vào database
     const saved = await ClassAiAdvisorRepository.upsertAdvisory({
       class_id: classId,
       assignment_id: assignment.id,
       assignment_title: assignment.title,
+      mode: finalMode,
       submission_rate_text: aiOutput.class_overview?.submission_rate_text || defaultRateText,
-      avg_ai_transparency: aiOutput.class_overview?.avg_ai_transparency || defaultAvgTransparency,
+      avg_ai_transparency: finalAvgTransparency,
       common_error_clusters: aiOutput.common_error_clusters || [],
       next_slot_recommendation: aiOutput.next_slot_recommendation || '',
-      raw_payload: aiOutput
+      raw_payload: { ...aiOutput, mode: finalMode, class_overview: { ...aiOutput.class_overview, avg_ai_transparency: finalAvgTransparency } }
     });
 
     return saved;

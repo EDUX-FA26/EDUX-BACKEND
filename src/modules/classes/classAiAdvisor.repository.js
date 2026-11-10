@@ -12,6 +12,7 @@ const ClassAiAdvisorRepository = {
         class_id,
         assignment_id,
         assignment_title,
+        mode,
         submission_rate_text,
         avg_ai_transparency,
         common_error_clusters,
@@ -96,20 +97,34 @@ const ClassAiAdvisorRepository = {
         s.status,
         s.submitted_at,
         u.full_name AS student_name,
+        sv.files,
+        sv.note AS ai_declarations_note,
         ae.transparency_score,
         ae.risk_level,
         ae.pattern,
         ae.summary AS audit_summary,
+        ae.rubric_scores,
+        ae.evaluation_data,
         ae.overall_verdict
       FROM submissions s
-      JOIN class_members cm ON s.student_id = cm.student_id AND cm.class_id = $1
+      JOIN assignments a ON s.assignment_id = a.id AND a.class_id = $1
+      LEFT JOIN class_members cm ON s.student_id = cm.student_id AND cm.class_id = $1
       LEFT JOIN user_profiles u ON s.student_id = u.user_id
+      LEFT JOIN LATERAL (
+        SELECT files, note
+        FROM submission_versions
+        WHERE submission_id = s.id AND is_latest = TRUE
+        ORDER BY version_no DESC
+        LIMIT 1
+      ) sv ON TRUE
       LEFT JOIN LATERAL (
         SELECT
           transparency_score,
           risk_level,
           pattern,
           summary,
+          rubric_scores,
+          evaluation_data,
           overall_verdict
         FROM ai_evaluations
         WHERE submission_id = s.id
@@ -130,6 +145,7 @@ const ClassAiAdvisorRepository = {
     class_id,
     assignment_id,
     assignment_title,
+    mode = 'DEEP_TECHNICAL',
     submission_rate_text,
     avg_ai_transparency,
     common_error_clusters,
@@ -141,15 +157,17 @@ const ClassAiAdvisorRepository = {
         class_id,
         assignment_id,
         assignment_title,
+        mode,
         submission_rate_text,
         avg_ai_transparency,
         common_error_clusters,
         next_slot_recommendation,
         raw_payload,
         generated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
       ON CONFLICT (class_id, assignment_id) DO UPDATE SET
         assignment_title = EXCLUDED.assignment_title,
+        mode = EXCLUDED.mode,
         submission_rate_text = EXCLUDED.submission_rate_text,
         avg_ai_transparency = EXCLUDED.avg_ai_transparency,
         common_error_clusters = EXCLUDED.common_error_clusters,
@@ -162,6 +180,7 @@ const ClassAiAdvisorRepository = {
       class_id,
       assignment_id,
       assignment_title,
+      mode,
       submission_rate_text,
       avg_ai_transparency,
       JSON.stringify(common_error_clusters || []),

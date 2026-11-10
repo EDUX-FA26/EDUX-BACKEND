@@ -60,7 +60,10 @@ test('AI Class Advisor: GET /api/classes/:classId/ai-advisor returns valid paylo
   assert.ok(latest.assignment_title);
   assert.ok(latest.class_overview);
   assert.ok(typeof latest.class_overview.submission_rate_text === 'string');
-  assert.ok(typeof latest.class_overview.avg_ai_transparency === 'string');
+  assert.ok(
+    latest.class_overview.avg_ai_transparency === null ||
+    typeof latest.class_overview.avg_ai_transparency === 'string'
+  );
   assert.ok(Array.isArray(latest.common_error_clusters));
   assert.ok(typeof latest.next_slot_recommendation === 'string');
 
