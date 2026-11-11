@@ -12,6 +12,9 @@ const gradeSchemas = {
       .positive('maxScore phải lớn hơn 0')
       .optional(),
     feedback: z.string().max(5000).default(''),
+    rubrics: z.any().optional(),
+    isDraft: z.boolean().optional(),
+    aiCompliance: z.string().optional(),
   }),
 
   // PATCH /api/grades/:id — Update grade + feedback (partial)
@@ -20,6 +23,9 @@ const gradeSchemas = {
       score: z.number().min(0, 'score không được âm').optional(),
       maxScore: z.number().positive('maxScore phải lớn hơn 0').optional(),
       feedback: z.string().max(5000).optional(),
+      rubrics: z.any().optional(),
+      isDraft: z.boolean().optional(),
+      aiCompliance: z.string().optional(),
     })
     .refine(
       (data) => Object.keys(data).some((k) => data[k] !== undefined),
@@ -28,4 +34,3 @@ const gradeSchemas = {
 };
 
 module.exports = gradeSchemas;
-

@@ -1,17 +1,12 @@
 require("dotenv").config();
+const { GoogleGenAI, HarmCategory, HarmBlockThreshold, Type } = require("@google/genai");
 
 const clients = new Map();
 
 async function getGeminiClient(apiKey = process.env.GEMINI_API_KEY) {
   const key = apiKey || process.env.GEMINI_API_KEY;
   if (!clients.has(key)) {
-    const promise = import("@google/genai").then(
-      ({ GoogleGenAI }) =>
-        new GoogleGenAI({
-          apiKey: key
-        })
-    );
-    clients.set(key, promise);
+    clients.set(key, new GoogleGenAI({ apiKey: key }));
   }
 
   return clients.get(key);
@@ -39,7 +34,7 @@ async function askGemini(prompt) {
  */
 async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs }) {
   // Lấy SDK Type từ import động
-  const { Type } = await import("@google/genai");
+
 
   // Ưu tiên key audit riêng để tránh quá tải key chính
   const auditKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
@@ -54,38 +49,51 @@ Bạn CHỈ đánh giá các đồ án, bài tập thực hành thuộc ngành K
 
 A. NGUYÊN TẮC CHẤM ĐIỂM & ĐỐI CHIẾU AI AUDIT ĐA PHÂN RÃ (MULTI-SCOPE HEURISTICS):
 1. QUY MÔ BÀI TOÁN & TÍNH PHÂN RÃ (DECOMPOSITION BONUS):
-   - Nếu bài toán quy mô lớn (fullstack, web, app nhiều luồng, microservices) mà sinh viên biết chủ động phân rã thành các Scope kỹ thuật rõ ràng (như Backend Architecture & RESTful API, Frontend React State & UI, Database/Cache/Redis, Luồng nghiệp vụ/Security):
-     -> Đánh giá rất cao tư duy kiến trúc phần mềm (Software Architect mindset), ưu tiên cho điểm tối đa ở tiêu chí 'decomposition' (2.0/2.0) và 'abstraction' (2.0/2.0).
-   - Nếu bài toán lớn nhưng chỉ khai báo 1 scope chung chung, sơ sài hoặc gom hết vào một lần khai báo mờ nhạt:
+   - Nếu bài toán quy mô lớn (fullstack, web, app nhiều luồng, microservices) mà sinh viên biết chủ động phân rã thành các Scope kỹ thuật rõ ràng (Backend, Frontend, DB, Architecture):
+     -> Đánh giá rất cao tư duy kiến trúc phần mềm, ưu tiên cho điểm tối đa ở tiêu chí 'decomposition' (2.0/2.0) và 'abstraction' (2.0/2.0).
+   - Nếu đề bài yêu cầu hệ thống lớn nhưng sinh viên chỉ khai báo 1 scope chung chung, gom mờ nhạt:
      -> Trừ 30% - 50% điểm ở tiêu chí 'decomposition' vì thiếu năng lực phân rã bài toán kỹ thuật.
+   - LƯU Ý QUAN TRỌNG: Nếu đề bài thực tế là bài tập nhỏ / chức năng đơn lẻ (Single Scope Task), sinh viên khai báo 1 scope là hoàn toàn phù hợp và KHÔNG bị trừ điểm phân rã.
 
 2. THANH TRA CHI TIẾT TỪNG SCOPE:
-   - Kiểm tra xem mô tả 'scope_description' có khớp với mã nguồn thực tế của từng thư mục trong dự án hay không (ví dụ: Scope BE khớp với thư mục src/controllers, src/services, src/routes; Scope FE khớp với src/components, src/pages; Scope DB khớp với migrations, schemas, repositories).
-   - Đối chiếu từng tool và phản tư ở từng scope: ví dụ Scope BE thì dùng tool hỏi về async/await, database index, transaction, JWT middleware; Scope FE hỏi về responsive, state management, form validation, lifecycle.
+   - Kiểm tra xem mô tả 'scope_description' có khớp với mã nguồn thực tế của từng thư mục trong dự án hay không (ví dụ: BE khớp với controllers/services; FE khớp với components/pages; DB khớp với migrations/schemas).
+   - Đối chiếu tool và phản tư ở từng scope tương ứng với đặc thù kỹ thuật.
 
 3. TRƯỜNG HỢP KIỂM TOÁN TƯƠNG TÁC AI:
-   - Dùng AI nhiều (> 60% code do AI sinh): Hoàn toàn hợp lệ nếu sinh viên minh bạch qua từng Scope. Trọng tâm câu hỏi Viva xoáy sâu vào "Code Ownership & Architectural Decisions", yêu cầu giải thích luồng thực thi dữ liệu (data flow), concurrency, bảo mật. Điểm Rubric đánh giá cao nếu có test cases và phản tư sâu.
-   - Dùng AI ít hoặc tự code 100%: Đối chiếu với AST Code. Nếu code có các pattern điển hình của LLM mà không khai báo -> Gắn cờ "Suspicious Discrepancy", trừ mạnh điểm 'reflection'.
-   - Khai báo Prompt sơ sài hoặc copy-paste lặp lại giữa các Scope: Kỹ năng prompt engineering kém, trừ điểm tiêu chí 'reflection' và 'decomposition'.
+   - Dùng AI nhiều (> 60% code do AI sinh): Hoàn toàn hợp lệ nếu sinh viên minh bạch qua từng Scope. Trọng tâm câu hỏi Viva xoáy sâu vào "Code Ownership & Architectural Decisions", yêu cầu giải thích luồng dữ liệu (data flow) và bảo mật.
+   - Dùng AI ít hoặc tự code 100%: Đối chiếu với AST Code. Nếu code có pattern điển hình của LLM mà không khai báo -> Gắn cờ "Suspicious Discrepancy", trừ mạnh điểm 'reflection'.
+   - Khai báo Prompt sơ sài, lặp lại giữa các Scope: Kỹ năng prompt engineering kém, trừ điểm tiêu chí 'reflection' và 'decomposition'.
 
 B. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ):
 - Sinh chính xác 3 câu hỏi vấn đáp Viva kỹ thuật:
-  + CÂU HỎI VẤN ĐÁP VIVA LIÊN KẾT GIỮA CÁC SCOPE: Sinh câu hỏi vấn đáp nhắm thẳng vào sự liên kết giữa các Scope (Ví dụ: "Em đã phân rã Scope BE và Scope FE, vậy luồng truyền token xác thực giữa 2 module này được thiết kế và bảo vệ như thế nào?", hoặc luồng đồng bộ dữ liệu giữa Controller và Database/Cache).
-  + Câu 1 (Architecture & Scope Interconnection): rubric_criterion: "decomposition" hoặc "abstraction". Nhắm vào ranh giới giữa các Scope, cấu trúc thư mục, Clean Architecture, việc tách hàm/module, cách quản lý state/config trong bài làm.
-  + Câu 2 (Code Logic & Edge Cases): rubric_criterion: "algorithmic_thinking" hoặc "implementation". Nhắm vào đoạn logic phức tạp nhất trong file code chính (ví dụ: async/await, multi-threading, polling/event-driven, I/O handling, data validation).
-  + Câu 3 (AI Reflection & Trade-offs): rubric_criterion: "reflection". Nhắm trực tiếp vào phần code sinh viên khai báo AI hỗ trợ (hoặc đoạn code nghi vấn) để hỏi về đánh đổi hiệu năng (time/space complexity) và phương án cải tiến.
-- Mỗi câu hỏi phải chỉ rõ: Tên file (target_file), vị trí/hàm cụ thể (target_code_snippet), nội dung câu hỏi (question), và gợi ý câu trả lời kỳ vọng (expected_answer_criteria) để giảng viên đối chiếu nhanh.
-- KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp.
+  + CÂU HỎI 1 (Architecture & Scope Interconnection / Decomposition): Nhắm vào ranh giới giữa các Scope, cấu trúc thư mục, Clean Architecture, hoặc luồng truyền dữ liệu liên kết giữa các module.
+  + CÂU HỎI 2 (Code Logic & Edge Cases): Nhắm vào đoạn logic phức tạp nhất hoặc xử lý ngoại lệ trong file code chính (async/await, transaction, validation, state management).
+  + CÂU HỎI 3 (AI Reflection & Trade-offs): Nhắm trực tiếp vào phần code sinh viên khai báo AI hỗ trợ (hoặc đoạn code nghi vấn) để hỏi về đánh đổi hiệu năng (time/space complexity) và phương án tối ưu.
+- RÀNG BUỘC ĐỊNH DẠNG:
+  + Mỗi câu hỏi phải chỉ rõ: Tên file chính xác (target_file), đoạn mã nguồn ngắn gọn tối đa 3-5 dòng (target_code_snippet), nội dung câu hỏi (question), và gợi ý câu trả lời kỳ vọng (expected_answer_criteria).
+  + KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp.
 
 C. BỘ TIÊU CHÍ RUBRIC ĐÁNH GIÁ (Thang điểm 10):
 Chấm điểm 5 tiêu chí Rubric dựa trên sự phối hợp của tất cả các Scope đã khai báo so với mã nguồn thực tế:
-1. decomposition: Problem Decomposition & Scope Architecture (Max: 2.0) - Khả năng chia tách bài toán thành các module kỹ thuật logic, ranh giới trách nhiệm rõ ràng. Áp dụng quy tắc Decomposition Bonus (+2.0/2.0 nếu phân rã modular xuất sắc) hoặc trừ 30%-50% nếu gom chung mờ nhạt.
-   * QUY ĐỊNH BẮT BUỘC CHO TRƯỜNG 'reasoning' CỦA TIÊU CHÍ DECOMPOSITION: Nêu rõ nhận xét về cách sinh viên chia các Scope (ví dụ: "Sinh viên phân rã tốt thành 3 scope độc lập BE/FE/DB, mô tả phạm vi mạch lạc, khớp với cấu trúc thư mục", hoặc chỉ ra việc thiếu phân rã nếu gom chung).
-2. pattern_recognition: Pattern Recognition & Architecture Patterns (Max: 2.0) - Nhận diện mẫu kiến trúc và thiết kế phù hợp cho từng module (Repository, MVC, Microservices, Event-driven...).
-3. abstraction: Abstraction & System Modeling (Max: 2.0) - Mô hình hóa thực thể, giao diện API, lược đồ C4/ERD tương ứng giữa các module.
+1. decomposition: Problem Decomposition & Scope Architecture (Max: 2.0) - Khả năng chia tách bài toán thành các module kỹ thuật logic.
+   * QUY ĐỊNH 'reasoning': Nêu rõ nhận xét về cách sinh viên chia Scope có khớp với cấu trúc thư mục thực tế hay không.
+2. pattern_recognition: Pattern Recognition & Architecture Patterns (Max: 2.0) - Nhận diện mẫu kiến trúc và thiết kế phù hợp (Repository, MVC, Component-driven...).
+3. abstraction: Abstraction & System Modeling (Max: 2.0) - Mô hình hóa thực thể, giao diện API, lược đồ C4/ERD tương ứng.
 4. algorithmic_thinking: Algorithmic Thinking, Logic & Data Flow (Max: 2.5) - Luồng dữ liệu, thuật toán xử lý nghiệp vụ cụ thể trong từng module.
-5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI cho từng scope, mức độ làm chủ code (Code Ownership).
-- Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.`;
+5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI, mức độ làm chủ code.
+- Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.
+
+D. QUY ĐỊNH NGÔN NGỮ TIẾNG VIỆT CÓ DẤU 100% (BẮT BUỘC):
+- TOÀN BỘ nội dung phản hồi (bao gồm overall_verdict, reasoning, question, expected_answer_criteria, penalty_reason) BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8), hành văn học thuật, sư phạm, chuyên nghiệp.
+- Tuyệt đối KHÔNG trả về tiếng Việt không dấu (như 'Khong dat', 'Bai nop khong dat yeu cau', 'Pass', 'Fail' trơ trọi).
+- Tuyệt đối KHÔNG dùng ký tự viết tắt, telex, ký hiệu VIQR, hoặc ký tự escape TeX (như B\"ai, n\"op, \"d\"at, kh\"ong, y\"eu, c\"au). Toàn bộ dấu tiếng Việt phải là ký tự Unicode chuẩn tự nhiên (ví dụ: 'Bài nộp đạt yêu cầu', 'Kiến trúc phân tầng rõ ràng', 'Không phát hiện sai lệch').
+
+E. CẤU TRÚC BẮT BUỘC CỦA 'overall_verdict' (KẾT LUẬN THANH TRA & VẤN ĐÁP):
+- TUYỆT ĐỐI KHÔNG chỉ trả về mỗi trạng thái (Pass/Fail) đơn lẻ hoặc câu ngắn cụt lủn (ví dụ: cấm trả về 'Khong dat (Fail)' hoặc 'Dat (Pass)').
+- BẮT BUỘC trả về một bản tóm tắt phân tích hoàn chỉnh từ 3 đến 5 câu văn rõ ràng, liên kết mạch lạc, hành văn học thuật chuẩn mực theo đúng cấu trúc 3 phần sau:
+  1. [Kết luận & Trạng thái]: Đánh giá tổng quan bài nộp Đạt (Pass) hay Chưa đạt (Fail / Flagged) kèm mức độ rủi ro liêm chính học thuật (Rủi ro Thấp / Trung bình / Cao).
+  2. [Phân tích đối soát]: So sánh cụ thể giữa mã nguồn thực tế trong dự án và nội dung sinh viên đã khai báo trong nhật ký AI Audit Log (các scope, prompt, phản tư) — chỉ ra các điểm khớp nhau hay có mâu thuẫn/dấu hiệu bất thường.
+  3. [Điểm cần lưu ý & Khuyến nghị vấn đáp]: Chỉ rõ đoạn code, module, file hoặc chức năng nghi vấn mà Giảng viên nên hỏi trực tiếp sinh viên khi vấn đáp để thẩm định tính trung thực và mức độ làm chủ mã nguồn.`;
 
   const prompt = `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm Rubric 5 tiêu chí cùng Bộ 3 câu hỏi vấn đáp Viva:
@@ -170,23 +178,73 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
         }
       },
       total_score: { type: Type.NUMBER },
-      overall_verdict: { type: Type.STRING }
+      overall_verdict: {
+        type: Type.STRING,
+        description: "Bản tóm tắt kết luận thanh tra & vấn đáp chi tiết từ 3-5 câu văn rõ ràng bằng Tiếng Việt chuẩn có dấu (UTF-8), phân tích đối soát mã nguồn và khuyến nghị vấn đáp cho giảng viên."
+      }
     },
     required: ["audit_integrity", "viva_questions", "rubrics", "total_score", "overall_verdict"]
   };
 
-  const response = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
-    contents: prompt,
-    config: {
-      systemInstruction,
-      temperature: 0.1, // Nhiệt độ thấp giúp tính toán và phân tích logic ổn định
-      responseMimeType: "application/json",
-      responseSchema: rubricResponseSchema,
-    },
-  });
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.1, // Giữ nguyên để AI chấm điểm logic, ít sáng tạo bừa
+    maxOutputTokens: 8192, // QUAN TRỌNG: Tránh bị cụt JSON khi bài code quá dài
+    responseMimeType: "application/json",
+    responseSchema: rubricResponseSchema,
+    // Bổ sung safety settings để tránh bị chặn nhầm các đoạn code liên quan đến bảo mật/SQL/Auth
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const fallbackModel = "gemini-3.5-flash-lite";
+
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: primaryModel,
+      contents: prompt,
+      config: generateConfig,
+    });
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404)) {
+      console.warn(`[Gemini Audit] Model ${primaryModel} gặp lỗi (${err.status || err.message}), tự động chuyển sang ${fallbackModel}...`);
+      response = await ai.models.generateContent({
+        model: fallbackModel,
+        contents: prompt,
+        config: generateConfig,
+      });
+    } else {
+      throw err;
+    }
+  }
 
   const parsed = JSON.parse(response.text);
+
+  // Nâng cấp chi tiết và chuẩn hóa tiếng Việt cho overall_verdict nếu AI trả về chuỗi ngắn cụt lủn hoặc thiếu dấu
+  if (parsed.overall_verdict || parsed.ai_verdict) {
+    const rawVerdict = String(parsed.overall_verdict || parsed.ai_verdict || '').trim();
+    if (rawVerdict.length < 50 || rawVerdict.toLowerCase().startsWith('khong dat') || rawVerdict.toLowerCase().startsWith('chua dat') || rawVerdict.toLowerCase() === 'dat (pass)' || rawVerdict.toLowerCase() === 'khong dat (fail)') {
+      const isFailed = rawVerdict.toLowerCase().includes('khong') || rawVerdict.toLowerCase().includes('chua') || rawVerdict.toLowerCase().includes('fail') || parsed.audit_integrity?.penalty_applied;
+      const riskLevel = parsed.audit_integrity?.reflection_depth === 'Suspicious' ? 'Mức độ rủi ro liêm chính: Cao' : (isFailed ? 'Mức độ rủi ro liêm chính: Trung bình' : 'Mức độ rủi ro liêm chính: Thấp');
+
+      const detailedVerdict = isFailed
+        ? `Kết luận thanh tra: Chưa đạt (Fail / Flagged) - ${riskLevel}. Quá trình đối soát chéo phát hiện sự sai lệch hoặc thiếu minh bạch giữa mã nguồn thực tế bài nộp và nội dung sinh viên đã kê khai trong nhật ký AI Audit. Khuyến nghị Giảng viên tập trung phỏng vấn sinh viên về các đoạn mã nguồn then chốt và các quyết định kiến trúc được chỉ định trong danh sách câu hỏi vấn đáp Viva bên dưới để kiểm chứng quyền tác giả mã nguồn.`
+        : `Kết luận thanh tra: Đạt (Pass) - ${riskLevel}. Mã nguồn thực tế có cấu trúc phân tầng và giải thuật tương đồng cao với nội dung sinh viên đã giải trình trong nhật ký AI Audit. Giảng viên nên tiến hành vấn đáp sinh viên theo các câu hỏi kỹ thuật bên dưới để củng cố đánh giá về mức độ làm chủ mã nguồn và năng lực phản tư công nghệ.`;
+
+      parsed.overall_verdict = detailedVerdict;
+      parsed.ai_verdict = detailedVerdict;
+    }
+  }
 
   // Đảm bảo tương thích ngược và cả hai trường tên đều tồn tại
   if (!parsed.ai_verdict && parsed.overall_verdict) {
@@ -222,10 +280,348 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     });
   }
 
-  return parsed;
+  return sanitizeObjectStrings(parsed);
+}
+
+function cleanVietnameseEncoding(str) {
+  if (typeof str !== 'string') return str;
+  return str
+    .replace(/B"ai/g, 'Bài')
+    .replace(/b"ai/g, 'bài')
+    .replace(/n"op/g, 'nộp')
+    .replace(/kh"ong/g, 'không')
+    .replace(/"d"at/g, 'đạt')
+    .replace(/y"eu/g, 'yêu')
+    .replace(/c"au/g, 'cầu')
+    .replace(/k"y/g, 'kỹ')
+    .replace(/thu"at/g, 'thuật')
+    .replace(/c"ot/g, 'cốt')
+    .replace(/l~oi/g, 'lõi')
+    .replace(/c"an/g, 'cần')
+    .replace(/th"uc/g, 'thực')
+    .replace(/hi"en/g, 'hiện')
+    .replace(/di"em/g, 'điểm')
+    .replace(/ti"eu/g, 'tiêu')
+    .replace(/ch"i/g, 'chí')
+    .replace(/d"anh/g, 'đánh')
+    .replace(/gi"a/g, 'giá')
+    .replace(/m"a/g, 'mã')
+    .replace(/ngu"on/g, 'nguồn')
+    .replace(/t"ap/g, 'tập')
+    .replace(/h"oc/g, 'học')
+    .replace(/ph"an/g, 'phân')
+    .replace(/t"ich/g, 'tích')
+    .replace(/"d/g, 'đ')
+    .replace(/"D/g, 'Đ')
+    .replace(/\\"d/g, 'đ')
+    .replace(/\\"D/g, 'Đ');
+}
+
+function sanitizeObjectStrings(obj) {
+  if (!obj) return obj;
+  if (typeof obj === 'string') return cleanVietnameseEncoding(obj);
+  if (Array.isArray(obj)) return obj.map(sanitizeObjectStrings);
+  if (typeof obj === 'object') {
+    const res = {};
+    for (const [k, v] of Object.entries(obj)) {
+      res[k] = sanitizeObjectStrings(v);
+    }
+    return res;
+  }
+  return obj;
+}
+
+/**
+ * 3. Hàm chuyên dụng: Chẩn đoán kiểm tra nhanh bài làm bản nháp của sinh viên trước khi nộp (Pre-submission AI Sanity Check)
+ * - Non-blocking: Chỉ cảnh báo/gợi ý định hướng, KHÔNG chấm điểm
+ * - Response JSON schema chuẩn tiếng Việt UTF-8
+ */
+async function preSubmissionSanityCheckWithGemini({ assignmentTitle, assignmentDescription, sourceCode, studentDeclarations }) {
+  const apiKey = process.env.GEMINI_API_KEY_PRE_CHECK_SUBMIT || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY_MISSING: Chưa cấu hình GEMINI_API_KEY_PRE_CHECK_SUBMIT hoặc GEMINI_API_KEY trong file .env");
+  }
+
+  const ai = await getGeminiClient(apiKey);
+
+  const systemInstruction = `Bạn là Trợ lý AI Chuyên gia Kiểm toán & Hướng dẫn học tập Kỹ thuật Phần mềm (Academic Sanity Auditor). Nhiệm vụ của bạn là đọc và chẩn đoán nhanh bài làm bản nháp (Draft) của sinh viên dựa trên yêu cầu đề bài, sau đó đưa ra các nhận xét mang tính chất định hướng, cảnh báo sớm và gợi ý cải thiện.
+
+LƯU Ý QUAN TRỌNG:
+1. Bạn KHÔNG ĐƯỢC chấm điểm, KHÔNG ĐƯỢC quy đổi thang điểm, và KHÔNG ĐƯỢC dùng ngôn ngữ phán xét hay cấm đoán. Hãy đóng vai trò là một người cố vấn khách quan.
+2. TOÀN BỘ nội dung phản hồi BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8), câu từ rõ ràng, sư phạm.
+3. TUYỆT ĐỐI KHÔNG VIẾT HỘ CODE HOẶC GIẢI HỘ BÀI TẬP. Chỉ gợi mở tư duy để sinh viên tự sửa.
+4. Trả về đúng định dạng JSON chuẩn theo schema sau:
+{
+  "relevance_status": "MATCH" | "MISMATCH_OR_SUSPICIOUS",
+  "relevance_reason": "string",
+  "diagnostic_warnings": ["string"],
+  "micro_suggestions": ["string"]
+}`;
+
+  const prompt = `
+Hãy chẩn đoán nhanh bài làm bản nháp của sinh viên trước khi nộp theo các thông tin sau:
+
+[1. YÊU CẦU ĐỀ BÀI TỪ GIẢNG VIÊN]:
+Tiêu đề: ${assignmentTitle || "Không có tiêu đề"}
+Mô tả & Yêu cầu: ${assignmentDescription || "Xây dựng dự án phần mềm theo yêu cầu."}
+
+[2. BÀI NỘP THỰC TẾ CỦA SINH VIÊN]:
+${sourceCode || "Chưa có nội dung mã nguồn được trích xuất."}
+
+[3. KHAI BÁO AI AUDIT LOG CỦA SINH VIÊN]:
+${studentDeclarations || "Sinh viên chưa khai báo hoặc không sử dụng AI."}
+`;
+
+  const sanityCheckResponseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      relevance_status: {
+        type: Type.STRING,
+        enum: ["MATCH", "MISMATCH_OR_SUSPICIOUS"],
+        description: "Đánh giá bài làm có đúng đề bài yêu cầu hay không"
+      },
+      relevance_reason: {
+        type: Type.STRING,
+        description: "Giải thích ngắn gọn lý do tại sao bài làm khớp hoặc nghi ngờ lệch đề bài"
+      },
+      diagnostic_warnings: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Danh sách các cảnh báo rủi ro, lỗ hổng kỹ thuật, điểm mù hoặc lỗi logic tiềm ẩn"
+      },
+      micro_suggestions: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Các câu hỏi định hướng hoặc gợi ý ngắn để sinh viên tự rà soát và hoàn thiện bài"
+      }
+    },
+    required: ["relevance_status", "relevance_reason", "diagnostic_warnings", "micro_suggestions"]
+  };
+
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    responseMimeType: "application/json",
+    responseSchema: sanityCheckResponseSchema,
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_PRE_CHECK_SUBMIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+  const fallbackModel = "gemini-3.5-flash-lite";
+
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: primaryModel,
+      contents: prompt,
+      config: generateConfig,
+    });
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404)) {
+      console.warn(`[Gemini Sanity Check] Model ${primaryModel} gặp lỗi, chuyển sang ${fallbackModel}...`);
+      response = await ai.models.generateContent({
+        model: fallbackModel,
+        contents: prompt,
+        config: generateConfig,
+      });
+    } else {
+      throw err;
+    }
+  }
+
+  const parsed = JSON.parse(response.text);
+  return sanitizeObjectStrings(parsed);
+}
+
+/**
+ * 4. Hàm chuyên dụng: Phân tích báo cáo sư phạm AI (AI Class Advisor) cho lớp học sau khi bài tập kết thúc hạn nộp
+ * @param {Object} data
+ * @param {string} data.assignmentTitle
+ * @param {string} data.assignmentDescription
+ * @param {string} data.classCode
+ * @param {string} data.subjectName
+ * @param {number} data.totalStudents
+ * @param {number} data.submittedCount
+ * @param {string} data.submissionRateText
+ * @param {string} data.avgTransparency
+ * @param {Array<Object>} data.auditSummaries
+ */
+async function generateClassAiAdvisoryWithGemini({
+  assignmentTitle,
+  assignmentDescription,
+  classCode,
+  subjectName,
+  totalStudents,
+  submittedCount,
+  submissionRateText,
+  avgTransparency,
+  auditSummaries = []
+}) {
+  const apiKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY_MISSING: Chưa cấu hình GEMINI_API_KEY_AUDIT hoặc GEMINI_API_KEY trong file .env");
+  }
+
+  const ai = await getGeminiClient(apiKey);
+
+  const systemInstruction = `Bạn là Chuyên gia Phân tích Giáo dục & Trợ lý Sư phạm thông minh (AI Lecture Advisor) cho giảng viên công nghệ phần mềm.
+
+QUY TẮC PHÂN TÍCH THEO DỮ LIỆU THỰC TẾ:
+Hãy tính toán tỷ lệ nộp bài = (total_students_submitted / total_students_enrolled).
+
+TRƯỜNG HỢP 1: TỶ LỆ NỘP BÀI THẤP (< 50% hoặc < 5 bài nộp) -> BẬT "CHẾ ĐỘ ĐÔN ĐỐC TIẾN ĐỘ" (mode: "PROGRESS_REMINDER"):
+- Tuyệt đối KHÔNG lặp đi lặp lại các câu vô nghĩa như "chưa có dữ liệu", "chưa ghi nhận lỗi", "N/A".
+- class_overview: 
+  + submission_rate_text: Nêu rõ tỷ lệ nộp bài thực tế.
+  + avg_ai_transparency: Nếu không có điểm audit thực tế từ sinh viên đã nộp -> BẮT BUỘC TRẢ VỀ null. TUYỆT ĐỐI KHÔNG sinh ra text kiểu "Đang cập nhật", "N/A", "Chưa có dữ liệu". Nếu có điểm audit thực tế, trả về chuỗi điểm phần trăm.
+- common_error_clusters: Chỉ trả về 1 thông điệp súc tích: "Tiến độ nộp bài còn chậm; chưa đủ mẫu dữ liệu audit để tổng hợp cụm lỗi kỹ thuật sâu."
+- next_slot_recommendation: Đưa ra lời khuyên thiết thực: Dành 10-15 phút đầu giờ rà soát khó khăn, nhắc nhở hạn chót và hướng dẫn lại sinh viên quy trình khai báo AI Audit log trước khi nộp.
+
+TRƯỜNG HỢP 2: TỶ LỆ NỘP BÀI ĐỦ LỚN (>= 50%) -> BẬT "CHẾ ĐỘ PHÂN TÍCH CHUYÊN SÂU" (mode: "DEEP_TECHNICAL"):
+- Tách bạch hoàn toàn giữa tiến độ nộp bài và lỗi kỹ thuật.
+- class_overview:
+  + avg_ai_transparency: Trả về chuỗi điểm minh bạch trung bình thực tế nếu có; nếu không có điểm audit -> trả về null.
+- common_error_clusters: Chỉ ra các cụm lỗi lập trình/kiến trúc cụ thể từ báo cáo kiểm toán (ví dụ: quên hash mật khẩu BCrypt, thiếu try-catch ở Service, cấu hình ORM sai, thiếu validation).
+- next_slot_recommendation (Gợi ý Sư phạm Chữa lỗi chung): 
+  + Nếu phát hiện sinh viên cùng gặp một lỗi kỹ thuật giống nhau hoặc liên quan: AI BẮT BUỘC gợi ý giảng viên demo lại kiến thức trọng tâm đó (chỉ rõ thời lượng đầu giờ, ví dụ: 15-20 phút live-coding giải pháp) để chữa dứt điểm lỗi chung cho sinh viên.
+
+ĐỊNH DẠNG ĐẦU RA (BẮT BUỘC TRẢ VỀ JSON FORMAT THEO SCHEMA):
+{
+  "mode": "PROGRESS_REMINDER" | "DEEP_TECHNICAL",
+  "class_overview": {
+    "submission_rate_text": "string (VD: 1/3 sinh viên đã nộp bài (33.3%))",
+    "avg_ai_transparency": null // hoặc string điểm số nếu có data thật
+  },
+  "common_error_clusters": [
+    "string"
+  ],
+  "next_slot_recommendation": "string"
+}`;
+
+  const prompt = `
+Dưới đây là dữ liệu tổng hợp bài nộp và báo cáo kiểm toán AI của lớp học (100% dữ liệu thực từ database):
+- Lớp học: ${classCode || "N/A"} (${subjectName || "N/A"})
+- Bài tập: ${assignmentTitle || "Bài tập"}
+- Yêu cầu / Mô tả bài tập: ${assignmentDescription || "N/A"}
+- Tổng số sinh viên trong lớp (total_students_enrolled): ${totalStudents || 0}
+- Số lượng sinh viên đã nộp (total_students_submitted): ${submittedCount || 0}
+- Tỷ lệ nộp bài thực tế: ${submissionRateText || `${submittedCount}/${totalStudents} sinh viên đã nộp bài`}
+- Mức độ minh bạch AI trung bình thực tế: ${avgTransparency ? avgTransparency : "Không có (chưa có bài nộp nào có điểm audit -> BẮT BUỘC trả về avg_ai_transparency: null)"}
+
+BÁO CÁO AUDIT & ĐÁNH GIÁ CỦA CÁC BÀI NỘP TRONG LỚP:
+${auditSummaries && auditSummaries.length > 0 
+  ? auditSummaries.map((s, idx) => `[Sinh viên ${idx + 1} - ${s.student_name}]: Điểm minh bạch AI: ${s.transparency || 'Chưa có điểm'}, Mức độ rủi ro: ${s.risk_level || 'Chưa đánh giá'}, Nhận xét audit/lỗi: ${s.summary || 'Không có mô tả'}`).join('\n')
+  : "Chưa có bài nộp nào hoặc chưa có báo cáo audit chi tiết."}
+
+Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_REMINDER" hay "DEEP_TECHNICAL") và trả về JSON theo schema.`;
+
+  const advisoryResponseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      mode: {
+        type: Type.STRING,
+        enum: ["PROGRESS_REMINDER", "DEEP_TECHNICAL"],
+        description: "Chế độ: PROGRESS_REMINDER khi tỷ lệ nộp < 50% hoặc < 5 bài nộp; DEEP_TECHNICAL khi tỷ lệ nộp >= 50%"
+      },
+      class_overview: {
+        type: Type.OBJECT,
+        properties: {
+          submission_rate_text: {
+            type: Type.STRING,
+            description: "Mô tả tỷ lệ nộp bài, ví dụ: '1/3 sinh viên đã nộp bài (33.3%)' hoặc '45/48 sinh viên đã nộp bài (93.7%)'"
+          },
+          avg_ai_transparency: {
+            type: Type.STRING,
+            nullable: true,
+            description: "Chỉ số minh bạch AI trung bình nếu có dữ liệu audit thực tế, hoặc null nếu chưa có bài nộp nào có điểm audit. TUYỆT ĐỐI KHÔNG trả về 'Đang cập nhật' hay 'N/A'."
+          }
+        },
+        required: ["submission_rate_text"]
+      },
+      common_error_clusters: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Danh sách cụm lỗi kỹ thuật hoặc thông điệp tiến độ"
+      },
+      next_slot_recommendation: {
+        type: Type.STRING,
+        description: "Lời khuyên sư phạm cụ thể cho buổi học (slot) tiếp theo"
+      }
+    },
+    required: ["mode", "class_overview", "common_error_clusters", "next_slot_recommendation"]
+  };
+
+  const generateConfig = {
+    systemInstruction,
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    responseMimeType: "application/json",
+    responseSchema: advisoryResponseSchema,
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+      },
+    ],
+  };
+
+  const primaryModel = process.env.GEMINI_MODEL_ADVISOR || "gemini-1.5-flash";
+  const fallbackModel = process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+  let response;
+  const callModel = async (modelName) => {
+    return await ai.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: generateConfig,
+    });
+  };
+
+  try {
+    response = await callModel(primaryModel);
+  } catch (err) {
+    if (primaryModel !== fallbackModel && (err.status === 503 || err.status === 429 || err.status === 404 || String(err.message || '').includes('not found') || String(err.message || '').includes('no longer available'))) {
+      console.warn(`[Gemini Class Advisor] Model ${primaryModel} gặp lỗi (${err.status || err.message}), tự động chuyển sang ${fallbackModel}...`);
+      try {
+        response = await callModel(fallbackModel);
+      } catch (fallbackErr) {
+        if (fallbackErr.status === 503 || fallbackErr.status === 429) {
+          // Retry once sau 1s nếu gặp spike 503/429
+          await new Promise((r) => setTimeout(r, 1200));
+          response = await callModel(fallbackModel);
+        } else {
+          throw fallbackErr;
+        }
+      }
+    } else if (err.status === 503 || err.status === 429) {
+      await new Promise((r) => setTimeout(r, 1200));
+      response = await callModel(primaryModel);
+    } else {
+      throw err;
+    }
+  }
+
+  const parsed = JSON.parse(response.text);
+  return sanitizeObjectStrings(parsed);
 }
 
 module.exports = {
   askGemini,
   evaluateRubricWithGemini,
+  preSubmissionSanityCheckWithGemini,
+  generateClassAiAdvisoryWithGemini,
 };

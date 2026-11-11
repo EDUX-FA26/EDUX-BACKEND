@@ -8,7 +8,8 @@ const { validate } = require('../../middlewares/validate.middleware');
 const {
   submitSubmissionSchema,
   queryAssignmentSubmissionsSchema,
-  reviewSubmissionSchema
+  reviewSubmissionSchema,
+  saveDraftDeclarationsSchema
 } = require('./submission.validation');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -26,15 +27,85 @@ router.use(authenticate);
 // Các routes cá nhân (của student)
 router.get('/my-submissions', SubmissionController.getMySubmissions);
 
-// Danh sách bài nộp của 1 assignment (cho lecturer/admin)
+// Lấy bài nộp của chính mình theo assignmentId
+router.get(
+  '/assignments/:assignmentId/my-submission',
+  authorize('student'),
+  SubmissionController.getMySubmissionByAssignment
+);
+
+// Danh sách bài nộp của 1 assignment (cho lecturer/admin, hoặc student xem bài của chính mình)
 router.get(
   '/assignments/:assignmentId',
-  authorize('admin', 'lecturer'),
+  authorize('admin', 'lecturer', 'student'),
   validate(queryAssignmentSubmissionsSchema, 'query'),
   SubmissionController.getAssignmentSubmissions
 );
 
-// Nộp bài / Nộp lại bài (cho student)
+// 1. Lưu bản nháp bài nộp (Save Draft - chỉ cho student)
+router.post(
+  '/:assignmentId/draft',
+  authorize('student'),
+  upload.array('files'),
+  validate(submitSubmissionSchema),
+  SubmissionController.saveDraft
+);
+
+// 1a. Silent Auto-Save Draft File (chỉ cho student)
+router.post(
+  '/:assignmentId/draft-file',
+  authorize('student'),
+  upload.any(),
+  SubmissionController.saveDraftFile
+);
+
+// 1b. Xóa file bản nháp (chỉ cho student)
+router.delete(
+  '/:assignmentId/draft-file',
+  authorize('student'),
+  SubmissionController.removeDraftFile
+);
+
+// 1c. Silent Auto-Save Draft Declarations (Debounced text/JSON - chỉ cho student)
+router.patch(
+  '/:assignmentId/draft-declarations',
+  authorize('student'),
+  validate(saveDraftDeclarationsSchema),
+  SubmissionController.saveDraftDeclarations
+);
+router.post(
+  '/:assignmentId/draft-declarations',
+  authorize('student'),
+  validate(saveDraftDeclarationsSchema),
+  SubmissionController.saveDraftDeclarations
+);
+
+// 1d. Pre-submission AI Sanity Check (chỉ cho student, on-demand)
+router.post(
+  '/:assignmentId/sanity-check',
+  authorize('student'),
+  SubmissionController.sanityCheck
+);
+
+// 2. Nộp bài chính thức (Submit Final - chỉ cho student)
+router.post(
+  '/:assignmentId/submit-final',
+  authorize('student'),
+  upload.array('files'),
+  validate(submitSubmissionSchema),
+  SubmissionController.submitFinal
+);
+
+// 2b. Chốt nộp bài chính thức từ bản nháp theo submission ID
+router.patch(
+  '/:id/submit',
+  authorize('student'),
+  upload.array('files'),
+  validate(submitSubmissionSchema),
+  SubmissionController.submitFinalById
+);
+
+// Nộp bài / Nộp lại bài / Draft qua endpoint files (cho student)
 router.post(
   '/:assignmentId/files',
   authorize('student'),
@@ -70,8 +141,20 @@ router.patch(
   SubmissionController.reviewSubmission
 );
 
-// AI Audit Rubric: POST /api/submissions/:submissionId/ai-rubric
+// AI Audit Rubric: POST /api/submissions/:submissionId/ai-rubric or /api/submissions/:submissionId/evaluate
 router.post(
+  '/:submissionId/ai-rubric',
+  authorize('admin', 'lecturer'),
+  gradingController.handleAuditRubric
+);
+
+router.post(
+  '/:submissionId/evaluate',
+  authorize('admin', 'lecturer'),
+  gradingController.handleAuditRubric
+);
+
+router.get(
   '/:submissionId/ai-rubric',
   authorize('admin', 'lecturer'),
   gradingController.handleAuditRubric

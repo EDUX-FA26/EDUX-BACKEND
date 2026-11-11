@@ -32,8 +32,42 @@ const broadcastNotificationSchema = z.object({
   }),
 });
 
+const createDepartmentSchema = z.object({
+  code: z.string().trim().min(1, "Mã khoa không được để trống").max(100),
+  name: z.string().trim().min(1, "Tên khoa không được để trống").max(255),
+  is_active: z.boolean().optional(),
+});
+
+const updateDepartmentSchema = z.object({
+  code: z.string().trim().min(1, "Mã khoa không được để trống").max(100).optional(),
+  name: z.string().trim().min(1, "Tên khoa không được để trống").max(255).optional(),
+  is_active: z.boolean().optional(),
+});
+
+const createClassSchema = z.object({
+  class_code: z.string().trim().min(1, "Mã lớp không được để trống").max(100),
+  semester_id: z.string().uuid("ID học kỳ không hợp lệ"),
+  subject_id: z.string().uuid("ID môn học không hợp lệ"),
+  lecturer_id: z.string().uuid("ID giảng viên không hợp lệ"),
+  max_students: z.coerce.number().int().min(1, "Sĩ số tối đa phải lớn hơn 0").max(500).default(30),
+  schedule_text: z.string().trim().max(255).optional(),
+  start_date: z.string().trim().optional(),
+  total_slots: z.coerce.number().int().min(1).max(60).default(20).optional(),
+});
+
+const addClassStudentSchema = z.object({
+  student_id: z.string().uuid("ID sinh viên không hợp lệ").optional(),
+  identifier: z.string().trim().min(1).optional(),
+}).refine(data => Boolean(data.student_id || data.identifier), {
+  message: "Vui lòng chọn sinh viên hoặc nhập MSSV / Email",
+});
+
 module.exports = {
   createUserSchema,
   updateUserSchema,
   broadcastNotificationSchema,
+  createDepartmentSchema,
+  updateDepartmentSchema,
+  createClassSchema,
+  addClassStudentSchema,
 };

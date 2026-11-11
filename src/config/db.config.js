@@ -37,6 +37,53 @@ async function connectDB() {
       console.warn("⚠️ Focus sessions timer_mode migration notice:", migErr.message);
     }
 
+    // Auto-check và cập nhật submissions_status_check hỗ trợ 'draft'
+    try {
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint 
+            WHERE conrelid = 'submissions'::regclass AND conname = 'submissions_status_check'
+              AND pg_get_constraintdef(oid) NOT LIKE '%draft%'
+          ) THEN
+            ALTER TABLE submissions DROP CONSTRAINT submissions_status_check;
+            ALTER TABLE submissions ADD CONSTRAINT submissions_status_check 
+              CHECK (status IN ('draft', 'pending', 'submitted', 'resubmitted', 'late', 'evaluated', 'reviewed', 'graded', 'flagged', 'withdrawn'));
+          END IF;
+        END $$;
+      `);
+    } catch (migErr) {
+      console.warn("⚠️ Submissions status constraint migration notice:", migErr.message);
+    }
+
+    // Auto-check và tạo bảng class_ai_advisories nếu chưa có
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS class_ai_advisories (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+            assignment_id UUID REFERENCES assignments(id) ON DELETE CASCADE,
+            assignment_title VARCHAR(255),
+            mode VARCHAR(50) DEFAULT 'DEEP_TECHNICAL',
+            submission_rate_text VARCHAR(100),
+            avg_ai_transparency VARCHAR(100),
+            common_error_clusters JSONB DEFAULT '[]'::jsonb,
+            next_slot_recommendation TEXT,
+            raw_payload JSONB,
+            generated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            CONSTRAINT unique_class_assignment_advisory UNIQUE (class_id, assignment_id)
+        );
+
+        ALTER TABLE class_ai_advisories ADD COLUMN IF NOT EXISTS mode VARCHAR(50) DEFAULT 'DEEP_TECHNICAL';
+
+        CREATE INDEX IF NOT EXISTS idx_class_advisories_class_lookup 
+        ON class_ai_advisories(class_id, generated_at DESC);
+      `);
+    } catch (migErr) {
+      console.warn("⚠️ Class AI Advisories table migration notice:", migErr.message);
+    }
+
     console.log("✅ PostgreSQL connected");
 
     client.release();

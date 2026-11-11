@@ -14,5 +14,6 @@ module.exports = {
   update: wrap(async (req, res) => res.json({ success: true, data: await service.update(req.params.id, req.body) })),
   activate: wrap(async (req, res) => res.json({ success: true, data: await service.transition(req.params.id, 'activate') })),
   close: wrap(async (req, res) => res.json({ success: true, data: await service.transition(req.params.id, 'close') })),
+  reopen: wrap(async (req, res) => res.json({ success: true, data: await service.transition(req.params.id, 'reopen') })),
   lock: wrap(async (req, res) => res.json({ success: true, data: await service.transition(req.params.id, 'lock') })),
 };

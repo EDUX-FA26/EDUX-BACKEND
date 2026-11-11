@@ -26,6 +26,9 @@ const communicationsRoutes = require("./modules/communications/communications.ro
 const focusRoutes = require("./modules/focus/focus.routes");
 const todosRoutes = require("./modules/todos/todos.routes");
 const aiChatRoutes = require("./modules/ai-chat/aiChat.routes");
+const projectsRoutes = require(
+  './modules/projects/projects.routes'
+);
 
 
 // =========================
@@ -57,7 +60,7 @@ app.use("/api/notifications", notificationsRoutes);
 app.use("/api/dashboards", dashboardRoutes);
 app.use("/api/flashcards", flashcardsRoutes);
 app.use("/api/flashcards", flashcardsTestRoutes);
-
+app.use('/api/projects', projectsRoutes);
 // Module 7 — Learning Materials
 // A. Class Materials
 app.use("/api/classes/:classId/materials", classMaterialsRouter);

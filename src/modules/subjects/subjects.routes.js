@@ -12,5 +12,6 @@ router.get('/:id', validateUuidParam, controller.get);
 router.post('/', validate(createSubject), controller.create);
 router.patch('/:id', validateUuidParam, validate(updateSubject), controller.update);
 router.delete('/:id', validateUuidParam, controller.remove);
+router.post('/:id/restore', validateUuidParam, controller.restore);
 
 module.exports = router;

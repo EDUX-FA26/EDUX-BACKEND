@@ -5,11 +5,12 @@ const SubmissionRepository = {
    * Tạo submission mới cùng với version đầu tiên
    */
   async createSubmissionWithVersion(submissionData, versionData, client = pool) {
+    const isDraft = submissionData.status === 'draft';
     const submissionQuery = `
       INSERT INTO submissions (
         id, uuid, assignment_id, student_id, latest_version_no, status, submitted_at, last_submitted_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, NOW(), NOW()
+        $1, $2, $3, $4, $5, $6, ${isDraft ? 'NULL' : 'NOW()'}, ${isDraft ? 'NULL' : 'NOW()'}
       ) RETURNING *;
     `;
     const submissionValues = [
@@ -28,7 +29,7 @@ const SubmissionRepository = {
       INSERT INTO submission_versions (
         submission_id, assignment_id, student_id, version_no, files, note, is_latest, submitted_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, TRUE, NOW()
+        $1, $2, $3, $4, $5, $6, TRUE, ${isDraft ? 'NOW()' : 'NOW()'}
       ) RETURNING *;
     `;
     const versionValues = [
@@ -44,6 +45,60 @@ const SubmissionRepository = {
     const version = versionRows[0];
 
     return { submission, version };
+  },
+
+  /**
+   * Cập nhật bản nháp submission hiện tại (không tăng major version)
+   */
+  async updateDraftSubmission(submissionId, versionId, files, note, client = pool) {
+    const versionQuery = `
+      UPDATE submission_versions
+      SET files = $1::jsonb, note = $2, updated_at = NOW()
+      WHERE id = $3
+      RETURNING *;
+    `;
+    const { rows: versionRows } = await client.query(versionQuery, [
+      JSON.stringify(files || []),
+      note || '',
+      versionId
+    ]);
+
+    const subQuery = `
+      UPDATE submissions
+      SET updated_at = NOW()
+      WHERE id = $1
+      RETURNING *;
+    `;
+    const { rows: subRows } = await client.query(subQuery, [submissionId]);
+
+    return { submission: subRows[0], version: versionRows[0] };
+  },
+
+  /**
+   * Chuyển trạng thái draft sang nộp chính thức (chốt submitted_at = NOW())
+   */
+  async finalizeDraftSubmission(submissionId, versionId, status, files, note, client = pool) {
+    const versionQuery = `
+      UPDATE submission_versions
+      SET files = $1::jsonb, note = $2, submitted_at = NOW(), updated_at = NOW()
+      WHERE id = $3
+      RETURNING *;
+    `;
+    const { rows: versionRows } = await client.query(versionQuery, [
+      JSON.stringify(files || []),
+      note || '',
+      versionId
+    ]);
+
+    const subQuery = `
+      UPDATE submissions
+      SET status = $1, submitted_at = NOW(), last_submitted_at = NOW(), updated_at = NOW()
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const { rows: subRows } = await client.query(subQuery, [status, submissionId]);
+
+    return { submission: subRows[0], version: versionRows[0] };
   },
 
   /**
@@ -137,23 +192,51 @@ const SubmissionRepository = {
         g.id as grade_id,
         g.score,
         g.max_score,
-        g.feedback
+        g.feedback,
+        g.rubrics,
+        ae.evaluation_data as ai_evaluation_data,
+        ae.rubric_scores as ai_rubric_scores,
+        ae.viva_questions as ai_viva_questions,
+        ae.total_score as ai_total_score,
+        ae.overall_verdict as ai_overall_verdict,
+        ae.evaluated_at as ai_evaluated_at
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
       JOIN assignments a ON s.assignment_id = a.id
       LEFT JOIN LATERAL (
-        SELECT id, score, max_score, feedback
+        SELECT id, score, max_score, feedback, rubrics
         FROM grades
         WHERE submission_id = s.id
         ORDER BY created_at DESC
         LIMIT 1
       ) g ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT id, evaluation_data, rubric_scores, viva_questions, total_score, overall_verdict, evaluated_at
+        FROM ai_evaluations
+        WHERE submission_id = s.id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) ae ON TRUE
       WHERE s.id = $1
     `;
     const { rows: subRows } = await pool.query(subQuery, [id]);
     if (subRows.length === 0) return null;
     const submission = subRows[0];
+
+    // Parse JSON fields if returned as string
+    if (submission.rubrics && typeof submission.rubrics === 'string') {
+      try { submission.rubrics = JSON.parse(submission.rubrics); } catch (e) {}
+    }
+    if (submission.ai_evaluation_data && typeof submission.ai_evaluation_data === 'string') {
+      try { submission.ai_evaluation_data = JSON.parse(submission.ai_evaluation_data); } catch (e) {}
+    }
+    if (submission.ai_rubric_scores && typeof submission.ai_rubric_scores === 'string') {
+      try { submission.ai_rubric_scores = JSON.parse(submission.ai_rubric_scores); } catch (e) {}
+    }
+    if (submission.ai_viva_questions && typeof submission.ai_viva_questions === 'string') {
+      try { submission.ai_viva_questions = JSON.parse(submission.ai_viva_questions); } catch (e) {}
+    }
 
     let versionQuery = `SELECT * FROM submission_versions WHERE submission_id = $1`;
     if (!includeHistory) {
@@ -172,10 +255,33 @@ const SubmissionRepository = {
   /**
    * Lấy version cụ thể hoặc mới nhất để check file
    */
-  async findLatestVersion(submissionId) {
+  async findLatestVersion(submissionId, client = pool) {
     const query = `SELECT * FROM submission_versions WHERE submission_id = $1 AND is_latest = TRUE`;
-    const { rows } = await pool.query(query, [submissionId]);
+    const { rows } = await client.query(query, [submissionId]);
     return rows[0];
+  },
+
+  /**
+   * Cập nhật chỉ phần ghi chú / khai báo AI cho draft
+   */
+  async updateDraftNote(submissionId, versionId, note, client = pool) {
+    const versionQuery = `
+      UPDATE submission_versions
+      SET note = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const { rows: versionRows } = await client.query(versionQuery, [note || '', versionId]);
+
+    const subQuery = `
+      UPDATE submissions
+      SET updated_at = NOW()
+      WHERE id = $1
+      RETURNING *;
+    `;
+    const { rows: subRows } = await client.query(subQuery, [submissionId]);
+
+    return { submission: subRows[0], version: versionRows[0] };
   },
 
   /**
@@ -199,9 +305,17 @@ const SubmissionRepository = {
   /**
    * Giảng viên xem toàn bộ bài nộp của 1 assignment
    */
+  /**
+   * Giảng viên xem toàn bộ bài nộp của 1 assignment (BẮT BUỘC loại trừ bài nháp status = 'draft')
+   */
   async findManyByAssignmentId(assignmentId, { page = 1, limit = 10, status }) {
+    // Nếu filter chỉ định rõ ràng status === 'draft', trả về rỗng vì giảng viên không được xem draft
+    if (status === 'draft') {
+      return { data: [], total: 0 };
+    }
+
     const offset = (page - 1) * limit;
-    let whereClauses = [`s.assignment_id = $1`];
+    let whereClauses = [`s.assignment_id = $1`, `s.status != 'draft'`];
     let values = [assignmentId];
     let idx = 2;
 
@@ -210,7 +324,7 @@ const SubmissionRepository = {
       values.push(status);
     }
 
-    const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const whereString = `WHERE ${whereClauses.join(' AND ')}`;
 
     const countQuery = `SELECT COUNT(DISTINCT s.student_id) FROM submissions s ${whereString}`;
     const { rows: countRows } = await pool.query(countQuery, values);
@@ -246,9 +360,9 @@ const SubmissionRepository = {
           LIMIT 1
         ) g ON TRUE
         ${whereString}
-        ORDER BY s.student_id, s.submitted_at DESC, s.created_at DESC
+        ORDER BY s.student_id, s.submitted_at DESC NULLS LAST, s.created_at DESC
       ) t
-      ORDER BY t.submitted_at DESC
+      ORDER BY t.submitted_at DESC NULLS LAST
       LIMIT $${idx++} OFFSET $${idx++}
     `;
     values.push(limit, offset);
@@ -258,7 +372,7 @@ const SubmissionRepository = {
   },
 
   /**
-   * Sinh viên xem danh sách bài nộp của mình
+   * Sinh viên xem danh sách bài nộp của mình (bao gồm cả bản nháp)
    */
   async findMySubmissions(
     studentId,
@@ -292,12 +406,13 @@ const SubmissionRepository = {
 
     const total = parseInt(countRows[0].count, 10);
 
-    // Data
+    // Data kèm latest version files & note
     const query = `
     SELECT 
       s.*,
       a.title AS assignment_title,
-
+      sv.files AS latest_files,
+      sv.note AS latest_note,
       g.score AS score,
       g.feedback AS feedback
 
@@ -305,6 +420,14 @@ const SubmissionRepository = {
 
     JOIN assignments a 
       ON s.assignment_id = a.id
+
+    LEFT JOIN LATERAL (
+      SELECT files, note 
+      FROM submission_versions 
+      WHERE submission_id = s.id 
+      ORDER BY is_latest DESC, version_no DESC, submitted_at DESC 
+      LIMIT 1
+    ) sv ON TRUE
 
     LEFT JOIN grades g
       ON g.submission_id = s.id

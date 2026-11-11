@@ -141,10 +141,10 @@ const GradingService = {
    * Backend tự lấy assignment_id, student_id, class_id, lecturer_id
    * từ DB thông qua submission JOIN.
    */
-  async createGrade({ submissionId, score, maxScore, feedback }, user) {
+  async createGrade({ submissionId, score, maxScore, feedback, rubrics }, user) {
     // 1. Lấy submission + context
     const submission = await GradingRepository.findSubmissionById(submissionId);
-    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+    if (!submission || submission.submission_status === 'draft') throw new Error('SUBMISSION_NOT_FOUND');
 
     // 2. Kiểm tra quyền (lecturer của class đó)
     assertLecturer(user, submission.lecturer_id);
@@ -152,7 +152,7 @@ const GradingService = {
     // 3. Kiểm tra chưa có grade -> nếu đã có thì tự động update thay vì báo lỗi
     const existing = await GradingRepository.findBySubmissionId(submissionId);
     if (existing) {
-      return this.updateGrade(existing.id, { score, maxScore, feedback }, user);
+      return this.updateGrade(existing.id, { score, maxScore, feedback, rubrics }, user);
     }
 
     // 4. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
@@ -171,6 +171,7 @@ const GradingService = {
       max_score: resolvedMaxScore,
       feedback: feedback ?? '',
       graded_by: user.id,
+      rubrics: rubrics ?? null,
     });
 
     // 7. Cập nhật submission status → 'graded'
@@ -180,7 +181,7 @@ const GradingService = {
   },
 
   // ── UC 38 – Update Grade ───────────────────────────────────────────────────
-  async updateGrade(gradeId, { score, maxScore, feedback }, user) {
+  async updateGrade(gradeId, { score, maxScore, feedback, rubrics }, user) {
     // 1. Lấy grade
     const grade = await GradingRepository.findById(gradeId);
     if (!grade) throw new Error('GRADE_NOT_FOUND');
@@ -198,6 +199,7 @@ const GradingService = {
       score: score,
       max_score: maxScore,
       feedback: feedback,
+      rubrics: rubrics,
     });
 
     if (grade.submission_id) {
@@ -320,9 +322,27 @@ const GradingService = {
    * @param {Object} clientContext
    */
   async auditRubricForSubmission(submissionId, clientContext = {}) {
+    const force = Boolean(clientContext.force);
+
+    // 0. Nếu không force, kiểm tra Database xem đã có bản ghi snapshot evaluation chưa
+    if (!force) {
+      try {
+        const existingEval = await GradingRepository.findAiEvaluationBySubmissionId(submissionId);
+        if (existingEval && existingEval.evaluation_data) {
+          const cachedData = typeof existingEval.evaluation_data === 'string'
+            ? JSON.parse(existingEval.evaluation_data)
+            : existingEval.evaluation_data;
+          console.log(`[ART-AI] Returning locked evaluation snapshot from DB for submission ${submissionId}`);
+          return cachedData;
+        }
+      } catch (err) {
+        console.warn('[ART-AI] Failed to read cached evaluation snapshot:', err.message);
+      }
+    }
+
     // 1. Lấy toàn bộ thông tin bài nộp, đề bài, version từ Database thực tế
     const auditData = await GradingRepository.getSubmissionAuditData(submissionId);
-    if (!auditData) {
+    if (!auditData || auditData.submission_status === 'draft') {
       throw new Error('SUBMISSION_NOT_FOUND');
     }
 
@@ -515,6 +535,31 @@ const GradingService = {
       aiAuditSummary,
       oralExamLogs,
     });
+
+    // 8. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload
+    try {
+      if (auditData.latestVersion && auditData.submission) {
+        await GradingRepository.saveAiEvaluation({
+          submission_id: submissionId,
+          submission_version_id: auditData.latestVersion.id,
+          assignment_id: auditData.submission.assignment_id,
+          student_id: auditData.submission.student_id,
+          class_id: auditData.submission.class_id,
+          pattern: 'collaborative_usage',
+          risk_level: result?.audit_integrity?.riskLevel || 'low',
+          transparency_score: 95.0,
+          summary: result?.overall_verdict || '',
+          evaluation_data: result,
+          rubric_scores: result?.rubric_scores || null,
+          viva_questions: result?.viva_questions || [],
+          total_score: result?.total_score || null,
+          overall_verdict: result?.overall_verdict || result?.ai_verdict || ''
+        });
+        console.log(`[ART-AI] Saved locked evaluation snapshot to DB for submission ${submissionId}`);
+      }
+    } catch (saveErr) {
+      console.warn('[ART-AI] Failed to save evaluation snapshot to DB:', saveErr.message);
+    }
 
     return result;
   },
