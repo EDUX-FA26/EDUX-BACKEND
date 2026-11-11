@@ -398,7 +398,7 @@ const SubmissionService = {
       }
     }
 
-    return submission;
+    return this.enrichSubmissionAuditData(submission);
   },
 
   /**
@@ -483,6 +483,82 @@ const SubmissionService = {
   },
 
   /**
+   * Helper đánh giá trạng thái khai báo AI Audit Log cho mỗi submission
+   * Đảm bảo trả về:
+   * - has_declared_audit: boolean
+   * - ai_declarations: array
+   * - ai_audit_log: object | null
+   */
+  enrichSubmissionAuditData(sub) {
+    if (!sub) return sub;
+
+    const rawNote = sub.latest_note || sub.note || sub.declarations || sub.aiAuditLog || sub.ai_audit_log;
+
+    let hasDeclaredAudit = false;
+    let normalizedAudit = null;
+    const completedDeclarations = [];
+
+    if (rawNote) {
+      let parsed = null;
+      if (typeof rawNote === 'string') {
+        let trimmed = rawNote.trim();
+        if (trimmed.toLowerCase().startsWith('note:')) {
+          trimmed = trimmed.substring(5).trim();
+        }
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch (e) {
+          parsed = null;
+        }
+      } else if (typeof rawNote === 'object') {
+        parsed = rawNote;
+      }
+
+      if (parsed) {
+        normalizedAudit = normalizeAuditData(parsed);
+        if (normalizedAudit && Array.isArray(normalizedAudit.scopes)) {
+          for (const scope of normalizedAudit.scopes) {
+            if (scope && scope.declarations) {
+              for (const key of Object.keys(scope.declarations)) {
+                const item = scope.declarations[key];
+                const prompt = (item.prompt || item.prompt_used || item.promptUsed || '').trim();
+                const response = (item.response || item.responseSummary || item.aiResponseSummary || item.ai_response_summary || '').trim();
+                const reflection = (item.reflection || item.studentReflection || item.student_reflection || '').trim();
+
+                // Xác định hoàn thành: Có cả 3 trường prompt, response, reflection không rỗng
+                const isCompleted = Boolean(item.isCompleted || (prompt.length > 0 && response.length > 0 && reflection.length > 0));
+
+                if (isCompleted || prompt.length > 0 || response.length > 0 || reflection.length > 0) {
+                  completedDeclarations.push({
+                    key,
+                    scope_id: scope.id,
+                    scope_title: scope.scope_title,
+                    ...item,
+                    isCompleted,
+                  });
+                }
+
+                if (isCompleted) {
+                  hasDeclaredAudit = true;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    sub.has_declared_audit = hasDeclaredAudit;
+    sub.ai_declarations = completedDeclarations;
+    sub.ai_audit_log = hasDeclaredAudit ? normalizedAudit : null;
+    if (!sub.declarations && normalizedAudit) {
+      sub.declarations = normalizedAudit;
+    }
+
+    return sub;
+  },
+
+  /**
    * Giảng viên xem danh sách bài nộp của lớp
    */
   async getAssignmentSubmissions(assignmentId, query, user) {
@@ -498,7 +574,11 @@ const SubmissionService = {
       }
     }
 
-    return await SubmissionRepository.findManyByAssignmentId(assignmentId, query);
+    const result = await SubmissionRepository.findManyByAssignmentId(assignmentId, query);
+    if (result && Array.isArray(result.data)) {
+      result.data = result.data.map(sub => this.enrichSubmissionAuditData(sub));
+    }
+    return result;
   },
   
   /**
@@ -540,7 +620,7 @@ const SubmissionService = {
       }
     }
 
-    return detailed;
+    return this.enrichSubmissionAuditData(detailed);
   },
 
   /**

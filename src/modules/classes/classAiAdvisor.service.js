@@ -4,7 +4,8 @@ const { generateClassAiAdvisoryWithGemini } = require('../../config/gemini.confi
 
 const ClassAiAdvisorService = {
   /**
-   * Lấy dữ liệu tư vấn sư phạm AI (AI Class Advisor) và danh sách lịch sử của một lớp học
+   * Lấy dữ liệu tư vấn sư phạm AI (AI Class Advisor) và danh sách lịch sử của một lớp học.
+   * Dữ liệu danh sách (droplist) đồng bộ 100% với các bài tập/lab đã quá hạn nộp trong bảng assignments.
    * @param {string} classId
    * @param {Object} user
    */
@@ -12,25 +13,10 @@ const ClassAiAdvisorService = {
     // 1. Kiểm tra quyền truy cập lớp học (Lecturer chỉ xem lớp của mình, Admin xem tất cả)
     await ClassesService.getClassById(classId, user);
 
-    // Bước 1: Lấy toàn bộ danh sách snapshot đã lưu trong bảng class_ai_advisories của classId, sắp xếp theo generated_at DESC
-    let snapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    // Bước 1: Lấy toàn bộ danh sách bài tập/lab đã hết hạn nộp (deadline < NOW()) của lớp từ bảng assignments
+    const expiredAssignments = await ClassAiAdvisorRepository.getExpiredAssignmentsByClassId(classId);
 
-    // Bước 2: Kiểm tra bài tập quá hạn nộp gần nhất (deadline < NOW())
-    const latestExpired = await ClassAiAdvisorRepository.getLatestExpiredAssignment(classId);
-
-    if (latestExpired) {
-      const hasSnapshot = snapshots.some((s) => s.assignment_id === latestExpired.id);
-
-      // Nếu chưa có snapshot cho bài tập này trong DB:
-      // Tổng hợp dữ liệu bài nộp & audit, gọi Gemini AI phân tích, lưu snapshot mới
-      if (!hasSnapshot) {
-        const newSnapshot = await this.generateAndSaveAdvisory(classId, latestExpired);
-        snapshots = [newSnapshot, ...snapshots];
-      }
-    }
-
-    // Bước 3: Trả về payload cấu trúc gồm bài mới nhất và toàn bộ danh sách lịch sử
-    if (!snapshots || snapshots.length === 0) {
+    if (!expiredAssignments || expiredAssignments.length === 0) {
       return {
         has_data: false,
         latest_advisory_id: null,
@@ -38,22 +24,68 @@ const ClassAiAdvisorService = {
       };
     }
 
-    const advisories = snapshots.map((row, index) => {
+    // Bước 2: Lấy toàn bộ danh sách snapshot đã có trong bảng class_ai_advisories
+    const snapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    const snapshotMap = new Map(snapshots.map((s) => [s.assignment_id, s]));
+
+    // Bước 3: Đảm bảo bài tập quá hạn mới nhất (index 0) bắt buộc phải có snapshot
+    const latestExpired = expiredAssignments[0];
+    if (!snapshotMap.has(latestExpired.id)) {
+      const newSnapshot = await this.generateAndSaveAdvisory(classId, latestExpired);
+      snapshotMap.set(latestExpired.id, newSnapshot);
+    }
+
+    // Bước 4: Kiểm tra các bài tập đã hết hạn khác. Nếu bài nào chưa có snapshot trong DB,
+    // tự động tổng hợp bài nộp và gọi phân tích để lưu snapshot mới
+    for (const assignment of expiredAssignments) {
+      if (!snapshotMap.has(assignment.id)) {
+        try {
+          const generated = await this.generateAndSaveAdvisory(classId, assignment);
+          snapshotMap.set(assignment.id, generated);
+        } catch (err) {
+          console.warn(`[ClassAiAdvisorService] Failed generating advisory for assignment ${assignment.id}:`, err.message);
+        }
+      }
+    }
+
+    // Bước 5: Ghép danh sách advisories theo đúng thứ tự bài tập hết hạn (deadline DESC)
+    const advisories = [];
+    for (let i = 0; i < expiredAssignments.length; i++) {
+      const assignment = expiredAssignments[i];
+      const row = snapshotMap.get(assignment.id);
+      if (!row) continue;
+
       const mode = row.mode || row.raw_payload?.mode || 'DEEP_TECHNICAL';
       const rawTransparency = row.avg_ai_transparency || row.raw_payload?.class_overview?.avg_ai_transparency;
       const cleanTransparency = (
         rawTransparency &&
         rawTransparency !== 'null' &&
         rawTransparency !== 'N/A' &&
-        !rawTransparency.includes('Đang cập nhật') &&
-        !rawTransparency.includes('Chưa có dữ liệu')
+        !String(rawTransparency).includes('Đang cập nhật') &&
+        !String(rawTransparency).includes('Chưa có dữ liệu')
       ) ? rawTransparency : null;
 
-      return {
+      const deadlineDate = assignment.deadline ? new Date(assignment.deadline) : (row.deadline ? new Date(row.deadline) : null);
+      const deadlineFormatted = deadlineDate
+        ? deadlineDate.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+        : '';
+
+      const isLab = (assignment.title || row.assignment_title || '').toLowerCase().includes('lab');
+      const typeLabel = isLab ? 'Lab' : 'Bài tập';
+      const assignmentTitle = assignment.title || row.assignment_title || 'Bài tập';
+      const dropdownLabel = deadlineFormatted
+        ? `[${typeLabel}] ${assignmentTitle} - Hạn: ${deadlineFormatted}`
+        : `[${typeLabel}] ${assignmentTitle}`;
+
+      advisories.push({
         id: row.id,
-        assignment_id: row.assignment_id,
-        assignment_title: row.assignment_title || 'Bài tập',
-        is_latest: index === 0,
+        assignment_id: assignment.id,
+        assignment_title: assignmentTitle,
+        type: isLab ? 'lab' : 'assignment',
+        deadline: deadlineDate ? deadlineDate.toISOString() : null,
+        deadline_formatted: deadlineFormatted,
+        dropdown_label: dropdownLabel,
+        is_latest: advisories.length === 0,
         mode,
         generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
         class_overview: {
@@ -66,11 +98,11 @@ const ClassAiAdvisorService = {
             ? JSON.parse(row.common_error_clusters)
             : []),
         next_slot_recommendation: row.next_slot_recommendation || ''
-      };
-    });
+      });
+    }
 
     return {
-      has_data: true,
+      has_data: advisories.length > 0,
       latest_advisory_id: advisories[0]?.id || null,
       advisories
     };
@@ -97,45 +129,8 @@ const ClassAiAdvisorService = {
     // Buộc gọi lại Gemini AI và cập nhật snapshot tương ứng
     await this.generateAndSaveAdvisory(classId, latestExpired);
 
-    // Lấy lại danh sách snapshot cập nhật mới nhất
-    const snapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
-
-    const advisories = snapshots.map((row, index) => {
-      const mode = row.mode || row.raw_payload?.mode || 'DEEP_TECHNICAL';
-      const rawTransparency = row.avg_ai_transparency || row.raw_payload?.class_overview?.avg_ai_transparency;
-      const cleanTransparency = (
-        rawTransparency &&
-        rawTransparency !== 'null' &&
-        rawTransparency !== 'N/A' &&
-        !rawTransparency.includes('Đang cập nhật') &&
-        !rawTransparency.includes('Chưa có dữ liệu')
-      ) ? rawTransparency : null;
-
-      return {
-        id: row.id,
-        assignment_id: row.assignment_id,
-        assignment_title: row.assignment_title || 'Bài tập',
-        is_latest: index === 0,
-        mode,
-        generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
-        class_overview: {
-          submission_rate_text: row.submission_rate_text || 'Chưa có thông tin nộp bài',
-          avg_ai_transparency: cleanTransparency
-        },
-        common_error_clusters: Array.isArray(row.common_error_clusters)
-          ? row.common_error_clusters
-          : (typeof row.common_error_clusters === 'string'
-            ? JSON.parse(row.common_error_clusters)
-            : []),
-        next_slot_recommendation: row.next_slot_recommendation || ''
-      };
-    });
-
-    return {
-      has_data: true,
-      latest_advisory_id: advisories[0]?.id || null,
-      advisories
-    };
+    // Trả về danh sách advisories đã cập nhật
+    return await this.getAiAdvisor(classId, user);
   },
 
   /**
