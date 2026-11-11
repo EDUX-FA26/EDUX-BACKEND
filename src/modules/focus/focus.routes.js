@@ -24,8 +24,16 @@ router.post('/sessions/:id/adjust', parseRequest({ params: v.idParams, body: v.a
 router.post('/sessions/:id/finish', parseRequest({ params: v.idParams, body: v.finishSession }), ctrl.finish);
 
 // ── Nhóm D — Thống kê ────────────────────────────────────
+// Các API chuyên sâu theo tài liệu FOCUS_STATISTICS_ROOM.md
+router.get('/stats/overview', parseRequest({ query: v.overviewQuery }), ctrl.overview);
+router.get('/stats/daily', parseRequest({ query: v.statsDailyQuery }), ctrl.statsDaily);
+router.get('/stats/heatmap', parseRequest({ query: v.statsHeatmapQuery }), ctrl.heatmap);
+router.get('/stats/distribution', parseRequest({ query: v.statsDistributionQuery }), ctrl.distribution);
+router.get('/stats/todos', parseRequest({ query: v.statsTodosQuery }), ctrl.todos);
+router.get('/stats/insights', parseRequest({ query: v.statsInsightsQuery }), ctrl.insights);
+
+// Tương thích ngược (Backward compatibility)
 router.get('/stats/summary', parseRequest({ query: v.summaryQuery }), ctrl.summary);
-router.get('/stats/daily', parseRequest({ query: v.dailyQuery }), ctrl.daily);
 router.get('/stats/weekly', parseRequest({ query: v.weeklyQuery }), ctrl.weekly);
 
 // ── Nhóm E — Cấu hình phòng học ──────────────────────────

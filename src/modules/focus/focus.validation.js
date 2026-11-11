@@ -78,6 +78,32 @@ const schemas = {
   dailyQuery: z.object({ days: z.coerce.number().int().min(1).max(90).default(7) }),
   weeklyQuery: z.object({ weeks: z.coerce.number().int().min(1).max(26).default(8) }),
 
+  // ── Thống kê chuyên sâu (Statistics Dashboard) ────────
+  overviewQuery: z.object({
+    timeframe: z.enum(['today', 'last_7_days', 'last_30_days', 'this_semester', 'all_time']).default('last_7_days'),
+    from: dateStr.optional(),
+    to: dateStr.optional(),
+  }),
+  statsDailyQuery: z.object({
+    timeframe: z.enum(['today', 'last_7_days', 'last_30_days', 'this_semester', 'all_time']).default('last_7_days'),
+    days: z.coerce.number().int().min(1).max(90).optional(),
+    from: dateStr.optional(),
+    to: dateStr.optional(),
+  }),
+  statsHeatmapQuery: z.object({
+    days: z.coerce.number().int().min(30).max(365).default(120),
+  }),
+  statsDistributionQuery: z.object({
+    timeframe: z.enum(['today', 'last_7_days', 'last_30_days', 'this_semester', 'all_time']).default('last_7_days'),
+  }),
+  statsTodosQuery: z.object({
+    timeframe: z.enum(['today', 'last_7_days', 'last_30_days', 'this_semester', 'all_time']).default('last_7_days'),
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+  }),
+  statsInsightsQuery: z.object({
+    timeframe: z.enum(['today', 'last_7_days', 'last_30_days', 'this_semester', 'all_time']).default('last_7_days'),
+  }),
+
   putPreferences: z
     .object({
       backgroundId: z.enum(BACKGROUND_IDS).optional(),

@@ -43,6 +43,24 @@ const FocusController = {
   weekly: async (req, res) =>
     ok(res, await FocusService.weekly(req.user.id, req.valid.query), 'Weekly focus stats'),
 
+  overview: async (req, res) =>
+    ok(res, await FocusService.overview(req.user.id, req.valid.query), 'Focus stats overview'),
+
+  statsDaily: async (req, res) =>
+    ok(res, await FocusService.dailyStats(req.user.id, req.valid.query), 'Focus stats daily'),
+
+  heatmap: async (req, res) =>
+    ok(res, await FocusService.heatmap(req.user.id, req.valid.query), 'Focus stats heatmap'),
+
+  distribution: async (req, res) =>
+    ok(res, await FocusService.distribution(req.user.id, req.valid.query), 'Focus stats distribution'),
+
+  todos: async (req, res) =>
+    ok(res, await FocusService.todosStats(req.user.id, req.valid.query), 'Focus stats todos'),
+
+  insights: async (req, res) =>
+    ok(res, await FocusService.insights(req.user.id, req.valid.query), 'Focus stats insights'),
+
   getPreferences: async (req, res) =>
     ok(res, await FocusService.getPreferences(req.user.id), 'Focus preferences'),
 

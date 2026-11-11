@@ -1,5 +1,6 @@
 const { pool } = require('../../config/db.config');
 const { AppError } = require('../../utils/appError');
+const { askGemini } = require('../../config/gemini.config');
 const Timer = require('./focusTimer');
 const Repo = require('./focus.repository');
 const {
@@ -235,10 +236,93 @@ const FocusService = {
     return { items: rows.map((r) => viewOf(r, now)), pagination };
   },
 
-  // Nhóm D — thống kê
+  // Nhóm D — thống kê cơ bản (Backward compatibility)
   summary: (userId, query) => Repo.summary(userId, query),
   daily: (userId, { days }) => Repo.daily(userId, days),
   weekly: (userId, { weeks }) => Repo.weekly(userId, weeks),
+
+  // Nhóm D — thống kê chuyên sâu (P0 Dashboard)
+  overview: (userId, query) => Repo.statsOverview(userId, query),
+  dailyStats: (userId, query) => Repo.statsDaily(userId, query),
+  heatmap: (userId, query) => Repo.statsHeatmap(userId, query.days),
+  distribution: (userId, query) => Repo.statsDistribution(userId, query),
+  todosStats: (userId, query) => Repo.statsTodos(userId, query),
+
+  async insights(userId, query) {
+    const overview = await Repo.statsOverview(userId, query);
+    const distribution = await Repo.statsDistribution(userId, query);
+    const m = overview.metrics;
+
+    if (m.totalSessions === 0) {
+      return {
+        headline: 'Bắt đầu hành trình tập trung của bạn!',
+        highlights: [
+          'Bạn chưa có phiên học tập nào được ghi nhận trong khoảng thời gian này.',
+          'Hãy chọn chế độ Pomodoro hoặc Stopwatch để khởi động phiên học đầu tiên.',
+        ],
+        recommendation: 'Đặt mục tiêu 1 đến 2 phiên Pomodoro 25 phút mỗi ngày để tạo nhịp học tập bền vững.',
+        isAiGenerated: false,
+      };
+    }
+
+    const focusHours = (m.totalFocusSeconds / 3600).toFixed(1);
+    const peakText = distribution.peakSlot ? distribution.peakSlot.label : 'chưa xác định';
+    const compText = overview.comparison.diffPercent > 0
+      ? `Tăng ${overview.comparison.diffPercent}% so với chu kỳ trước`
+      : overview.comparison.diffPercent < 0
+      ? `Giảm ${Math.abs(overview.comparison.diffPercent)}% so với chu kỳ trước`
+      : 'Tương đương chu kỳ trước';
+
+    const fallback = {
+      headline: m.currentStreak >= 3
+        ? `Phong độ tuyệt vời! Bạn đang duy trì chuỗi ${m.currentStreak} ngày tập trung liên tục.`
+        : `Bạn đã tích lũy ${focusHours} giờ học tập trung chất lượng.`,
+      highlights: [
+        `Tổng thời gian học thực tế đạt ${focusHours} giờ với ${m.completedSessions} phiên hoàn thành (${compText}).`,
+        `Thời điểm bạn học tập trung nhất là ${peakText}.`,
+        m.todoCompletionRate > 0
+          ? `Tỷ lệ hoàn thành nhiệm vụ gắn với phiên học đạt ${m.todoCompletionRate}%.`
+          : 'Gắn nhiệm vụ từ To-Do-List vào phiên học sẽ giúp bạn nâng cao hiệu suất rõ rệt.',
+      ],
+      recommendation: m.cancelledSessions > m.completedSessions
+        ? 'Bạn đang có tỷ lệ bỏ dở phiên khá cao. Hãy thử chia nhỏ thời gian học xuống 15-20 phút mỗi phiên để duy trì năng lượng.'
+        : `Hãy tiếp tục duy trì việc học vào khung giờ vàng (${peakText}) để đạt hiệu quả cao nhất.`,
+      isAiGenerated: false,
+    };
+
+    try {
+      if (!process.env.GEMINI_API_KEY) return fallback;
+
+      const prompt = `Bạn là cố vấn học tập thông minh Edutrack. Dựa trên số liệu học tập thực tế của sinh viên:
+- Tổng thời gian tập trung: ${focusHours} giờ (${m.completedSessions} phiên hoàn thành, ${m.cancelledSessions} phiên bỏ dở).
+- Chuỗi học liên tục (streak): ${m.currentStreak} ngày (kỷ lục: ${m.longestStreak} ngày).
+- Tăng trưởng so với kỳ trước: ${compText}.
+- Khung giờ học hiệu quả nhất: ${peakText}.
+- Tỷ lệ hoàn thành Todo gắn phiên: ${m.todoCompletionRate}%.
+
+Hãy đưa ra nhận xét ngắn gọn, thực tế và mang tính động viên bằng tiếng Việt dưới định dạng JSON duy nhất (không bọc markdown):
+{
+  "headline": "1 câu tóm tắt truyền cảm hứng",
+  "highlights": ["điểm nổi bật 1", "điểm nổi bật 2"],
+  "recommendation": "1 lời khuyên cụ thể, hành động được ngay"
+}`;
+
+      const aiText = await askGemini(prompt);
+      const cleanJson = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      if (parsed.headline && parsed.highlights && parsed.recommendation) {
+        return {
+          headline: parsed.headline,
+          highlights: parsed.highlights,
+          recommendation: parsed.recommendation,
+          isAiGenerated: true,
+        };
+      }
+      return fallback;
+    } catch {
+      return fallback;
+    }
+  },
 
   // Nhóm E — cấu hình phòng học
   async getPreferences(userId) {
