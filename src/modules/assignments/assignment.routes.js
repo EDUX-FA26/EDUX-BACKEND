@@ -13,6 +13,8 @@ const {
   queryAssignmentsSchema
 } = require('./assignment.validation');
 const assignmentMaterialRoutes = require('../assignment-materials/assignmentMaterial.routes');
+const SubmissionController = require('../submissions/submission.controller');
+const { queryAssignmentSubmissionsSchema } = require('../submissions/submission.validation');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -39,6 +41,14 @@ router.get(
   '/', 
   validate(queryAssignmentsSchema, 'query'), 
   AssignmentController.getAssignments
+);
+
+// Danh sách bài nộp của 1 assignment (cho lecturer/admin/student)
+router.get(
+  '/:assignmentId/submissions',
+  authorize('admin', 'lecturer', 'student'),
+  validate(queryAssignmentSubmissionsSchema, 'query'),
+  SubmissionController.getAssignmentSubmissions
 );
 
 router.get(
