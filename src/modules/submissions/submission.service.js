@@ -50,26 +50,26 @@ const SubmissionService = {
    * - Nếu chưa có: tạo mới status = 'draft', latest_version_no = 1
    * - Nếu đã có status = 'draft': cập nhật trực tiếp version hiện tại mà không tăng major version
    */
-  async saveDraft(assignmentId, user, uploadedFiles = [], body = {}) {
-    if (user.role !== 'student') {
+  async saveDraft(assignmentId, tenant, uploadedFiles = [], body = {}) {
+    if (tenant.role !== 'student') {
       throw new Error('ONLY_STUDENT_CAN_SUBMIT');
     }
 
-    // 1. Kiểm tra assignment và enrollment
-    const assignment = await AssignmentRepository.findById(assignmentId);
+    // 1. Kiểm tra assignment và enrollment trong trường hiện tại
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
     if (assignment.publish_status !== 'published') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
     const { rows: memberRows } = await pool.query(
-      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
 
     // 2. Upload file lên S3 nếu có
-    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+    const filesMeta = await this.uploadFilesToS3(assignmentId, tenant.userId, uploadedFiles);
 
     // Chuẩn bị note/declarations
     let draftNote = body.note || '';
@@ -88,7 +88,12 @@ const SubmissionService = {
     try {
       await client.query('BEGIN');
 
-      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(
+        assignmentId,
+        tenant.userId,
+        tenant.schoolId,
+        client
+      );
       let result;
 
       if (!existingSubmission) {
@@ -96,8 +101,9 @@ const SubmissionService = {
         const submissionData = {
           id: uuidv4(),
           uuid: uuidv4(),
+          school_id: tenant.schoolId,
           assignment_id: assignmentId,
-          student_id: user.id,
+          student_id: tenant.userId,
           status: 'draft'
         };
         const versionData = {
@@ -112,7 +118,7 @@ const SubmissionService = {
           throw new Error('SUBMISSION_LOCKED');
         }
 
-        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, tenant.schoolId, client);
         let currentFiles = [];
         if (latestVer?.files) {
           try {
@@ -129,25 +135,14 @@ const SubmissionService = {
 
         const finalNote = draftNote !== undefined ? draftNote : (latestVer?.note || '');
 
-        if (existingSubmission.status === 'draft') {
-          // Update trực tiếp draft hiện tại, không tăng version
-          result = await SubmissionRepository.updateDraftSubmission(
-            existingSubmission.id,
-            latestVer.id,
-            finalFiles,
-            finalNote,
-            client
-          );
-        } else {
-          // Bài đã từng nộp chính thức, lưu cập nhật dở dang vào version hiện tại
-          result = await SubmissionRepository.updateDraftSubmission(
-            existingSubmission.id,
-            latestVer.id,
-            finalFiles,
-            finalNote,
-            client
-          );
-        }
+        result = await SubmissionRepository.updateDraftSubmission(
+          existingSubmission.id,
+          latestVer.id,
+          tenant.schoolId,
+          finalFiles,
+          finalNote,
+          client
+        );
       }
 
       await client.query('COMMIT');
@@ -166,21 +161,21 @@ const SubmissionService = {
    * - Bắt buộc kiểm tra file hợp lệ và khai báo AI (nếu yêu cầu)
    * - Đóng băng version, chốt status = 'submitted' hoặc 'late', submitted_at = NOW()
    */
-  async submitFinal(assignmentId, user, uploadedFiles = [], body = {}) {
-    if (user.role !== 'student') {
+  async submitFinal(assignmentId, tenant, uploadedFiles = [], body = {}) {
+    if (tenant.role !== 'student') {
       throw new Error('ONLY_STUDENT_CAN_SUBMIT');
     }
 
-    // 1. Kiểm tra assignment và enrollment
-    const assignment = await AssignmentRepository.findById(assignmentId);
+    // 1. Kiểm tra assignment và enrollment trong trường hiện tại
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
     if (assignment.publish_status !== 'published') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
     const { rows: memberRows } = await pool.query(
-      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
 
@@ -197,21 +192,26 @@ const SubmissionService = {
     }
 
     // 3. Upload files mới lên S3 (nếu có)
-    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+    const filesMeta = await this.uploadFilesToS3(assignmentId, tenant.userId, uploadedFiles);
 
     // 4. Transaction lưu DB và kiểm tra ràng buộc hoàn tất
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(
+        assignmentId,
+        tenant.userId,
+        tenant.schoolId,
+        client
+      );
 
       // Xác định file có hiệu lực (từ file vừa tải lên hoặc từ version trước đó)
       let effectiveFiles = filesMeta;
       let existingLatestVer = null;
 
       if (existingSubmission) {
-        existingLatestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
+        existingLatestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, tenant.schoolId, client);
         if (filesMeta.length === 0 && existingLatestVer?.files) {
           try {
             effectiveFiles = typeof existingLatestVer.files === 'string'
@@ -280,8 +280,9 @@ const SubmissionService = {
         const submissionData = {
           id: uuidv4(),
           uuid: uuidv4(),
+          school_id: tenant.schoolId,
           assignment_id: assignmentId,
-          student_id: user.id,
+          student_id: tenant.userId,
           status
         };
         const versionData = {
@@ -295,6 +296,7 @@ const SubmissionService = {
         result = await SubmissionRepository.finalizeDraftSubmission(
           existingSubmission.id,
           existingLatestVer.id,
+          tenant.schoolId,
           status,
           effectiveFiles,
           effectiveNote,
@@ -307,7 +309,7 @@ const SubmissionService = {
           note: effectiveNote,
           status: (status === 'late' ? 'late' : 'resubmitted')
         };
-        result = await SubmissionRepository.addSubmissionVersion(existingSubmission.id, versionData, client);
+        result = await SubmissionRepository.addSubmissionVersion(existingSubmission.id, tenant.schoolId, versionData, client);
       }
 
       await client.query('COMMIT');
@@ -324,23 +326,23 @@ const SubmissionService = {
    * Sinh viên nộp bài / nộp lại bài / lưu bản nháp
    * Tự động điều hướng theo query hoặc body is_draft
    */
-  async submitAssignment(assignmentId, user, uploadedFiles, body = {}) {
+  async submitAssignment(assignmentId, tenant, uploadedFiles, body = {}) {
     const isDraft = body.is_draft === true || body.is_draft === 'true';
     if (isDraft) {
-      return await this.saveDraft(assignmentId, user, uploadedFiles, body);
+      return await this.saveDraft(assignmentId, tenant, uploadedFiles, body);
     }
-    return await this.submitFinal(assignmentId, user, uploadedFiles, body);
+    return await this.submitFinal(assignmentId, tenant, uploadedFiles, body);
   },
 
   /**
    * Sinh viên xóa 1 file trong version hiện tại
    */
-  async deleteSubmissionFile(submissionId, fileId, user) {
-    if (user.role !== 'student') throw new Error('ONLY_STUDENT_CAN_DELETE');
+  async deleteSubmissionFile(submissionId, fileId, tenant) {
+    if (tenant.role !== 'student') throw new Error('ONLY_STUDENT_CAN_DELETE');
 
-    const submission = await SubmissionRepository.findById(submissionId, false);
+    const submission = await SubmissionRepository.findById(submissionId, false, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
-    if (submission.student_id !== user.id) throw new Error('FORBIDDEN');
+    if (submission.student_id !== tenant.userId) throw new Error('FORBIDDEN');
 
     // Không cho xóa nếu bài đã chấm hoặc bị khoá
     const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
@@ -367,7 +369,7 @@ const SubmissionService = {
 
     // Cập nhật DB
     files.splice(fileIndex, 1);
-    const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVersion.id, files);
+    const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVersion.id, tenant.schoolId, files);
     
     return updatedVersion;
   },
@@ -375,41 +377,45 @@ const SubmissionService = {
   /**
    * Lấy chi tiết bài nộp
    */
-  async getSubmissionById(submissionId, includeHistory, user) {
-    const submission = await SubmissionRepository.findById(submissionId, includeHistory);
+  async getSubmissionById(submissionId, includeHistory, tenant) {
+    const submission = await SubmissionRepository.findById(submissionId, includeHistory, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
 
     // Phân quyền
-    if (user.role === 'student' && submission.student_id !== user.id) {
-      throw new Error('FORBIDDEN');
+    if (tenant.role === 'student') {
+      if (submission.student_id !== tenant.userId) {
+        throw new Error('FORBIDDEN');
+      }
+      return submission;
     }
     
-    // Giảng viên / Admin: Tuyệt đối không nhìn thấy bài đang ở trạng thái draft
-    if (user.role === 'lecturer' || user.role === 'admin') {
+    // Giảng viên / School Admin: Tuyệt đối không nhìn thấy bài đang ở trạng thái draft
+    if (tenant.role === 'lecturer' || tenant.role === 'school_admin') {
       if (submission.status === 'draft') {
         throw new Error('SUBMISSION_NOT_FOUND');
       }
 
-      if (user.role === 'lecturer') {
-        const assignment = await AssignmentRepository.findById(submission.assignment_id);
-        if (assignment.lecturer_id !== user.id) {
+      if (tenant.role === 'lecturer') {
+        const assignment = await AssignmentRepository.findById(submission.assignment_id, tenant.schoolId);
+        if (!assignment || assignment.lecturer_id !== tenant.userId) {
           throw new Error('FORBIDDEN');
         }
       }
+      return submission;
     }
 
-    return submission;
+    throw new Error('FORBIDDEN');
   },
 
   /**
-   * Giảng viên/Admin đánh giá bài nộp
+   * Giảng viên/School Admin đánh giá bài nộp
    */
-  async reviewSubmission(submissionId, body, user) {
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+  async reviewSubmission(submissionId, body, tenant) {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
-    const submission = await SubmissionRepository.findById(submissionId, false);
+    const submission = await SubmissionRepository.findById(submissionId, false, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
 
     // Không thể đánh giá bài nháp
@@ -417,40 +423,42 @@ const SubmissionService = {
       throw new Error('SUBMISSION_NOT_FOUND');
     }
 
-    if (user.role === 'lecturer') {
-      const assignment = await AssignmentRepository.findById(submission.assignment_id);
-      if (assignment.lecturer_id !== user.id) {
+    if (tenant.role === 'lecturer') {
+      const assignment = await AssignmentRepository.findById(submission.assignment_id, tenant.schoolId);
+      if (!assignment || assignment.lecturer_id !== tenant.userId) {
         throw new Error('FORBIDDEN');
       }
     }
 
-    const updated = await SubmissionRepository.updateStatus(submissionId, body.status, body.feedback);
+    const updated = await SubmissionRepository.updateStatus(submissionId, tenant.schoolId, body.status, body.feedback);
     return updated;
   },
 
   /**
    * Tải xuống hoặc xem 1 file
    */
-  async getSubmissionFile(submissionId, fileId, user) {
-    const submission = await SubmissionRepository.findById(submissionId, true);
+  async getSubmissionFile(submissionId, fileId, tenant) {
+    const submission = await SubmissionRepository.findById(submissionId, true, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
 
-    if (user.role === 'student' && submission.student_id !== user.id) {
+    if (tenant.role === 'student' && submission.student_id !== tenant.userId) {
       throw new Error('FORBIDDEN');
     }
 
-    // Giảng viên không được tải file từ bài nháp
-    if (user.role === 'lecturer' || user.role === 'admin') {
+    // Giảng viên / School Admin không được tải file từ bài nháp
+    if (tenant.role === 'lecturer' || tenant.role === 'school_admin') {
       if (submission.status === 'draft') {
         throw new Error('SUBMISSION_NOT_FOUND');
       }
 
-      if (user.role === 'lecturer') {
-        const assignment = await AssignmentRepository.findById(submission.assignment_id);
-        if (assignment.lecturer_id !== user.id) {
+      if (tenant.role === 'lecturer') {
+        const assignment = await AssignmentRepository.findById(submission.assignment_id, tenant.schoolId);
+        if (!assignment || assignment.lecturer_id !== tenant.userId) {
           throw new Error('FORBIDDEN');
         }
       }
+    } else if (tenant.role !== 'student') {
+      throw new Error('FORBIDDEN');
     }
 
     // Tìm file trong toàn bộ versions (vì có thể file ở version cũ)
@@ -483,38 +491,49 @@ const SubmissionService = {
   },
 
   /**
-   * Giảng viên xem danh sách bài nộp của lớp
+   * Giảng viên / School Admin xem danh sách bài nộp của lớp
    */
-  async getAssignmentSubmissions(assignmentId, query, user) {
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+  async getAssignmentSubmissions(assignmentId, query, tenant) {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
-    if (user.role === 'lecturer') {
-      const assignment = await AssignmentRepository.findById(assignmentId);
-      if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
-      if (assignment.lecturer_id !== user.id) {
-        throw new Error('FORBIDDEN');
-      }
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+
+    if (tenant.role === 'lecturer' && assignment.lecturer_id !== tenant.userId) {
+      throw new Error('FORBIDDEN');
     }
 
-    return await SubmissionRepository.findManyByAssignmentId(assignmentId, query);
+    return await SubmissionRepository.findManyByAssignmentId(assignmentId, tenant.schoolId, query);
   },
   
   /**
-   * Lấy danh sách bài nộp của student hiện tại
+   * Lấy danh sách bài nộp của student hiện tại trong trường hiện tại
    */
-  async getMySubmissions(studentId, query) {
-    return await SubmissionRepository.findMySubmissions(studentId, query);
+  async getMySubmissions(tenant, query) {
+    return await SubmissionRepository.findMySubmissions(tenant.userId, tenant.schoolId, query);
   },
 
   /**
    * Lấy chi tiết bài nộp của student cho 1 assignment cụ thể (kể cả draft)
    */
-  async getStudentSubmissionForAssignment(assignmentId, studentId) {
-    const sub = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, studentId);
+  async getStudentSubmissionForAssignment(assignmentId, tenant) {
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status === 'draft') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
+    );
+    if (!memberRows.length) throw new Error('FORBIDDEN');
+
+    const sub = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, tenant.userId, tenant.schoolId);
     if (!sub) return null;
-    const detailed = await SubmissionRepository.findById(sub.id, true);
+    const detailed = await SubmissionRepository.findById(sub.id, true, tenant.schoolId);
     if (!detailed) return null;
 
     if (detailed.versions && detailed.versions.length > 0) {
@@ -547,33 +566,38 @@ const SubmissionService = {
    * 1. Silent Auto-Save Draft File
    * Upload file ngay lập tức lên SeaweedFS / S3 và lưu vào DB ở trạng thái draft
    */
-  async saveDraftFile(assignmentId, user, uploadedFiles = [], body = {}) {
-    if (user.role !== 'student') {
+  async saveDraftFile(assignmentId, tenant, uploadedFiles = [], body = {}) {
+    if (tenant.role !== 'student') {
       throw new Error('ONLY_STUDENT_CAN_SUBMIT');
     }
 
     // 1. Kiểm tra assignment và enrollment
-    const assignment = await AssignmentRepository.findById(assignmentId);
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
     if (assignment.publish_status !== 'published') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
     const { rows: memberRows } = await pool.query(
-      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
 
     // 2. Upload file lên S3 / SeaweedFS
-    const filesMeta = await this.uploadFilesToS3(assignmentId, user.id, uploadedFiles);
+    const filesMeta = await this.uploadFilesToS3(assignmentId, tenant.userId, uploadedFiles);
 
     // 3. Transaction DB
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(
+        assignmentId,
+        tenant.userId,
+        tenant.schoolId,
+        client
+      );
       let result;
 
       if (!existingSubmission) {
@@ -581,8 +605,9 @@ const SubmissionService = {
         const submissionData = {
           id: uuidv4(),
           uuid: uuidv4(),
+          school_id: tenant.schoolId,
           assignment_id: assignmentId,
-          student_id: user.id,
+          student_id: tenant.userId,
           status: 'draft'
         };
         const versionData = {
@@ -597,7 +622,7 @@ const SubmissionService = {
           throw new Error('SUBMISSION_LOCKED');
         }
 
-        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, client);
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, tenant.schoolId, client);
         if (!latestVer) {
           throw new Error('VERSION_NOT_FOUND');
         }
@@ -621,6 +646,7 @@ const SubmissionService = {
         result = await SubmissionRepository.updateDraftSubmission(
           existingSubmission.id,
           latestVer.id,
+          tenant.schoolId,
           finalFiles,
           finalNote,
           client
@@ -647,21 +673,21 @@ const SubmissionService = {
    * 2. Silent Auto-Save Draft Declarations (Debounced text/JSON)
    * Cập nhật trường khai báo AI vào bản ghi draft hiện có mà không làm đổi version
    */
-  async saveDraftDeclarations(assignmentId, user, body = {}) {
-    if (user.role !== 'student') {
+  async saveDraftDeclarations(assignmentId, tenant, body = {}) {
+    if (tenant.role !== 'student') {
       throw new Error('ONLY_STUDENT_CAN_SUBMIT');
     }
 
     // 1. Kiểm tra assignment và enrollment
-    const assignment = await AssignmentRepository.findById(assignmentId);
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
     if (assignment.publish_status !== 'published') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
     const { rows: memberRows } = await pool.query(
-      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
 
@@ -694,7 +720,12 @@ const SubmissionService = {
     try {
       await client.query('BEGIN');
 
-      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id, client);
+      const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(
+        assignmentId,
+        tenant.userId,
+        tenant.schoolId,
+        client
+      );
       let result;
 
       if (!existingSubmission) {
@@ -702,8 +733,9 @@ const SubmissionService = {
         const submissionData = {
           id: uuidv4(),
           uuid: uuidv4(),
+          school_id: tenant.schoolId,
           assignment_id: assignmentId,
-          student_id: user.id,
+          student_id: tenant.userId,
           status: 'draft'
         };
         const versionData = {
@@ -718,7 +750,7 @@ const SubmissionService = {
           throw new Error('SUBMISSION_LOCKED');
         }
 
-        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, client);
+        const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, tenant.schoolId, client);
         if (!latestVer) {
           throw new Error('VERSION_NOT_FOUND');
         }
@@ -727,6 +759,7 @@ const SubmissionService = {
         result = await SubmissionRepository.updateDraftNote(
           existingSubmission.id,
           latestVer.id,
+          tenant.schoolId,
           draftNote,
           client
         );
@@ -750,12 +783,12 @@ const SubmissionService = {
   /**
    * Xóa file trong bản nháp draft của assignment
    */
-  async removeDraftFile(assignmentId, user) {
-    if (user.role !== 'student') {
+  async removeDraftFile(assignmentId, tenant) {
+    if (tenant.role !== 'student') {
       throw new Error('ONLY_STUDENT_CAN_DELETE');
     }
 
-    const submission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id);
+    const submission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, tenant.userId, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
 
     const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
@@ -763,7 +796,7 @@ const SubmissionService = {
       throw new Error('SUBMISSION_LOCKED');
     }
 
-    const latestVer = await SubmissionRepository.findLatestVersion(submission.id);
+    const latestVer = await SubmissionRepository.findLatestVersion(submission.id, tenant.schoolId);
     if (!latestVer) throw new Error('VERSION_NOT_FOUND');
 
     let currentFiles = [];
@@ -792,7 +825,7 @@ const SubmissionService = {
       }
     }
 
-    const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVer.id, []);
+    const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVer.id, tenant.schoolId, []);
     return {
       submission_id: submission.id,
       files: [],
@@ -878,31 +911,31 @@ const SubmissionService = {
    * Pre-submission AI Sanity Check
    * Chẩn đoán nhanh bài làm bản nháp theo yêu cầu của sinh viên (On-demand)
    */
-  async sanityCheck(assignmentId, user, body = {}) {
-    if (user.role !== 'student') {
+  async sanityCheck(assignmentId, tenant, body = {}) {
+    if (tenant.role !== 'student') {
       throw new Error('ONLY_STUDENT_CAN_SUBMIT');
     }
 
     // 1. Kiểm tra assignment và enrollment
-    const assignment = await AssignmentRepository.findById(assignmentId);
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
     if (assignment.publish_status !== 'published') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
     const { rows: memberRows } = await pool.query(
-      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
 
     // 2. Lấy submission draft hiện tại
-    const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, user.id);
+    const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, tenant.userId, tenant.schoolId);
     let filesList = [];
     let noteData = body.note || '';
 
     if (existingSubmission) {
-      const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id);
+      const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, tenant.schoolId);
       if (latestVer?.files) {
         try {
           filesList = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;

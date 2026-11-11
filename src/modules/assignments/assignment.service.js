@@ -7,19 +7,30 @@ const AssignmentMaterialRepository = require('../assignment-materials/assignment
 
 const AssignmentService = {
   /**
-   * Helper: Kiểm tra quyền truy cập class
+   * Helper: Kiểm tra quyền truy cập class (và session nếu có) theo trường hiện tại
    */
-  async verifyClassAccess(classId, user) {
-    if (user.role === 'admin') return true;
-    
-    if (user.role === 'lecturer') {
-      const { rows } = await pool.query(`SELECT lecturer_id FROM classes WHERE id = $1`, [classId]);
-      if (rows.length === 0) throw new Error('CLASS_NOT_FOUND');
-      if (rows[0].lecturer_id !== user.id) throw new Error('FORBIDDEN');
-      return true;
+  async verifyClassAccess(classId, tenant, sessionId = null) {
+    const { rows } = await pool.query(
+      `SELECT id, lecturer_id, school_id FROM classes WHERE id = $1 AND school_id = $2`,
+      [classId, tenant.schoolId]
+    );
+    if (rows.length === 0) throw new Error('CLASS_NOT_FOUND');
+
+    if (tenant.role === 'lecturer') {
+      if (rows[0].lecturer_id !== tenant.userId) throw new Error('FORBIDDEN');
+    } else if (tenant.role !== 'school_admin') {
+      throw new Error('FORBIDDEN');
     }
-    
-    throw new Error('FORBIDDEN');
+
+    if (sessionId) {
+      const { rows: sessionRows } = await pool.query(
+        `SELECT id FROM sessions WHERE id = $1 AND class_id = $2 AND school_id = $3`,
+        [sessionId, classId, tenant.schoolId]
+      );
+      if (sessionRows.length === 0) throw new Error('SESSION_NOT_FOUND');
+    }
+
+    return true;
   },
 
   /**
@@ -41,8 +52,8 @@ const AssignmentService = {
   /**
    * Tạo bài tập (kèm tài liệu nếu có)
    */
-  async createAssignment(data, files = [], user) {
-    await this.verifyClassAccess(data.class_id, user);
+  async createAssignment(data, files = [], tenant) {
+    await this.verifyClassAccess(data.class_id, tenant, data.session_id);
 
     const assignmentId = uuidv4();
     const assignmentUuid = uuidv4(); // Unique varchar uuid
@@ -83,7 +94,8 @@ const AssignmentService = {
           ...data,
           id: assignmentId,
           uuid: assignmentUuid,
-          created_by: user.id
+          school_id: tenant.schoolId,
+          created_by: tenant.userId
         };
         const assignment = await AssignmentRepository.create(assignmentData, client);
 
@@ -91,13 +103,14 @@ const AssignmentService = {
         const materials = [];
         for (const mat of uploadedMaterials) {
           const createdMat = await AssignmentMaterialRepository.create({
+            school_id: tenant.schoolId,
             assignment_id: assignmentId,
             description: '',
             file_name: mat.file_name,
             file_key: mat.file_key,
             file_type: mat.file_type,
             file_size: mat.file_size,
-            uploaded_by: user.id,
+            uploaded_by: tenant.userId,
           }, client);
           materials.push(createdMat);
         }
@@ -119,14 +132,14 @@ const AssignmentService = {
   /**
    * Cập nhật thông tin bài tập (kèm upload thêm tài liệu nếu có)
    */
-  async updateAssignment(id, data, files = [], user) {
-    const actualUser = user || files;
+  async updateAssignment(id, data, files = [], tenant) {
+    const actualTenant = tenant || files;
     const actualFiles = Array.isArray(files) ? files : [];
 
-    const assignment = await AssignmentRepository.findById(id);
+    const assignment = await AssignmentRepository.findById(id, actualTenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
-    await this.verifyClassAccess(assignment.class_id, actualUser);
+    await this.verifyClassAccess(assignment.class_id, actualTenant, data.session_id);
 
     // Nếu có upload thêm files, upload lên S3 và tạo record trong assignment_materials
     if (actualFiles && actualFiles.length > 0) {
@@ -146,48 +159,49 @@ const AssignmentService = {
         }
 
         await AssignmentMaterialRepository.create({
+          school_id: actualTenant.schoolId,
           assignment_id: id,
           description: '',
           file_name: file.originalname,
           file_key: fileKey,
           file_type: file.mimetype,
           file_size: file.size,
-          uploaded_by: actualUser.id,
+          uploaded_by: actualTenant.userId,
         });
       }
     }
 
-    const updated = await AssignmentRepository.update(id, data);
+    const updated = await AssignmentRepository.update(id, actualTenant.schoolId, data);
     return updated;
   },
 
   /**
    * Đổi trạng thái bài tập
    */
-  async updatePublishStatus(id, publishStatus, user) {
-    const assignment = await AssignmentRepository.findById(id);
+  async updatePublishStatus(id, publishStatus, tenant) {
+    const assignment = await AssignmentRepository.findById(id, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
-    await this.verifyClassAccess(assignment.class_id, user);
+    await this.verifyClassAccess(assignment.class_id, tenant);
 
-    const updated = await AssignmentRepository.updatePublishStatus(id, publishStatus);
+    const updated = await AssignmentRepository.updatePublishStatus(id, tenant.schoolId, publishStatus);
     return updated;
   },
 
   /**
    * Xóa bài tập
    */
-  async deleteAssignment(id, user) {
-    const assignment = await AssignmentRepository.findById(id);
+  async deleteAssignment(id, tenant) {
+    const assignment = await AssignmentRepository.findById(id, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
-    await this.verifyClassAccess(assignment.class_id, user);
+    await this.verifyClassAccess(assignment.class_id, tenant);
 
     // Get all materials to delete from S3
-    const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, { limit: 1000 });
+    const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, tenant.schoolId, { limit: 1000 });
     
     // DB delete
-    await AssignmentRepository.delete(id);
+    await AssignmentRepository.delete(id, tenant.schoolId);
 
     // Delete files from S3 after DB delete succeeds
     if (materials.length > 0) {
@@ -201,25 +215,27 @@ const AssignmentService = {
   /**
    * Lấy chi tiết
    */
-  async getAssignmentById(id, user) {
-    const assignment = await AssignmentRepository.findById(id);
+  async getAssignmentById(id, tenant) {
+    const assignment = await AssignmentRepository.findById(id, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
     // Row-level isolation logic is in repository for list, but for detail we verify access here
-    if (user.role === 'student') {
+    if (tenant.role === 'student') {
       if (assignment.publish_status === 'draft') throw new Error('ASSIGNMENT_NOT_PUBLISHED');
       
       const { rows } = await pool.query(
-        `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-        [assignment.class_id, user.id]
+        `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+        [assignment.class_id, tenant.userId, tenant.schoolId]
       );
       if (rows.length === 0) throw new Error('FORBIDDEN');
-    } else if (user.role === 'lecturer') {
-      if (assignment.lecturer_id !== user.id) throw new Error('FORBIDDEN');
+    } else if (tenant.role === 'lecturer') {
+      if (assignment.lecturer_id !== tenant.userId) throw new Error('FORBIDDEN');
+    } else if (tenant.role !== 'school_admin') {
+      throw new Error('FORBIDDEN');
     }
 
     // Get materials
-    const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, { limit: 100 });
+    const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, tenant.schoolId, { limit: 100 });
 
     const subjectObj = {
       id: assignment.subject_id,
@@ -254,8 +270,8 @@ const AssignmentService = {
   /**
    * Lấy danh sách (phân trang, filter)
    */
-  async getAssignments(query, user) {
-    const result = await AssignmentRepository.findMany(query, user);
+  async getAssignments(query, tenant) {
+    const result = await AssignmentRepository.findMany(query, tenant);
     const enrichedData = (result.data || []).map(a => {
       const subjectObj = {
         id: a.subject_id,

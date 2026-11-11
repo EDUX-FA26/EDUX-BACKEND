@@ -4,10 +4,11 @@ const AssignmentController = {
   async createAssignment(req, res, next) {
     try {
       const files = req.files || [];
-      const assignment = await AssignmentService.createAssignment(req.body, files, req.user);
+      const assignment = await AssignmentService.createAssignment(req.body, files, req.tenant);
       res.status(201).json({ success: true, data: assignment });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
+      if (error.message === 'SESSION_NOT_FOUND') return res.status(404).json({ success: false, message: 'Session not found in this class' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
@@ -17,11 +18,12 @@ const AssignmentController = {
     try {
       const { id } = req.params;
       const files = req.files || [];
-      const assignment = await AssignmentService.updateAssignment(id, req.body, files, req.user);
+      const assignment = await AssignmentService.updateAssignment(id, req.body, files, req.tenant);
       res.status(200).json({ success: true, data: assignment });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
+      if (error.message === 'SESSION_NOT_FOUND') return res.status(404).json({ success: false, message: 'Session not found in this class' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
@@ -31,10 +33,11 @@ const AssignmentController = {
     try {
       const { id } = req.params;
       const { publish_status } = req.body;
-      const assignment = await AssignmentService.updatePublishStatus(id, publish_status, req.user);
+      const assignment = await AssignmentService.updatePublishStatus(id, publish_status, req.tenant);
       res.status(200).json({ success: true, data: assignment });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
+      if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
@@ -43,10 +46,11 @@ const AssignmentController = {
   async deleteAssignment(req, res, next) {
     try {
       const { id } = req.params;
-      await AssignmentService.deleteAssignment(id, req.user);
+      await AssignmentService.deleteAssignment(id, req.tenant);
       res.status(200).json({ success: true, message: 'Assignment deleted successfully' });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
+      if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
@@ -55,7 +59,7 @@ const AssignmentController = {
   async getAssignmentById(req, res, next) {
     try {
       const { id } = req.params;
-      const assignment = await AssignmentService.getAssignmentById(id, req.user);
+      const assignment = await AssignmentService.getAssignmentById(id, req.tenant);
       res.status(200).json({ success: true, data: assignment });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
@@ -67,7 +71,7 @@ const AssignmentController = {
 
   async getAssignments(req, res, next) {
     try {
-      const result = await AssignmentService.getAssignments(req.query, req.user);
+      const result = await AssignmentService.getAssignments(req.query, req.tenant);
       res.status(200).json({ 
         success: true, 
         data: result.data,

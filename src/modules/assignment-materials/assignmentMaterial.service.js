@@ -10,35 +10,35 @@ const AssignmentMaterialRepository = require('./assignmentMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
 
 /**
- * Lấy thông tin assignment + class, kiểm tra quyền truy cập.
- * - admin: luôn được phép
- * - lecturer: phải là giảng viên của lớp chứa assignment này
- * - student: phải là thành viên active của lớp chứa assignment
+ * Lấy thông tin assignment + class theo trường hiện tại, kiểm tra quyền truy cập.
+ * - school_admin: được phép trong phạm vi trường hiện tại
+ * - lecturer: phải là giảng viên của lớp chứa assignment này trong trường hiện tại
+ * - student: phải là thành viên active của lớp chứa assignment trong trường hiện tại
  */
-async function verifyAssignmentAccess(assignmentId, user) {
+async function verifyAssignmentAccess(assignmentId, tenant) {
   const { rows: aRows } = await pool.query(
     `SELECT a.*, c.lecturer_id
      FROM assignments a
-     JOIN classes c ON a.class_id = c.id
-     WHERE a.id = $1`,
-    [assignmentId]
+     JOIN classes c ON a.class_id = c.id AND c.school_id = a.school_id
+     WHERE a.id = $1 AND a.school_id = $2`,
+    [assignmentId, tenant.schoolId]
   );
   const assignment = aRows[0];
   if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
-  if (user.role === 'admin') return assignment;
+  if (tenant.role === 'school_admin') return assignment;
 
-  if (user.role === 'lecturer') {
-    if (assignment.lecturer_id !== user.id) throw new Error('FORBIDDEN');
+  if (tenant.role === 'lecturer') {
+    if (assignment.lecturer_id !== tenant.userId) throw new Error('FORBIDDEN');
     return assignment;
   }
 
-  if (user.role === 'student') {
-    // Chỉ student enrolled mới được đọc
+  if (tenant.role === 'student') {
+    // Chỉ student enrolled trong cùng trường mới được đọc
     const { rows: memberRows } = await pool.query(
       `SELECT 1 FROM class_members
-       WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [assignment.class_id, user.id]
+       WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('FORBIDDEN');
     return assignment;
@@ -50,17 +50,16 @@ async function verifyAssignmentAccess(assignmentId, user) {
 const AssignmentMaterialService = {
   /**
    * Lấy danh sách tài liệu của assignment
-   * Student chỉ được xem nếu assignment đã published
+   * Student chỉ được xem nếu assignment không phải draft
    */
-  async listMaterials(assignmentId, query, user) {
-    const assignment = await verifyAssignmentAccess(assignmentId, user);
+  async listMaterials(assignmentId, query, tenant) {
+    const assignment = await verifyAssignmentAccess(assignmentId, tenant);
 
-    // Student chỉ thấy tài liệu của assignment đã published
-    if (user.role === 'student' && assignment.publish_status !== 'published') {
+    if (tenant.role === 'student' && assignment.publish_status === 'draft') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
-    const result = await AssignmentMaterialRepository.findByAssignmentId(assignmentId, {
+    const result = await AssignmentMaterialRepository.findByAssignmentId(assignmentId, tenant.schoolId, {
       page: query.page,
       limit: query.limit,
     });
@@ -68,12 +67,12 @@ const AssignmentMaterialService = {
   },
 
   /**
-   * Upload tài liệu cho assignment (chỉ lecturer)
+   * Upload tài liệu cho assignment (chỉ lecturer / school_admin)
    */
-  async uploadMaterial(assignmentId, body, file, user) {
-    await verifyAssignmentAccess(assignmentId, user);
+  async uploadMaterial(assignmentId, body, file, tenant) {
+    await verifyAssignmentAccess(assignmentId, tenant);
 
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
@@ -89,13 +88,14 @@ const AssignmentMaterialService = {
     );
 
     const material = await AssignmentMaterialRepository.create({
+      school_id: tenant.schoolId,
       assignment_id: assignmentId,
       description: body.description || '',
       file_name: file.originalname,
       file_key: fileKey,
       file_type: file.mimetype,
       file_size: file.size,
-      uploaded_by: user.id,
+      uploaded_by: tenant.userId,
     });
 
     return material;
@@ -104,47 +104,47 @@ const AssignmentMaterialService = {
   /**
    * Lấy chi tiết 1 tài liệu assignment
    */
-  async getMaterialById(assignmentId, materialId, user) {
-    const assignment = await verifyAssignmentAccess(assignmentId, user);
+  async getMaterialById(assignmentId, materialId, tenant) {
+    const assignment = await verifyAssignmentAccess(assignmentId, tenant);
 
-    if (user.role === 'student' && assignment.publish_status !== 'published') {
+    if (tenant.role === 'student' && assignment.publish_status === 'draft') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
-    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId);
+    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     return material;
   },
 
   /**
-   * Cập nhật metadata tài liệu assignment (chỉ lecturer)
+   * Cập nhật metadata tài liệu assignment (chỉ lecturer / school_admin)
    */
-  async updateMaterial(assignmentId, materialId, body, user) {
-    await verifyAssignmentAccess(assignmentId, user);
+  async updateMaterial(assignmentId, materialId, body, tenant) {
+    await verifyAssignmentAccess(assignmentId, tenant);
 
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
-    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId);
+    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    const updated = await AssignmentMaterialRepository.update(materialId, body);
+    const updated = await AssignmentMaterialRepository.update(materialId, tenant.schoolId, body);
     return updated;
   },
 
   /**
-   * Xóa tài liệu assignment (chỉ lecturer)
+   * Xóa tài liệu assignment (chỉ lecturer / school_admin)
    */
-  async deleteMaterial(assignmentId, materialId, user) {
-    await verifyAssignmentAccess(assignmentId, user);
+  async deleteMaterial(assignmentId, materialId, tenant) {
+    await verifyAssignmentAccess(assignmentId, tenant);
 
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
-    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId);
+    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     // Xóa file trên S3
@@ -155,21 +155,21 @@ const AssignmentMaterialService = {
       })
     );
 
-    const deleted = await AssignmentMaterialRepository.delete(materialId);
+    const deleted = await AssignmentMaterialRepository.delete(materialId, tenant.schoolId);
     return deleted;
   },
 
   /**
    * Tải xuống tài liệu assignment (presigned URL)
    */
-  async downloadMaterial(assignmentId, materialId, user) {
-    const assignment = await verifyAssignmentAccess(assignmentId, user);
+  async downloadMaterial(assignmentId, materialId, tenant) {
+    const assignment = await verifyAssignmentAccess(assignmentId, tenant);
 
-    if (user.role === 'student' && assignment.publish_status !== 'published') {
+    if (tenant.role === 'student' && assignment.publish_status === 'draft') {
       throw new Error('ASSIGNMENT_NOT_PUBLISHED');
     }
 
-    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId);
+    const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     const command = new GetObjectCommand({
@@ -183,6 +183,7 @@ const AssignmentMaterialService = {
 
     return {
       url: presignedUrl,
+      download_url: presignedUrl,
       file_name: material.file_name,
       file_type: material.file_type,
       file_size: material.file_size,
