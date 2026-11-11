@@ -29,8 +29,15 @@ const aiChatRoutes = require("./modules/ai-chat/aiChat.routes");
 const projectsRoutes = require(
   './modules/projects/projects.routes'
 );
-
-
+const {
+  createSchoolsRouter,
+} = require("./modules/schools/schools.routes");
+const {
+  createPlatformRouter,
+} = require("./modules/platform/platform.routes");
+const {
+  authenticate,
+} = require("./middlewares/auth.middleware");
 // =========================
 // Middleware
 // =========================
@@ -55,6 +62,15 @@ app.use(express.urlencoded({ extended: true }));
 // API routes
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
+const schoolsRoutes = createSchoolsRouter({
+  authenticate,
+});
+const platformRoutes = createPlatformRouter({
+  authenticate,
+});
+
+app.use("/api/platform", platformRoutes);
+app.use("/api/schools", schoolsRoutes);
 app.use("/api/classes", classesRoutes);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/dashboards", dashboardRoutes);
