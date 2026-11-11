@@ -14,6 +14,7 @@ const GradingRepository = {
         s.student_id,
         s.assignment_id,
         s.status              AS submission_status,
+        a.title               AS assignment_title,
         a.class_id,
         a.max_score           AS assignment_max_score,
         c.lecturer_id

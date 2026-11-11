@@ -23,8 +23,8 @@ const ClassAiAdvisorRepository = {
         a.deadline,
         a.publish_status
       FROM class_ai_advisories caa
-      LEFT JOIN assignments a ON caa.assignment_id::text = a.id::text
-      WHERE caa.class_id::text = $1::text
+      LEFT JOIN assignments a ON caa.assignment_id = a.id
+      WHERE caa.class_id = $1::uuid
       ORDER BY caa.generated_at DESC;
     `;
     const { rows } = await pool.query(query, [classId]);
@@ -32,7 +32,10 @@ const ClassAiAdvisorRepository = {
   },
 
   /**
-   * Lấy bài tập phù hợp nhất cho tư vấn AI: có bài nộp, hoặc hết hạn, hoặc mới nhất
+   * Lấy bài tập phù hợp nhất cho tư vấn AI:
+   * Ưu tiên 1: Đã qua deadline (deadline < NOW())
+   * Ưu tiên 2: Nếu chưa qua deadline nhưng đã có sinh viên nộp bài (status != 'draft')
+   * Ưu tiên 3: Bài tập gần nhất của lớp
    */
   async getLatestAssignmentForAdvisory(classId) {
     const query = `
@@ -47,12 +50,17 @@ const ClassAiAdvisorRepository = {
         a.created_at,
         COUNT(s.id)::int AS submission_count
       FROM assignments a
-      LEFT JOIN submissions s ON a.id::text = s.assignment_id::text AND s.status != 'draft'
-      WHERE a.class_id::text = $1::text
+      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.status != 'draft'
+      WHERE a.class_id = $1::uuid
       GROUP BY a.id
       ORDER BY 
-        (COUNT(s.id) > 0) DESC,
+        -- Ưu tiên 1: Đã qua deadline VÀ có bài nộp
+        (a.deadline IS NOT NULL AND a.deadline < NOW() AND COUNT(s.id) > 0) DESC,
+        -- Ưu tiên 1b: Đã qua deadline
         (a.deadline IS NOT NULL AND a.deadline < NOW()) DESC,
+        -- Ưu tiên 2: Chưa qua deadline nhưng đã có sinh viên nộp bài
+        (COUNT(s.id) > 0) DESC,
+        -- Ưu tiên 3: Theo deadline gần nhất hoặc mới tạo nhất
         a.deadline DESC NULLS LAST,
         a.created_at DESC
       LIMIT 1;
@@ -77,12 +85,13 @@ const ClassAiAdvisorRepository = {
         a.created_at,
         COUNT(s.id)::int AS submission_count
       FROM assignments a
-      LEFT JOIN submissions s ON a.id::text = s.assignment_id::text AND s.status != 'draft'
-      WHERE a.class_id::text = $1::text
+      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.status != 'draft'
+      WHERE a.class_id = $1::uuid
       GROUP BY a.id
       ORDER BY 
-        (COUNT(s.id) > 0) DESC,
+        (a.deadline IS NOT NULL AND a.deadline < NOW() AND COUNT(s.id) > 0) DESC,
         (a.deadline IS NOT NULL AND a.deadline < NOW()) DESC,
+        (COUNT(s.id) > 0) DESC,
         a.deadline DESC NULLS LAST,
         a.created_at DESC;
     `;
@@ -106,7 +115,7 @@ const ClassAiAdvisorRepository = {
         a.publish_status,
         a.created_at
       FROM assignments a
-      WHERE a.class_id::text = $1::text
+      WHERE a.class_id = $1::uuid
         AND a.deadline IS NOT NULL
         AND a.deadline < NOW()
       ORDER BY a.deadline DESC;
@@ -128,7 +137,7 @@ const ClassAiAdvisorRepository = {
         a.deadline,
         a.class_id
       FROM assignments a
-      WHERE a.class_id::text = $1::text
+      WHERE a.class_id = $1::uuid
         AND a.deadline IS NOT NULL
         AND a.deadline < NOW()
       ORDER BY a.deadline DESC
@@ -145,7 +154,7 @@ const ClassAiAdvisorRepository = {
     const query = `
       SELECT *
       FROM class_ai_advisories
-      WHERE class_id::text = $1::text AND assignment_id::text = $2::text
+      WHERE class_id = $1::uuid AND assignment_id = $2::uuid
       LIMIT 1;
     `;
     const { rows } = await pool.query(query, [classId, assignmentId]);
@@ -163,12 +172,12 @@ const ClassAiAdvisorRepository = {
         s.name AS subject_name,
         s.code AS subject_code,
         COALESCE(
-          (SELECT COUNT(*)::int FROM class_members cm WHERE cm.class_id::text = c.id::text AND cm.status = 'active'),
+          (SELECT COUNT(*)::int FROM class_members cm WHERE cm.class_id = c.id AND cm.status = 'active'),
           0
         ) AS total_students
       FROM classes c
-      LEFT JOIN subjects s ON c.subject_id::text = s.id::text
-      WHERE c.id::text = $1::text;
+      LEFT JOIN subjects s ON c.subject_id = s.id
+      WHERE c.id = $1::uuid;
     `;
     const { rows } = await pool.query(query, [classId]);
     return rows[0] || null;
@@ -195,13 +204,13 @@ const ClassAiAdvisorRepository = {
         ae.evaluation_data,
         ae.overall_verdict
       FROM submissions s
-      JOIN assignments a ON s.assignment_id::text = a.id::text AND a.class_id::text = $1::text
-      LEFT JOIN class_members cm ON s.student_id::text = cm.student_id::text AND cm.class_id::text = $1::text
-      LEFT JOIN user_profiles u ON s.student_id::text = u.user_id::text
+      JOIN assignments a ON s.assignment_id = a.id AND a.class_id = $1::uuid
+      LEFT JOIN class_members cm ON s.student_id = cm.student_id AND cm.class_id = $1::uuid
+      LEFT JOIN user_profiles u ON s.student_id = u.user_id
       LEFT JOIN LATERAL (
         SELECT files, note
         FROM submission_versions
-        WHERE submission_id::text = s.id::text AND is_latest = TRUE
+        WHERE submission_id = s.id AND is_latest = TRUE
         ORDER BY version_no DESC
         LIMIT 1
       ) sv ON TRUE
@@ -215,11 +224,11 @@ const ClassAiAdvisorRepository = {
           evaluation_data,
           overall_verdict
         FROM ai_evaluations
-        WHERE submission_id::text = s.id::text
+        WHERE submission_id = s.id
         ORDER BY evaluated_at DESC NULLS LAST, created_at DESC
         LIMIT 1
       ) ae ON TRUE
-      WHERE s.assignment_id::text = $2::text
+      WHERE s.assignment_id = $2::uuid
         AND s.status != 'draft';
     `;
     const { rows } = await pool.query(query, [classId, assignmentId]);
@@ -252,7 +261,7 @@ const ClassAiAdvisorRepository = {
         next_slot_recommendation,
         raw_payload,
         generated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, NOW())
       ON CONFLICT (class_id, assignment_id) DO UPDATE SET
         assignment_title = EXCLUDED.assignment_title,
         mode = EXCLUDED.mode,

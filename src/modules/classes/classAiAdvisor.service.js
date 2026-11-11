@@ -13,14 +13,6 @@ function formatAdvisories(snapshots) {
 
   const advisories = snapshots.map((row, idx) => {
     const mode = row.mode || row.raw_payload?.mode || 'DEEP_TECHNICAL';
-    const rawTransparency = row.avg_ai_transparency || row.raw_payload?.class_overview?.avg_ai_transparency;
-    const cleanTransparency = (
-      rawTransparency &&
-      rawTransparency !== 'null' &&
-      rawTransparency !== 'N/A' &&
-      !String(rawTransparency).includes('Đang cập nhật') &&
-      !String(rawTransparency).includes('Chưa có dữ liệu')
-    ) ? rawTransparency : null;
 
     const deadlineDate = row.deadline ? new Date(row.deadline) : null;
     const deadlineFormatted = deadlineDate
@@ -58,7 +50,7 @@ function formatAdvisories(snapshots) {
       generated_at: row.generated_at ? new Date(row.generated_at).toISOString() : new Date().toISOString(),
       class_overview: {
         submission_rate_text: row.submission_rate_text || 'Chưa có thông tin nộp bài',
-        avg_ai_transparency: cleanTransparency
+        avg_ai_transparency: null
       },
       common_error_clusters: errorClusters,
       next_slot_recommendation: row.next_slot_recommendation || ''
@@ -106,14 +98,18 @@ const ClassAiAdvisorService = {
     }
 
     // Gom dữ liệu bài nộp thật từ DB, gọi Gemini phân tích và INSERT CỨNG vào class_ai_advisories
+    let savedSnapshot = null;
     try {
-      await this.generateAndSaveAdvisory(classId, targetAssignment);
+      savedSnapshot = await this.generateAndSaveAdvisory(classId, targetAssignment);
     } catch (err) {
       console.warn(`[ClassAiAdvisorService] Automatic initial run failed for assignment ${targetAssignment.id}:`, err.message);
     }
 
     // Lấy lại danh sách sau khi đã lưu snapshot
-    const updatedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    let updatedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    if ((!updatedSnapshots || updatedSnapshots.length === 0) && savedSnapshot) {
+      updatedSnapshots = [savedSnapshot];
+    }
     return formatAdvisories(updatedSnapshots);
   },
 
@@ -170,22 +166,8 @@ const ClassAiAdvisorService = {
     const isLowSubmission = numericRate < 50 || submittedCount < 5;
     const expectedMode = isLowSubmission ? 'PROGRESS_REMINDER' : 'DEEP_TECHNICAL';
 
-    // 4. Tính toán độ minh bạch AI trung bình từ kết quả audit thực tế
-    const validScores = submissions
-      .map((s) => (s.transparency_score != null ? Number(s.transparency_score) : null))
-      .filter((val) => val !== null && !isNaN(val) && val >= 0);
-
-    let defaultAvgTransparency = null;
-    if (validScores.length > 0) {
-      const avgScore = Math.round(validScores.reduce((acc, cur) => acc + cur, 0) / validScores.length);
-      let transparencyLabel = 'Mức độ minh bạch khá tốt';
-      if (avgScore >= 80) transparencyLabel = 'Mức độ minh bạch rất tốt';
-      else if (avgScore >= 65) transparencyLabel = 'Mức độ minh bạch khá tốt';
-      else if (avgScore >= 50) transparencyLabel = 'Mức độ minh bạch trung bình';
-      else transparencyLabel = 'Mức độ minh bạch cần cải thiện';
-
-      defaultAvgTransparency = `${avgScore}% (${transparencyLabel})`;
-    }
+    // 4. Bỏ qua tính toán độ minh bạch AI trung bình thừa (tập trung 100% vào Tỷ lệ nộp bài & Cụm lỗi kỹ thuật)
+    const defaultAvgTransparency = null;
 
     // 5. Chuẩn bị danh sách audit summaries tóm tắt từ dữ liệu thật
     const auditSummaries = submissions.map((s, idx) => {
@@ -281,14 +263,6 @@ const ClassAiAdvisorService = {
     }
 
     const finalMode = aiOutput.mode || expectedMode;
-    const finalRawTrans = aiOutput.class_overview?.avg_ai_transparency;
-    const finalAvgTransparency = (
-      finalRawTrans &&
-      finalRawTrans !== 'null' &&
-      finalRawTrans !== 'N/A' &&
-      !String(finalRawTrans).includes('Đang cập nhật') &&
-      !String(finalRawTrans).includes('Chưa có dữ liệu')
-    ) ? finalRawTrans : (defaultAvgTransparency || null);
 
     // 7. Lưu snapshot vào database
     const saved = await ClassAiAdvisorRepository.upsertAdvisory({
@@ -297,10 +271,10 @@ const ClassAiAdvisorService = {
       assignment_title: assignment.title,
       mode: finalMode,
       submission_rate_text: aiOutput.class_overview?.submission_rate_text || defaultRateText,
-      avg_ai_transparency: finalAvgTransparency,
+      avg_ai_transparency: null,
       common_error_clusters: aiOutput.common_error_clusters || [],
       next_slot_recommendation: aiOutput.next_slot_recommendation || '',
-      raw_payload: { ...aiOutput, mode: finalMode, class_overview: { ...aiOutput.class_overview, avg_ai_transparency: finalAvgTransparency } }
+      raw_payload: { ...aiOutput, mode: finalMode, class_overview: { ...aiOutput.class_overview, avg_ai_transparency: null } }
     });
 
     return saved;
