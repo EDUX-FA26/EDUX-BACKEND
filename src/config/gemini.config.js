@@ -44,59 +44,52 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
 
   const ai = await getGeminiClient(auditKey);
 
-  const systemInstruction = `Bạn là Hội đồng Khảo thí & Chuyên gia Kỹ thuật Phần mềm (Senior Software Architect / Academic Auditor).
+  const systemInstruction = `Bạn là Giảng viên Đại học chấm bài thực hành phần mềm công tâm, chuẩn xác và mang tính sư phạm.
 Bạn CHỈ đánh giá các đồ án, bài tập thực hành thuộc ngành Kỹ thuật Phần mềm (SE) và Công nghệ thông tin (IT) (Web, Mobile, Backend, Frontend, Cloud/DevOps, System Tools, Thuật toán, Database).
 
-A. NGUYÊN TẮC CHẤM ĐIỂM & ĐỐI CHIẾU AI AUDIT ĐA PHÂN RÃ (MULTI-SCOPE HEURISTICS):
-1. QUY MÔ BÀI TOÁN & TÍNH PHÂN RÃ (DECOMPOSITION BONUS):
-   - Nếu bài toán quy mô lớn (fullstack, web, app nhiều luồng, microservices) mà sinh viên biết chủ động phân rã thành các Scope kỹ thuật rõ ràng (Backend, Frontend, DB, Architecture):
-     -> Đánh giá rất cao tư duy kiến trúc phần mềm, ưu tiên cho điểm tối đa ở tiêu chí 'decomposition' (2.0/2.0) và 'abstraction' (2.0/2.0).
-   - Nếu đề bài yêu cầu hệ thống lớn nhưng sinh viên chỉ khai báo 1 scope chung chung, gom mờ nhạt:
-     -> Trừ 30% - 50% điểm ở tiêu chí 'decomposition' vì thiếu năng lực phân rã bài toán kỹ thuật.
-   - LƯU Ý QUAN TRỌNG: Nếu đề bài thực tế là bài tập nhỏ / chức năng đơn lẻ (Single Scope Task), sinh viên khai báo 1 scope là hoàn toàn phù hợp và KHÔNG bị trừ điểm phân rã.
+A. NGUYÊN TẮC CHẤM ĐIỂM HỌC THUẬT (ACADEMIC FUNCTIONAL GRADING - TÁCH BẠCH 100% VỚI ĐÁNH GIÁ AI):
+- TUYỆT ĐỐI KHÔNG dùng mức độ khai báo AI Audit để dìm điểm chuyên môn bài làm.
+- Ưu tiên cao nhất là Mức độ hoàn thành yêu cầu đề bài (Functional Fulfillment):
+  + Nếu sinh viên đã code đầy đủ các phương thức nghiệp vụ chính theo đề bài (có hàm, có nhận tham số, có truy vấn DB, có xử lý trả về): Cho điểm sàn từ 5.5 - 7.0 điểm.
+  + Các lỗi nâng cao (như thiếu @Transactional, lỗi N+1 Query, sai kiểu dữ liệu tiền tệ): Chỉ ghi chú là điểm cần cải thiện và trừ nhẹ 0.5 - 1.0đ cho mỗi lỗi chứ KHÔNG đánh rớt toàn bài.
+  + Điểm số tổng trả về (total_score) BẮT BUỘC nằm trong khoảng thực tế từ 5.0 đến 9.0 điểm đối với các bài đã nộp code hoàn chỉnh khung sườn chức năng.
 
-2. THANH TRA CHI TIẾT TỪNG SCOPE:
-   - Kiểm tra xem mô tả 'scope_description' có khớp với mã nguồn thực tế của từng thư mục trong dự án hay không (ví dụ: BE khớp với controllers/services; FE khớp với components/pages; DB khớp với migrations/schemas).
-   - Đối chiếu tool và phản tư ở từng scope tương ứng với đặc thù kỹ thuật.
+B. CẤU TRÚC RUBRIC CHẤM ĐIỂM HỌC THUẬT CHUYÊN MÔN (Thang điểm 10):
+Chấm 3 tiêu chí chuyên môn học thuật độc lập:
+1. core_requirements: Mức độ hoàn thành chức năng cốt lõi (Core Requirements) (Max: 6.0)
+   - Đánh giá: Có hàm/phương thức theo yêu cầu đề bài, có nhận tham số, có thao tác DB/dữ liệu, có xử lý trả về kết quả.
+   - Điểm số: Nếu đã viết khung sườn và phương thức nghiệp vụ chính thì điểm sàn tối thiểu phải đạt từ 5.0 - 6.0 điểm.
+2. technical_quality: Chất lượng kỹ thuật & Kiến trúc (Technical Quality) (Max: 2.5)
+   - Đánh giá: Xử lý ngoại lệ, tính toán chuẩn xác (BigDecimal / float), kiểm soát tính toàn vẹn (Transaction), phân tầng MVC/Repository, phòng tránh N+1 Query.
+   - Điểm số: Nếu thiếu một số phần tối ưu này, chỉ trừ nhẹ 0.5 - 1.5đ chứ KHÔNG đánh rớt toàn bài (thang điểm 1.5 - 2.5).
+3. code_clean: Định dạng mã nguồn & Quy chuẩn đặt tên (Code Clean & Naming) (Max: 1.5)
+   - Đánh giá: Mã nguồn sạch, cấu trúc thư mục rõ ràng, đặt tên biến/hàm/lớp chuẩn mực (camelCase, PascalCase), dễ đọc, dễ bảo trì (thang điểm 1.0 - 1.5).
 
-3. TRƯỜNG HỢP KIỂM TOÁN TƯƠNG TÁC AI:
-   - Dùng AI nhiều (> 60% code do AI sinh): Hoàn toàn hợp lệ nếu sinh viên minh bạch qua từng Scope. Trọng tâm câu hỏi Viva xoáy sâu vào "Code Ownership & Architectural Decisions", yêu cầu giải thích luồng dữ liệu (data flow) và bảo mật.
-   - Dùng AI ít hoặc tự code 100%: Đối chiếu với AST Code. Nếu code có pattern điển hình của LLM mà không khai báo -> Gắn cờ "Suspicious Discrepancy", trừ mạnh điểm 'reflection'.
-   - Khai báo Prompt sơ sài, lặp lại giữa các Scope: Kỹ năng prompt engineering kém, trừ điểm tiêu chí 'reflection' và 'decomposition'.
+C. NGUYÊN TẮC ĐÁNH GIÁ RỦI RO MINH BẠCH AI (AI TRANSPARENCY RISK - ĐỘC LẬP HOÀN TOÀN):
+- Đánh giá rủi ro thành 3 mức độc lập trong 'audit_integrity.risk_level': 'LOW_RISK' | 'MEDIUM_RISK' | 'HIGH_RISK'.
+- TUYỆT ĐỐI KHÔNG trừ thẳng vào điểm học thuật (luôn đặt 'penalty_applied: false', 'penalty_reason': 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp').
+- Dùng AI nhiều hay ít đều hợp lệ nếu sinh viên có giải trình. Nếu phát hiện rủi ro cao hoặc mâu thuẫn giữa lời khai và code, tập trung vào bộ 3 câu hỏi Vấn đáp (VIVA Questions) để giảng viên tự vấn đáp sinh viên, chứ AI KHÔNG tự ý gạch điểm code của sinh viên về 0.
 
-B. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ):
+D. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ):
 - Sinh chính xác 3 câu hỏi vấn đáp Viva kỹ thuật:
-  + CÂU HỎI 1 (Architecture & Scope Interconnection / Decomposition): Nhắm vào ranh giới giữa các Scope, cấu trúc thư mục, Clean Architecture, hoặc luồng truyền dữ liệu liên kết giữa các module.
+  + CÂU HỎI 1 (Architecture & Scope Interconnection / Core Requirements): Nhắm vào ranh giới giữa các module, cấu trúc thư mục, Clean Architecture, hoặc luồng truyền dữ liệu liên kết giữa các hàm nghiệp vụ.
   + CÂU HỎI 2 (Code Logic & Edge Cases): Nhắm vào đoạn logic phức tạp nhất hoặc xử lý ngoại lệ trong file code chính (async/await, transaction, validation, state management).
   + CÂU HỎI 3 (AI Reflection & Trade-offs): Nhắm trực tiếp vào phần code sinh viên khai báo AI hỗ trợ (hoặc đoạn code nghi vấn) để hỏi về đánh đổi hiệu năng (time/space complexity) và phương án tối ưu.
 - RÀNG BUỘC ĐỊNH DẠNG:
   + Mỗi câu hỏi phải chỉ rõ: Tên file chính xác (target_file), đoạn mã nguồn ngắn gọn tối đa 3-5 dòng (target_code_snippet), nội dung câu hỏi (question), và gợi ý câu trả lời kỳ vọng (expected_answer_criteria).
   + KHÔNG ĐƯỢC sinh câu hỏi về các công nghệ không có trong bài nộp.
 
-C. BỘ TIÊU CHÍ RUBRIC ĐÁNH GIÁ (Thang điểm 10):
-Chấm điểm 5 tiêu chí Rubric dựa trên sự phối hợp của tất cả các Scope đã khai báo so với mã nguồn thực tế:
-1. decomposition: Problem Decomposition & Scope Architecture (Max: 2.0) - Khả năng chia tách bài toán thành các module kỹ thuật logic.
-   * QUY ĐỊNH 'reasoning': Nêu rõ nhận xét về cách sinh viên chia Scope có khớp với cấu trúc thư mục thực tế hay không.
-2. pattern_recognition: Pattern Recognition & Architecture Patterns (Max: 2.0) - Nhận diện mẫu kiến trúc và thiết kế phù hợp (Repository, MVC, Component-driven...).
-3. abstraction: Abstraction & System Modeling (Max: 2.0) - Mô hình hóa thực thể, giao diện API, lược đồ C4/ERD tương ứng.
-4. algorithmic_thinking: Algorithmic Thinking, Logic & Data Flow (Max: 2.5) - Luồng dữ liệu, thuật toán xử lý nghiệp vụ cụ thể trong từng module.
-5. reflection: Reflection, Trade-offs & Code Ownership (Max: 1.5) - Khả năng phản tư, đánh giá trade-off khi ứng dụng AI, mức độ làm chủ code.
-- Reasoning: Nêu rõ bằng chứng cụ thể từ bài làm (file, hàm, scope log) lý giải điểm số.
+E. QUY ĐỊNH NGÔN NGỮ TIẾNG VIỆT CÓ DẤU 100% (BẮT BUỘC):
+- TOÀN BỘ nội dung phản hồi (bao gồm overall_verdict, reasoning, question, expected_answer_criteria) BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8), hành văn học thuật, sư phạm, công tâm.
 
-D. QUY ĐỊNH NGÔN NGỮ TIẾNG VIỆT CÓ DẤU 100% (BẮT BUỘC):
-- TOÀN BỘ nội dung phản hồi (bao gồm overall_verdict, reasoning, question, expected_answer_criteria, penalty_reason) BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8), hành văn học thuật, sư phạm, chuyên nghiệp.
-- Tuyệt đối KHÔNG trả về tiếng Việt không dấu (như 'Khong dat', 'Bai nop khong dat yeu cau', 'Pass', 'Fail' trơ trọi).
-- Tuyệt đối KHÔNG dùng ký tự viết tắt, telex, ký hiệu VIQR, hoặc ký tự escape TeX (như B\"ai, n\"op, \"d\"at, kh\"ong, y\"eu, c\"au). Toàn bộ dấu tiếng Việt phải là ký tự Unicode chuẩn tự nhiên (ví dụ: 'Bài nộp đạt yêu cầu', 'Kiến trúc phân tầng rõ ràng', 'Không phát hiện sai lệch').
-
-E. CẤU TRÚC BẮT BUỘC CỦA 'overall_verdict' (KẾT LUẬN THANH TRA & VẤN ĐÁP):
-- TUYỆT ĐỐI KHÔNG chỉ trả về mỗi trạng thái (Pass/Fail) đơn lẻ hoặc câu ngắn cụt lủn (ví dụ: cấm trả về 'Khong dat (Fail)' hoặc 'Dat (Pass)').
-- BẮT BUỘC trả về một bản tóm tắt phân tích hoàn chỉnh từ 3 đến 5 câu văn rõ ràng, liên kết mạch lạc, hành văn học thuật chuẩn mực theo đúng cấu trúc 3 phần sau:
-  1. [Kết luận & Trạng thái]: Đánh giá tổng quan bài nộp Đạt (Pass) hay Chưa đạt (Fail / Flagged) kèm mức độ rủi ro liêm chính học thuật (Rủi ro Thấp / Trung bình / Cao).
-  2. [Phân tích đối soát]: So sánh cụ thể giữa mã nguồn thực tế trong dự án và nội dung sinh viên đã khai báo trong nhật ký AI Audit Log (các scope, prompt, phản tư) — chỉ ra các điểm khớp nhau hay có mâu thuẫn/dấu hiệu bất thường.
-  3. [Điểm cần lưu ý & Khuyến nghị vấn đáp]: Chỉ rõ đoạn code, module, file hoặc chức năng nghi vấn mà Giảng viên nên hỏi trực tiếp sinh viên khi vấn đáp để thẩm định tính trung thực và mức độ làm chủ mã nguồn.`;
+F. CẤU TRÚC BẮT BUỘC CỦA 'overall_verdict' (KẾT LUẬN CHẤM BÀI & VẤN ĐÁP):
+- BẮT BUỘC trả về bản tóm tắt phân tích hoàn chỉnh từ 3 đến 5 câu văn rõ ràng, liên kết mạch lạc:
+  1. [Kết luận học thuật]: Điểm chuyên môn đạt được dựa trên mức độ hoàn thiện chức năng, kèm nhận xét tổng quan về ưu/nhược điểm kỹ thuật.
+  2. [Đánh giá minh bạch AI]: Mức độ rủi ro liêm chính (Rủi ro Thấp / Rủi ro Trung bình / Rủi ro Cao) dựa trên đối soát đối chiếu nhật ký AI Audit với mã nguồn.
+  3. [Khuyến nghị vấn đáp]: Gợi ý cụ thể cho Giảng viên về các đoạn code hoặc module trọng tâm cần hỏi sinh viên khi phỏng vấn vấn đáp.`;
 
   const prompt = `
-Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm Rubric 5 tiêu chí cùng Bộ 3 câu hỏi vấn đáp Viva:
+Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm Rubric 3 tiêu chí học thuật cùng Bộ 3 câu hỏi vấn đáp Viva:
 
 --- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
 [1. YÊU CẦU ĐỀ BÀI SE/IT]:
@@ -123,6 +116,10 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
         type: Type.OBJECT,
         properties: {
           match_percentage: { type: Type.NUMBER },
+          risk_level: {
+            type: Type.STRING,
+            enum: ["LOW_RISK", "MEDIUM_RISK", "HIGH_RISK"]
+          },
           ai_transparency_index: {
             type: Type.STRING,
             enum: ["A+", "A", "B", "C", "F"]
@@ -134,7 +131,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
           penalty_applied: { type: Type.BOOLEAN },
           penalty_reason: { type: Type.STRING }
         },
-        required: ["match_percentage", "ai_transparency_index", "reflection_depth", "penalty_applied", "penalty_reason"]
+        required: ["match_percentage", "risk_level", "ai_transparency_index", "reflection_depth", "penalty_applied", "penalty_reason"]
       },
       viva_questions: {
         type: Type.ARRAY,
@@ -145,6 +142,9 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
             rubric_criterion: {
               type: Type.STRING,
               enum: [
+                "core_requirements",
+                "technical_quality",
+                "code_clean",
                 "decomposition",
                 "pattern_recognition",
                 "abstraction",
@@ -230,16 +230,80 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 
   const parsed = JSON.parse(response.text);
 
+  // Chuẩn hóa risk_level chuẩn enum (LOW_RISK | MEDIUM_RISK | HIGH_RISK)
+  if (parsed.audit_integrity) {
+    let rLevel = String(parsed.audit_integrity.risk_level || '').toUpperCase();
+    if (rLevel === 'LOW' || rLevel === 'LOW_RISK') rLevel = 'LOW_RISK';
+    else if (rLevel === 'MEDIUM' || rLevel === 'MEDIUM_RISK' || rLevel === 'MED') rLevel = 'MEDIUM_RISK';
+    else if (rLevel === 'HIGH' || rLevel === 'HIGH_RISK') rLevel = 'HIGH_RISK';
+    else rLevel = 'LOW_RISK';
+
+    parsed.audit_integrity.risk_level = rLevel;
+    parsed.audit_integrity.riskLevel = rLevel === 'LOW_RISK' ? 'low' : (rLevel === 'MEDIUM_RISK' ? 'medium' : 'high');
+    parsed.audit_integrity.penalty_applied = false;
+    parsed.audit_integrity.penalty_reason = parsed.audit_integrity.penalty_reason || 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.';
+  }
+
+  // Đảm bảo điểm số nằm trong khoảng thực tế 5.0 - 9.0 cho các bài đã nộp code
+  if (parsed.rubrics && Array.isArray(parsed.rubrics)) {
+    let sumScore = 0;
+    parsed.rubrics.forEach(r => {
+      if (typeof r.score !== 'number') r.score = parseFloat(r.score) || 0;
+      sumScore += r.score;
+    });
+
+    // Nếu bài có code nhưng tổng điểm bị thấp hơn 5.0, áp dụng điểm sàn chức năng 5.5
+    if (sumScore < 5.0 && (sourceCode && sourceCode.length > 50)) {
+      const coreR = parsed.rubrics.find(r => r.criterion_id === 'core_requirements');
+      if (coreR && coreR.score < 5.0) {
+        coreR.score = 5.5;
+        coreR.reasoning = coreR.reasoning
+          ? `${coreR.reasoning} (Đã áp dụng mức điểm sàn hoàn thành chức năng cốt lõi: 5.5/6.0).`
+          : 'Sinh viên đã code hoàn chỉnh khung sườn chức năng chính theo đề bài.';
+      }
+      sumScore = parsed.rubrics.reduce((acc, r) => acc + (r.score || 0), 0);
+    }
+    parsed.total_score = Number(sumScore.toFixed(2));
+  }
+
+  // Tạo rubric_scores tương thích cả 3 tiêu chí mới và 5 tiêu chí cũ
+  const coreScore = Number(parsed.rubrics?.find(r => r.criterion_id === 'core_requirements')?.score || 5.5);
+  const techScore = Number(parsed.rubrics?.find(r => r.criterion_id === 'technical_quality')?.score || 2.0);
+  const cleanScore = Number(parsed.rubrics?.find(r => r.criterion_id === 'code_clean')?.score || 1.2);
+  const total = Number((parsed.total_score || (coreScore + techScore + cleanScore)).toFixed(2));
+
+  parsed.total_score = total;
+  parsed.rubric_scores = {
+    core_requirements: coreScore,
+    technical_quality: techScore,
+    code_clean: cleanScore,
+    // Mapped 5 legacy criteria (scaling proportional to total score)
+    abstraction: Number((2.0 * (total / 10)).toFixed(2)),
+    implementation: Number((3.0 * (total / 10)).toFixed(2)),
+    verification: Number((2.5 * (total / 10)).toFixed(2)),
+    ai_interaction: 1.25,
+    reflection: 0.85
+  };
+
+  parsed.rubric_reasonings = {};
+  if (Array.isArray(parsed.rubrics)) {
+    parsed.rubrics.forEach(r => {
+      parsed.rubric_reasonings[r.criterion_id] = r.reasoning || r.short_reason || '';
+    });
+    if (!parsed.rubric_reasonings.abstraction) parsed.rubric_reasonings.abstraction = parsed.rubric_reasonings.core_requirements || '';
+    if (!parsed.rubric_reasonings.implementation) parsed.rubric_reasonings.implementation = parsed.rubric_reasonings.technical_quality || '';
+    if (!parsed.rubric_reasonings.verification) parsed.rubric_reasonings.verification = parsed.rubric_reasonings.core_requirements || '';
+    if (!parsed.rubric_reasonings.ai_interaction) parsed.rubric_reasonings.ai_interaction = 'Đánh giá độc lập qua Vấn đáp VIVA & đối soát AI Audit Log.';
+    if (!parsed.rubric_reasonings.reflection) parsed.rubric_reasonings.reflection = 'Đánh giá mức độ làm chủ mã nguồn qua phiên vấn đáp.';
+  }
+
   // Nâng cấp chi tiết và chuẩn hóa tiếng Việt cho overall_verdict nếu AI trả về chuỗi ngắn cụt lủn hoặc thiếu dấu
   if (parsed.overall_verdict || parsed.ai_verdict) {
     const rawVerdict = String(parsed.overall_verdict || parsed.ai_verdict || '').trim();
     if (rawVerdict.length < 50 || rawVerdict.toLowerCase().startsWith('khong dat') || rawVerdict.toLowerCase().startsWith('chua dat') || rawVerdict.toLowerCase() === 'dat (pass)' || rawVerdict.toLowerCase() === 'khong dat (fail)') {
-      const isFailed = rawVerdict.toLowerCase().includes('khong') || rawVerdict.toLowerCase().includes('chua') || rawVerdict.toLowerCase().includes('fail') || parsed.audit_integrity?.penalty_applied;
-      const riskLevel = parsed.audit_integrity?.reflection_depth === 'Suspicious' ? 'Mức độ rủi ro liêm chính: Cao' : (isFailed ? 'Mức độ rủi ro liêm chính: Trung bình' : 'Mức độ rủi ro liêm chính: Thấp');
+      const riskLevel = parsed.audit_integrity?.risk_level === 'HIGH_RISK' ? 'Mức độ rủi ro liêm chính: Cao' : (parsed.audit_integrity?.risk_level === 'MEDIUM_RISK' ? 'Mức độ rủi ro liêm chính: Trung bình' : 'Mức độ rủi ro liêm chính: Thấp');
 
-      const detailedVerdict = isFailed
-        ? `Kết luận thanh tra: Chưa đạt (Fail / Flagged) - ${riskLevel}. Quá trình đối soát chéo phát hiện sự sai lệch hoặc thiếu minh bạch giữa mã nguồn thực tế bài nộp và nội dung sinh viên đã kê khai trong nhật ký AI Audit. Khuyến nghị Giảng viên tập trung phỏng vấn sinh viên về các đoạn mã nguồn then chốt và các quyết định kiến trúc được chỉ định trong danh sách câu hỏi vấn đáp Viva bên dưới để kiểm chứng quyền tác giả mã nguồn.`
-        : `Kết luận thanh tra: Đạt (Pass) - ${riskLevel}. Mã nguồn thực tế có cấu trúc phân tầng và giải thuật tương đồng cao với nội dung sinh viên đã giải trình trong nhật ký AI Audit. Giảng viên nên tiến hành vấn đáp sinh viên theo các câu hỏi kỹ thuật bên dưới để củng cố đánh giá về mức độ làm chủ mã nguồn và năng lực phản tư công nghệ.`;
+      const detailedVerdict = `Kết luận chuyên môn: Bài làm đạt ${total}/10 điểm. Mã nguồn đã hoàn thiện đầy đủ khung sườn và phương thức nghiệp vụ theo yêu cầu. ${riskLevel}. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva bên dưới để kiểm chứng thêm mức độ thấu hiểu và làm chủ mã nguồn của sinh viên.`;
 
       parsed.overall_verdict = detailedVerdict;
       parsed.ai_verdict = detailedVerdict;
