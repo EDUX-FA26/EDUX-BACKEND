@@ -4,6 +4,37 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool, withTransaction } = require('../../config/db.config');
 const AssignmentRepository = require('./assignment.repository');
 const AssignmentMaterialRepository = require('../assignment-materials/assignmentMaterial.repository');
+const { DEFAULT_RUBRIC_CONFIGS } = require('./assignment.constants');
+
+function parseAndValidateRubrics(rawRubrics, aiDeclarationRequired = true) {
+  let configs = rawRubrics;
+  if (typeof configs === 'string') {
+    try {
+      configs = JSON.parse(configs);
+    } catch (e) {
+      configs = null;
+    }
+  }
+
+  // Nếu không truyền, dùng cấu hình mặc định 5 tiêu chí
+  if (!configs || !Array.isArray(configs) || configs.length === 0) {
+    configs = DEFAULT_RUBRIC_CONFIGS;
+  }
+
+  // Ràng buộc cứng: Nếu bài tập bật AI Tracking, tổng weight_percent của các tiêu chí đang bật BẮT BUỘC phải bằng 100
+  if (aiDeclarationRequired) {
+    const enabledConfigs = configs.filter((c) => c.is_enabled !== false);
+    if (enabledConfigs.length === 0) {
+      throw new Error('INVALID_RUBRIC_WEIGHTS: Tổng trọng số của các tiêu chí được bật phải đạt chính xác 100%.');
+    }
+    const totalWeight = enabledConfigs.reduce((sum, c) => sum + (parseInt(c.weight_percent, 10) || 0), 0);
+    if (totalWeight !== 100) {
+      throw new Error('INVALID_RUBRIC_WEIGHTS: Tổng trọng số của các tiêu chí được bật phải đạt chính xác 100%.');
+    }
+  }
+
+  return configs;
+}
 
 const AssignmentService = {
   /**
@@ -43,6 +74,9 @@ const AssignmentService = {
    */
   async createAssignment(data, files = [], user) {
     await this.verifyClassAccess(data.class_id, user);
+
+    const isAiRequired = data.ai_declaration_required !== false && data.ai_declaration_required !== 'false';
+    const validatedRubrics = parseAndValidateRubrics(data.rubric_configs, isAiRequired);
 
     const assignmentId = uuidv4();
     const assignmentUuid = uuidv4(); // Unique varchar uuid
@@ -85,7 +119,13 @@ const AssignmentService = {
           uuid: assignmentUuid,
           created_by: user.id
         };
+        // Loại bỏ rubric_configs khỏi payload lưu bảng assignments
+        delete assignmentData.rubric_configs;
+
         const assignment = await AssignmentRepository.create(assignmentData, client);
+
+        // Lưu cấu hình rubric vào assignment_rubric_configs trong cùng transaction
+        const savedRubrics = await AssignmentRepository.saveRubricConfigs(assignmentId, validatedRubrics, client);
 
         // Insert materials
         const materials = [];
@@ -102,7 +142,7 @@ const AssignmentService = {
           materials.push(createdMat);
         }
 
-        return { ...assignment, materials };
+        return { ...assignment, materials, rubric_configs: savedRubrics };
       });
 
       return result;
@@ -127,6 +167,14 @@ const AssignmentService = {
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
     await this.verifyClassAccess(assignment.class_id, actualUser);
+
+    let validatedRubrics = null;
+    if (data.rubric_configs !== undefined) {
+      const isAiRequired = data.ai_declaration_required !== undefined
+        ? (data.ai_declaration_required !== false && data.ai_declaration_required !== 'false')
+        : (assignment.ai_declaration_required !== false);
+      validatedRubrics = parseAndValidateRubrics(data.rubric_configs, isAiRequired);
+    }
 
     // Nếu có upload thêm files, upload lên S3 và tạo record trong assignment_materials
     if (actualFiles && actualFiles.length > 0) {
@@ -157,8 +205,17 @@ const AssignmentService = {
       }
     }
 
-    const updated = await AssignmentRepository.update(id, data);
-    return updated;
+    const updatePayload = { ...data };
+    delete updatePayload.rubric_configs;
+
+    const updated = await AssignmentRepository.update(id, updatePayload);
+
+    let savedRubrics = null;
+    if (validatedRubrics) {
+      savedRubrics = await AssignmentRepository.saveRubricConfigs(id, validatedRubrics);
+    }
+
+    return { ...updated, rubric_configs: savedRubrics };
   },
 
   /**
@@ -221,6 +278,33 @@ const AssignmentService = {
     // Get materials
     const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, { limit: 100 });
 
+    // Get rubric configs
+    let rawRubricConfigs = await AssignmentRepository.getRubricConfigs(id);
+    if (!rawRubricConfigs || rawRubricConfigs.length === 0) {
+      rawRubricConfigs = DEFAULT_RUBRIC_CONFIGS.map(c => ({
+        ...c,
+        assignment_id: id
+      }));
+    }
+
+    // Visibility Control theo Role:
+    let finalRubricConfigs;
+    if (user.role === 'student') {
+      // Sinh viên: Chỉ lọc các tiêu chí đang bật (is_enabled === true) và LOẠI BỎ HOÀN TOÀN weight_percent
+      finalRubricConfigs = rawRubricConfigs
+        .filter(c => c.is_enabled !== false)
+        .map(({ weight_percent, ...rest }) => ({
+          ...rest,
+          is_enabled: true
+        }));
+    } else {
+      // Giảng viên / Admin: Trả về đầy đủ danh sách kèm is_enabled và weight_percent
+      finalRubricConfigs = rawRubricConfigs.map(c => ({
+        ...c,
+        weight_percent: Number(c.weight_percent)
+      }));
+    }
+
     const subjectObj = {
       id: assignment.subject_id,
       code: assignment.subject_code,
@@ -247,7 +331,8 @@ const AssignmentService = {
       class: classObj,
       subject: subjectObj,
       course: subjectObj,
-      materials
+      materials,
+      rubric_configs: finalRubricConfigs
     };
   },
 

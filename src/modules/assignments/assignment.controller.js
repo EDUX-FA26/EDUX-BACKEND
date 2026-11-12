@@ -7,6 +7,9 @@ const AssignmentController = {
       const assignment = await AssignmentService.createAssignment(req.body, files, req.user);
       res.status(201).json({ success: true, data: assignment });
     } catch (error) {
+      if (error.message && error.message.startsWith('INVALID_RUBRIC_WEIGHTS')) {
+        return res.status(400).json({ success: false, message: error.message.replace(/^INVALID_RUBRIC_WEIGHTS:\s*/, '') });
+      }
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
@@ -20,6 +23,9 @@ const AssignmentController = {
       const assignment = await AssignmentService.updateAssignment(id, req.body, files, req.user);
       res.status(200).json({ success: true, data: assignment });
     } catch (error) {
+      if (error.message && error.message.startsWith('INVALID_RUBRIC_WEIGHTS')) {
+        return res.status(400).json({ success: false, message: error.message.replace(/^INVALID_RUBRIC_WEIGHTS:\s*/, '') });
+      }
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });

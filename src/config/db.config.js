@@ -84,6 +84,29 @@ async function connectDB() {
       console.warn("⚠️ Class AI Advisories table migration notice:", migErr.message);
     }
 
+    // Auto-check và tạo bảng assignment_rubric_configs nếu chưa có
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS assignment_rubric_configs (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+          criterion_key VARCHAR(64) NOT NULL,
+          criterion_name VARCHAR(255) NOT NULL,
+          is_enabled BOOLEAN NOT NULL DEFAULT true,
+          weight_percent INTEGER NOT NULL DEFAULT 0 CHECK (weight_percent >= 0 AND weight_percent <= 100),
+          display_order INTEGER NOT NULL DEFAULT 1,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          CONSTRAINT unique_assignment_criterion UNIQUE(assignment_id, criterion_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_assignment_rubric_configs_assignment_id 
+        ON assignment_rubric_configs(assignment_id, display_order ASC);
+      `);
+    } catch (migErr) {
+      console.warn("⚠️ Assignment Rubric Configs table migration notice:", migErr.message);
+    }
+
     console.log("✅ PostgreSQL connected");
 
     client.release();

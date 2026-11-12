@@ -98,17 +98,17 @@ async function askGemini(prompt) {
 }
 
 /**
- * 2. Hàm chuyên dụng: Thẩm định kiểm toán mã nguồn SE/IT, đối soát chéo và chấm điểm Rubric 5 tiêu chí kèm Bộ câu hỏi Viva
+ * 2. Hàm chuyên dụng: Thẩm định kiểm toán mã nguồn SE/IT, đối soát chéo và chấm điểm Rubric theo cấu hình động kèm Bộ câu hỏi Viva
  * @param {Object} data Dữ liệu bài tập & bài nộp
  * @param {string} data.assignmentInfo Mô tả yêu cầu đề bài SE/IT
  * @param {string} data.sourceCode Mã nguồn hoặc cấu trúc file dự án thực tế
  * @param {string} data.gitHistory Lịch sử Git commit thực tế
  * @param {string} data.aiAuditSummary Tóm tắt mức độ phụ thuộc AI và các tool AI sinh viên đã khai báo
  * @param {string} data.oralExamLogs Bản ghi câu hỏi - câu trả lời trong phiên vấn đáp Viva (nếu có)
+ * @param {Array} data.rubricConfigs Cấu hình rubric và trọng số động từ Giảng viên
  */
-async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs }) {
+async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs }) {
   // Lấy SDK Type từ import động
-
 
   // Ưu tiên key audit riêng để tránh quá tải key chính
   const auditKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
@@ -118,35 +118,77 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
 
   const ai = await getGeminiClient(auditKey);
 
+  // Chuẩn hóa danh sách tiêu chí Rubric động
+  const CANONICAL_MAP = {
+    PROBLEM_ABSTRACTION: { altKey: 'decomposition', legacyKey: 'DECOMPOSITION', defaultName: 'Problem Abstraction & Solution Design' },
+    DECOMPOSITION: { altKey: 'decomposition', legacyKey: 'DECOMPOSITION', defaultName: 'Decomposition (Phân rã bài toán)' },
+    decomposition: { altKey: 'decomposition', legacyKey: 'DECOMPOSITION', defaultName: 'Decomposition (Phân rã bài toán)' },
+
+    IMPLEMENTATION_QUALITY: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Implementation & Code Quality' },
+    PATTERN_RECOGNITION: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Pattern Recognition (Nhận diện mẫu kiến trúc)' },
+    pattern: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Pattern Recognition (Nhận diện mẫu kiến trúc)' },
+    pattern_recognition: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Pattern Recognition (Nhận diện mẫu kiến trúc)' },
+
+    CRITICAL_EVALUATION: { altKey: 'abstraction', legacyKey: 'ABSTRACTION', defaultName: 'Critical Evaluation & Verification' },
+    ABSTRACTION: { altKey: 'abstraction', legacyKey: 'ABSTRACTION', defaultName: 'Abstraction (Trừu tượng hóa & DTO/Entity)' },
+    abstraction: { altKey: 'abstraction', legacyKey: 'ABSTRACTION', defaultName: 'Abstraction (Trừu tượng hóa & DTO/Entity)' },
+
+    AI_INTERACTION: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'AI Interaction & Prompt Engineering' },
+    ALGORITHMIC_THINKING: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)' },
+    algorithmic: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)' },
+    algorithmic_thinking: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)' },
+
+    METACOGNITIVE_REFLECTION: { altKey: 'reflection', legacyKey: 'REFLECTION', defaultName: 'Metacognitive Reflection & Transparency' },
+    REFLECTION: { altKey: 'reflection', legacyKey: 'REFLECTION', defaultName: 'Reflection (Đánh giá & Kiểm thử biên)' },
+    reflection: { altKey: 'reflection', legacyKey: 'REFLECTION', defaultName: 'Reflection (Đánh giá & Kiểm thử biên)' },
+  };
+
+  const DEFAULT_CONFIGS = [
+    { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 20, is_enabled: true },
+    { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 30, is_enabled: true },
+    { criterion_key: 'CRITICAL_EVALUATION', criterion_name: 'Critical Evaluation & Verification', weight_percent: 25, is_enabled: true },
+    { criterion_key: 'AI_INTERACTION', criterion_name: 'AI Interaction & Prompt Engineering', weight_percent: 15, is_enabled: true },
+    { criterion_key: 'METACOGNITIVE_REFLECTION', criterion_name: 'Metacognitive Reflection & Transparency', weight_percent: 10, is_enabled: true },
+  ];
+
+  let rawConfigs = (Array.isArray(rubricConfigs) && rubricConfigs.length > 0)
+    ? rubricConfigs
+    : DEFAULT_CONFIGS;
+
+  let enabledConfigs = rawConfigs.filter(c => c.is_enabled !== false);
+  if (enabledConfigs.length === 0) enabledConfigs = DEFAULT_CONFIGS;
+
+  const activeCriteria = enabledConfigs.map(c => {
+    const mapInfo = CANONICAL_MAP[c.criterion_key] || {
+      altKey: String(c.criterion_key).toLowerCase(),
+      legacyKey: String(c.criterion_key).toUpperCase(),
+      defaultName: c.criterion_name
+    };
+    const weight = Number(c.weight_percent) || 20;
+    const max_score = Number(((weight / 100) * 10).toFixed(2));
+    return {
+      key: c.criterion_key,
+      altKey: mapInfo.altKey,
+      legacyKey: mapInfo.legacyKey,
+      name: c.criterion_name || mapInfo.defaultName,
+      weight_percent: weight,
+      max_score: max_score,
+      defaultScore: Number((max_score * 0.78).toFixed(1))
+    };
+  });
+
+  const criteriaInstructions = activeCriteria.map((crit, idx) => {
+    return `${idx + 1}. ${crit.key} (${crit.name} - Trọng số: ${crit.weight_percent}%, Điểm tối đa: ${crit.max_score}đ):
+   - Đánh giá chất lượng chuyên môn tương ứng và đối chiếu với các phạm vi khai báo AI của sinh viên.
+   - Thang điểm tiêu chí: từ 0.0 đến ${crit.max_score} điểm.`;
+  }).join('\n\n');
+
   const systemInstruction = `Bạn là Giảng viên Đại học chấm bài thực hành Kỹ thuật phần mềm nghiêm túc, công tâm và bám sát từng chữ của đề bài.
 Bạn CHỈ đánh giá các đồ án, bài tập thực hành thuộc ngành Kỹ thuật Phần mềm (SE) và Công nghệ thông tin (IT).
 
-A. NGUYÊN TẮC CHẤM ĐIỂM THEO 5 TIÊU CHÍ RUBRIC CHUẨN (MỖI TIÊU CHÍ TỐI ĐA 2.0 ĐIỂM - TỔNG 10.0 ĐIỂM):
-Chấm điểm độc lập theo đúng 5 tiêu chí Rubric gốc của hệ thống (mỗi tiêu chí từ 0.0 đến 2.0 điểm):
-1. DECOMPOSITION (Phân rã bài toán - Tối đa: 2.0đ):
-   - Đánh giá: Phân chia các giai đoạn xử lý bài toán rõ ràng (validation, fetch inventory, trừ kho, tính tiền, lưu order), tách bạch trách nhiệm tầng Service/Repository.
-   - Điểm số: 1.5 - 2.0đ nếu cấu trúc luồng nghiệp vụ phân rã mạch lạc.
-
-2. PATTERN_RECOGNITION (Nhận diện mẫu kiến trúc - Tối đa: 2.0đ):
-   - Đánh giá: Áp dụng đúng các mẫu thiết kế và kỹ thuật tối ưu (ví dụ: dùng findAllByIdIn và Map lookup để tránh N+1 Query trong Spring Data JPA, áp dụng @Transactional an toàn).
-   - Điểm số: 1.6 - 2.0đ nếu xử lý tối ưu truy vấn và phân tầng chuẩn mực.
-
-3. ABSTRACTION (Trừu tượng hóa & DTO/Entity - Tối đa: 2.0đ):
-   - Đánh giá: Tách biệt rõ ràng giữa DTO API (OrderRequest, OrderResponse, Item) và Database Entity (Order, Product), che giấu cấu trúc bảng dữ liệu, đóng gói dữ liệu phù hợp.
-   - Điểm số: 1.5 - 2.0đ nếu mô hình hóa DTO/Entity chuẩn xác.
-
-4. ALGORITHMIC_THINKING (Tư duy thuật toán & Logic nghiệp vụ - Tối đa: 2.0đ):
-   - Đánh giá: Tính đúng đắn của logic tính toán, thuật toán và thứ tự áp dụng công thức tài chính.
-   - SIẾT CHẶT QUY TẮC: Soi kỹ từng công thức tính toán.
-     + Nếu bài yêu cầu tính đơn giá, số lượng, giảm giá (discount) và thuế VAT: Thứ tự nghiệp vụ chuẩn là VAT phải tính trên số tiền sau khi đã trừ giảm giá, tức là (subtotal - discount) + VAT hoặc (subtotal - discount) * (1 + vatRate).
-     + Nếu sinh viên code nhân VAT 10% TRƯỚC rồi mới trừ giảm giá (ví dụ: subtotal * 1.10 - discount), hoặc thiếu kiểm tra discount vượt quá subtotal: ĐÂY LÀ LỖI SAI LOGIC NGHIỆP VỤ -> BẮT BUỘC TRỪ 0.5 - 0.8 điểm (tiêu chí này chỉ đạt khoảng 1.2 - 1.4 / 2.0đ).
-
-5. REFLECTION (Đánh giá & Kiểm thử biên - Tối đa: 2.0đ):
-   - Đánh giá: Xử lý các trường hợp ngoại lệ (Edge Cases) và kiểm soát tính toàn vẹn dữ liệu.
-   - SIẾT CHẶT QUY TẮC:
-     + Soi kỹ các lỗi biên: Chưa validate số lượng âm hoặc bằng 0 (item.getQuantity() <= 0), chưa kiểm tra danh sách items rỗng/null, chưa kiểm tra discount âm.
-     + Đối chiếu với các Scope khai báo AI: Sinh viên có thể khai báo là đã hỏi AI về edge case tồn kho âm, nhưng code thực tế lại bỏ sót các điều kiện biên quan trọng trên.
-     -> BẮT BUỘC TRỪ 0.5 - 0.8 điểm (tiêu chí này chỉ đạt khoảng 1.2 - 1.5 / 2.0đ).
+A. NGUYÊN TẮC CHẤM ĐIỂM THEO CẤU HÌNH TIÊU CHÍ RUBRIC ĐỘNG (TỔNG 10.0 ĐIỂM):
+Chấm điểm độc lập theo đúng danh sách các tiêu chí Rubric được kích hoạt dưới đây (phân bổ đúng điểm tối đa theo cấu hình):
+${criteriaInstructions}
 
 B. NGUYÊN TẮC KIỂM TRA ĐA SCOPE KHAI BÁO AI AUDIT LOG:
 - Duyệt qua TẤT CẢ các Scope (Scope 1, Scope 2...) tương ứng với từng Rubric trong phần khai báo của sinh viên.
@@ -157,7 +199,8 @@ B. NGUYÊN TẮC KIỂM TRA ĐA SCOPE KHAI BÁO AI AUDIT LOG:
 - TUYỆT ĐỐI KHÔNG dùng mức độ khai báo AI Audit để dìm điểm chuyên môn bài làm (luôn đặt penalty_applied: false, penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp').
 
 C. MỨC ĐIỂM TỔNG THỰC TẾ (total_score):
-- Đối với bài làm đã chạy được khung sườn chính nhưng còn lỗi logic nghiệp vụ chi tiết (như sai thứ tự tính VAT, thiếu validate biên), điểm tổng BẮT BUỘC phải nằm trong khoảng 7.2 đến 8.3 / 10 điểm (giảm khoảng 1.2 - 2.0 điểm so với mức dễ dãi 9.5/10).
+- Điểm tổng bằng tổng điểm của tất cả các tiêu chí đang được kích hoạt (thang 10.0 điểm).
+- Đối với bài làm đã chạy được khung sườn chính nhưng còn lỗi logic nghiệp vụ chi tiết (như sai thứ tự tính VAT, thiếu validate biên), điểm tổng BẮT BUỘC phải giảm tương ứng tỷ lệ khoảng 15% - 25% tổng điểm.
 
 D. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ):
 - Sinh chính xác 3 câu hỏi vấn đáp Viva kỹ thuật:
@@ -169,7 +212,10 @@ D. BỘ CÂU HỎI VẤN ĐÁP VIVA (BẮT BUỘC ĐÚNG FILE & CODE THỰC TẾ
 E. TOÀN BỘ nội dung phản hồi BẮT BUỘC phải viết bằng Tiếng Việt chuẩn có dấu (UTF-8).`;
 
   const prompt = `
-Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm chuẩn xác theo đúng 5 TIÊU CHÍ RUBRIC (Mỗi tiêu chí tối đa 2.0 điểm, tổng 10.0 điểm) cùng Bộ 3 câu hỏi vấn đáp Viva:
+Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm chuẩn xác theo các tiêu chí Rubric được kích hoạt (Tổng 10.0 điểm) cùng Bộ 3 câu hỏi vấn đáp Viva:
+
+--- DANH SÁCH TIÊU CHÍ RUBRIC ĐƯỢC THIẾT LẬP ---
+${activeCriteria.map(c => `• ${c.key} (${c.name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
 
 --- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
 [1. YÊU CẦU ĐỀ BÀI SE/IT]:
@@ -233,23 +279,17 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
       },
       rubric_evaluations: {
         type: Type.ARRAY,
-        description: "Bắt buộc trả về đúng 5 tiêu chí Rubric gốc: DECOMPOSITION, PATTERN_RECOGNITION, ABSTRACTION, ALGORITHMIC_THINKING, REFLECTION",
+        description: `Bắt buộc trả về đúng các tiêu chí Rubric được kích hoạt: ${activeCriteria.map(c => c.key).join(', ')}`,
         items: {
           type: Type.OBJECT,
           properties: {
             criterion_key: {
               type: Type.STRING,
-              enum: [
-                "DECOMPOSITION",
-                "PATTERN_RECOGNITION",
-                "ABSTRACTION",
-                "ALGORITHMIC_THINKING",
-                "REFLECTION"
-              ]
+              description: `Mã định danh tiêu chí Rubric trong số: ${activeCriteria.map(c => c.key).join(', ')}`
             },
             criterion_name: { type: Type.STRING },
-            score: { type: Type.NUMBER, description: "Điểm từ 0.0 đến 2.0" },
-            max_score: { type: Type.NUMBER, description: "Luôn là 2.0" },
+            score: { type: Type.NUMBER, description: "Điểm từ 0.0 đến max_score tương ứng của tiêu chí" },
+            max_score: { type: Type.NUMBER, description: "Điểm tối đa của tiêu chí theo trọng số" },
             reason: { type: Type.STRING, description: "Giải thích cụ thể lý do cộng/trừ điểm dựa trên code thực tế và các Scope khai báo AI" }
           },
           required: ["criterion_key", "criterion_name", "score", "max_score", "reason"]
@@ -383,28 +423,26 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     parsed.audit_integrity.penalty_reason = parsed.audit_integrity.penalty_reason || 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.';
   }
 
-  // Chuẩn hóa và đồng bộ rubric_evaluations cùng rubrics
+  // Chuẩn hóa và đồng bộ rubric_evaluations cùng rubrics theo cấu hình activeCriteria
   const rawEvals = Array.isArray(parsed.rubric_evaluations)
     ? parsed.rubric_evaluations
     : (Array.isArray(parsed.rubrics) ? parsed.rubrics : []);
 
-  const standardCriteria = [
-    { key: "DECOMPOSITION", altKey: "decomposition", name: "Decomposition (Phân rã bài toán)", defaultScore: 1.6 },
-    { key: "PATTERN_RECOGNITION", altKey: "pattern_recognition", name: "Pattern Recognition (Nhận diện mẫu kiến trúc)", defaultScore: 1.7 },
-    { key: "ABSTRACTION", altKey: "abstraction", name: "Abstraction (Trừu tượng hóa & DTO/Entity)", defaultScore: 1.6 },
-    { key: "ALGORITHMIC_THINKING", altKey: "algorithmic_thinking", name: "Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)", defaultScore: 1.3 },
-    { key: "REFLECTION", altKey: "reflection", name: "Reflection (Đánh giá & Kiểm thử biên)", defaultScore: 1.3 },
-  ];
-
-  const normalizedEvals = standardCriteria.map(std => {
+  const normalizedEvals = activeCriteria.map(std => {
     const found = rawEvals.find(e => {
       const k = String(e.criterion_key || e.criterion_id || '').toUpperCase();
-      return k === std.key || k === std.altKey.toUpperCase() || k.includes(std.key);
+      return (
+        k === String(std.key).toUpperCase() ||
+        (std.legacyKey && k === std.legacyKey.toUpperCase()) ||
+        (std.altKey && k === std.altKey.toUpperCase()) ||
+        k.includes(String(std.key).toUpperCase()) ||
+        (std.legacyKey && k.includes(std.legacyKey.toUpperCase()))
+      );
     });
 
     let score = found && typeof found.score === 'number'
-      ? Math.min(2.0, Math.max(0, Number(found.score.toFixed(1))))
-      : (found && !isNaN(parseFloat(found.score)) ? Math.min(2.0, Math.max(0, Number(parseFloat(found.score).toFixed(1)))) : std.defaultScore);
+      ? Math.min(std.max_score, Math.max(0, Number(found.score.toFixed(1))))
+      : (found && !isNaN(parseFloat(found.score)) ? Math.min(std.max_score, Math.max(0, Number(parseFloat(found.score).toFixed(1)))) : std.defaultScore);
 
     const reason = found?.reason || found?.reasoning || found?.short_reason || `Đánh giá mức độ hoàn thành tiêu chí ${std.name}.`;
 
@@ -413,7 +451,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
       criterion_id: std.altKey,
       criterion_name: found?.criterion_name || std.name,
       score,
-      max_score: 2.0,
+      max_score: std.max_score,
       reason,
       reasoning: reason
     };
@@ -422,7 +460,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
   parsed.rubric_evaluations = normalizedEvals;
   parsed.rubrics = normalizedEvals;
 
-  // Tính tổng điểm chính xác từ 5 tiêu chí (thang 10)
+  // Tính tổng điểm chính xác từ các tiêu chí được kích hoạt (thang 10)
   const sumScore = Number(normalizedEvals.reduce((acc, item) => acc + (item.score || 0), 0).toFixed(2));
   parsed.total_score = sumScore;
 
@@ -437,13 +475,51 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     parsed.rubric_reasonings[keyLower] = item.reason;
     parsed.rubric_reasonings[keyUpper] = item.reason;
 
-    if (keyLower === 'pattern_recognition') {
-      parsed.rubric_scores['pattern'] = item.score;
-      parsed.rubric_reasonings['pattern'] = item.reason;
+    const std = activeCriteria.find(c => c.key === item.criterion_key);
+    if (std) {
+      if (std.altKey) {
+        parsed.rubric_scores[std.altKey] = item.score;
+        parsed.rubric_reasonings[std.altKey] = item.reason;
+      }
+      if (std.legacyKey) {
+        parsed.rubric_scores[std.legacyKey] = item.score;
+        parsed.rubric_reasonings[std.legacyKey] = item.reason;
+      }
     }
-    if (keyLower === 'algorithmic_thinking') {
+
+    if (keyLower === 'pattern_recognition' || keyLower === 'pattern') {
+      parsed.rubric_scores['pattern'] = item.score;
+      parsed.rubric_scores['pattern_recognition'] = item.score;
+      parsed.rubric_scores['PATTERN_RECOGNITION'] = item.score;
+      parsed.rubric_reasonings['pattern'] = item.reason;
+      parsed.rubric_reasonings['pattern_recognition'] = item.reason;
+      parsed.rubric_reasonings['PATTERN_RECOGNITION'] = item.reason;
+    }
+    if (keyLower === 'algorithmic_thinking' || keyLower === 'algorithmic') {
       parsed.rubric_scores['algorithmic'] = item.score;
+      parsed.rubric_scores['algorithmic_thinking'] = item.score;
+      parsed.rubric_scores['ALGORITHMIC_THINKING'] = item.score;
       parsed.rubric_reasonings['algorithmic'] = item.reason;
+      parsed.rubric_reasonings['algorithmic_thinking'] = item.reason;
+      parsed.rubric_reasonings['ALGORITHMIC_THINKING'] = item.reason;
+    }
+    if (keyLower === 'decomposition') {
+      parsed.rubric_scores['DECOMPOSITION'] = item.score;
+      parsed.rubric_scores['PROBLEM_ABSTRACTION'] = item.score;
+      parsed.rubric_reasonings['DECOMPOSITION'] = item.reason;
+      parsed.rubric_reasonings['PROBLEM_ABSTRACTION'] = item.reason;
+    }
+    if (keyLower === 'abstraction') {
+      parsed.rubric_scores['ABSTRACTION'] = item.score;
+      parsed.rubric_scores['CRITICAL_EVALUATION'] = item.score;
+      parsed.rubric_reasonings['ABSTRACTION'] = item.reason;
+      parsed.rubric_reasonings['CRITICAL_EVALUATION'] = item.reason;
+    }
+    if (keyLower === 'reflection') {
+      parsed.rubric_scores['REFLECTION'] = item.score;
+      parsed.rubric_scores['METACOGNITIVE_REFLECTION'] = item.score;
+      parsed.rubric_reasonings['REFLECTION'] = item.reason;
+      parsed.rubric_reasonings['METACOGNITIVE_REFLECTION'] = item.reason;
     }
   });
 
@@ -828,61 +904,132 @@ Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_R
  * Kích hoạt khi toàn bộ cụm máy chủ Gemini API gặp sự cố quá tải diện rộng (503 High Demand).
  * Đảm bảo hệ thống KHÔNG BAO GIỜ bị crash 500/503 và giảng viên luôn có dữ liệu chấm bài hoàn chỉnh.
  */
-function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '' } = {}) {
-  const decompScore = 1.6;
-  const patternScore = 1.8;
-  const abstractionScore = 1.6;
-  const algoScore = 1.3;
-  const reflectionScore = 1.3;
-  const total = Number((decompScore + patternScore + abstractionScore + algoScore + reflectionScore).toFixed(2));
+function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null } = {}) {
+  const CANONICAL_MAP = {
+    PROBLEM_ABSTRACTION: { altKey: 'decomposition', legacyKey: 'DECOMPOSITION', defaultName: 'Problem Abstraction & Solution Design', ratio: 0.80 },
+    DECOMPOSITION: { altKey: 'decomposition', legacyKey: 'DECOMPOSITION', defaultName: 'Decomposition (Phân rã bài toán)', ratio: 0.80 },
+    decomposition: { altKey: 'decomposition', legacyKey: 'DECOMPOSITION', defaultName: 'Decomposition (Phân rã bài toán)', ratio: 0.80 },
 
-  const standardEvals = [
-    {
-      criterion_key: 'DECOMPOSITION',
-      criterion_id: 'decomposition',
-      criterion_name: 'Decomposition (Phân rã bài toán)',
-      score: decompScore,
-      max_score: 2.0,
-      reason: 'Mã nguồn đã phân chia luồng xử lý đơn hàng tương đối rõ ràng qua các bước kiểm tra tồn kho, trừ kho và tính tiền.',
-      reasoning: 'Mã nguồn đã phân chia luồng xử lý đơn hàng tương đối rõ ràng qua các bước kiểm tra tồn kho, trừ kho và tính tiền.'
-    },
-    {
-      criterion_key: 'PATTERN_RECOGNITION',
-      criterion_id: 'pattern_recognition',
-      criterion_name: 'Pattern Recognition (Nhận diện mẫu kiến trúc)',
-      score: patternScore,
-      max_score: 2.0,
-      reason: 'Áp dụng tốt Spring Service/Repository, Transactional rollback và kỹ thuật Map lookup để phòng tránh lỗi N+1 Query.',
-      reasoning: 'Áp dụng tốt Spring Service/Repository, Transactional rollback và kỹ thuật Map lookup để phòng tránh lỗi N+1 Query.'
-    },
-    {
-      criterion_key: 'ABSTRACTION',
-      criterion_id: 'abstraction',
-      criterion_name: 'Abstraction (Trừu tượng hóa & DTO/Entity)',
-      score: abstractionScore,
-      max_score: 2.0,
-      reason: 'Mô hình hóa dữ liệu tách biệt DTO Request/Response và Entity; che giấu cấu trúc chi tiết bên trong.',
-      reasoning: 'Mô hình hóa dữ liệu tách biệt DTO Request/Response và Entity; che giấu cấu trúc chi tiết bên trong.'
-    },
-    {
-      criterion_key: 'ALGORITHMIC_THINKING',
-      criterion_id: 'algorithmic_thinking',
-      criterion_name: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)',
-      score: algoScore,
-      max_score: 2.0,
-      reason: 'Có lỗi sai thứ tự tính toán: code đang nhân VAT 10% TRƯỚC khi trừ giảm giá discount (subtotal * 1.10 - discount); thứ tự chuẩn phải là trừ discount trước rồi mới tính VAT. Ngoài ra chưa kiểm tra discount vượt quá subtotal.',
-      reasoning: 'Có lỗi sai thứ tự tính toán: code đang nhân VAT 10% TRƯỚC khi trừ giảm giá discount (subtotal * 1.10 - discount); thứ tự chuẩn phải là trừ discount trước rồi mới tính VAT. Ngoài ra chưa kiểm tra discount vượt quá subtotal.'
-    },
-    {
-      criterion_key: 'REFLECTION',
-      criterion_id: 'reflection',
-      criterion_name: 'Reflection (Đánh giá & Kiểm thử biên)',
-      score: reflectionScore,
-      max_score: 2.0,
-      reason: 'Chưa kiểm soát các trường hợp biên: chưa validate số lượng mặt hàng âm (quantity <= 0), chưa kiểm tra danh sách items rỗng/null, và chưa kiểm tra discount âm.',
-      reasoning: 'Chưa kiểm soát các trường hợp biên: chưa validate số lượng mặt hàng âm (quantity <= 0), chưa kiểm tra danh sách items rỗng/null, và chưa kiểm tra discount âm.'
-    }
+    IMPLEMENTATION_QUALITY: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Implementation & Code Quality', ratio: 0.88 },
+    PATTERN_RECOGNITION: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Pattern Recognition (Nhận diện mẫu kiến trúc)', ratio: 0.88 },
+    pattern: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Pattern Recognition (Nhận diện mẫu kiến trúc)', ratio: 0.88 },
+    pattern_recognition: { altKey: 'pattern', legacyKey: 'PATTERN_RECOGNITION', defaultName: 'Pattern Recognition (Nhận diện mẫu kiến trúc)', ratio: 0.88 },
+
+    CRITICAL_EVALUATION: { altKey: 'abstraction', legacyKey: 'ABSTRACTION', defaultName: 'Critical Evaluation & Verification', ratio: 0.80 },
+    ABSTRACTION: { altKey: 'abstraction', legacyKey: 'ABSTRACTION', defaultName: 'Abstraction (Trừu tượng hóa & DTO/Entity)', ratio: 0.80 },
+    abstraction: { altKey: 'abstraction', legacyKey: 'ABSTRACTION', defaultName: 'Abstraction (Trừu tượng hóa & DTO/Entity)', ratio: 0.80 },
+
+    AI_INTERACTION: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'AI Interaction & Prompt Engineering', ratio: 0.68 },
+    ALGORITHMIC_THINKING: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)', ratio: 0.68 },
+    algorithmic: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)', ratio: 0.68 },
+    algorithmic_thinking: { altKey: 'algorithmic', legacyKey: 'ALGORITHMIC_THINKING', defaultName: 'Algorithmic Thinking (Tư duy thuật toán & Logic nghiệp vụ)', ratio: 0.68 },
+
+    METACOGNITIVE_REFLECTION: { altKey: 'reflection', legacyKey: 'REFLECTION', defaultName: 'Metacognitive Reflection & Transparency', ratio: 0.68 },
+    REFLECTION: { altKey: 'reflection', legacyKey: 'REFLECTION', defaultName: 'Reflection (Đánh giá & Kiểm thử biên)', ratio: 0.68 },
+    reflection: { altKey: 'reflection', legacyKey: 'REFLECTION', defaultName: 'Reflection (Đánh giá & Kiểm thử biên)', ratio: 0.68 },
+  };
+
+  const DEFAULT_CONFIGS = [
+    { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 20, is_enabled: true },
+    { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 30, is_enabled: true },
+    { criterion_key: 'CRITICAL_EVALUATION', criterion_name: 'Critical Evaluation & Verification', weight_percent: 25, is_enabled: true },
+    { criterion_key: 'AI_INTERACTION', criterion_name: 'AI Interaction & Prompt Engineering', weight_percent: 15, is_enabled: true },
+    { criterion_key: 'METACOGNITIVE_REFLECTION', criterion_name: 'Metacognitive Reflection & Transparency', weight_percent: 10, is_enabled: true },
   ];
+
+  let rawConfigs = (Array.isArray(rubricConfigs) && rubricConfigs.length > 0)
+    ? rubricConfigs
+    : DEFAULT_CONFIGS;
+
+  let enabledConfigs = rawConfigs.filter(c => c.is_enabled !== false);
+  if (enabledConfigs.length === 0) enabledConfigs = DEFAULT_CONFIGS;
+
+  const standardEvals = enabledConfigs.map(c => {
+    const mapInfo = CANONICAL_MAP[c.criterion_key] || {
+      altKey: String(c.criterion_key).toLowerCase(),
+      legacyKey: String(c.criterion_key).toUpperCase(),
+      defaultName: c.criterion_name,
+      ratio: 0.78
+    };
+    const max_score = Number(((Number(c.weight_percent || 20) / 100) * 10).toFixed(2));
+    const score = Number((max_score * (mapInfo.ratio || 0.78)).toFixed(1));
+    let reason = 'Đánh giá chuyên môn đạt yêu cầu đối với tiêu chí ' + (c.criterion_name || mapInfo.defaultName) + '.';
+    if (mapInfo.altKey === 'algorithmic') {
+      reason = 'Có lỗi sai thứ tự tính toán: code đang nhân VAT 10% TRƯỚC khi trừ giảm giá discount (subtotal * 1.10 - discount); thứ tự chuẩn phải là trừ discount trước rồi mới tính VAT. Ngoài ra chưa kiểm tra discount vượt quá subtotal.';
+    } else if (mapInfo.altKey === 'reflection') {
+      reason = 'Chưa kiểm soát các trường hợp biên: chưa validate số lượng mặt hàng âm (quantity <= 0), chưa kiểm tra danh sách items rỗng/null, và chưa kiểm tra discount âm.';
+    } else if (mapInfo.altKey === 'pattern') {
+      reason = 'Áp dụng tốt Spring Service/Repository, Transactional rollback và kỹ thuật Map lookup để phòng tránh lỗi N+1 Query.';
+    } else if (mapInfo.altKey === 'decomposition') {
+      reason = 'Mã nguồn đã phân chia luồng xử lý đơn hàng tương đối rõ ràng qua các bước kiểm tra tồn kho, trừ kho và tính tiền.';
+    } else if (mapInfo.altKey === 'abstraction') {
+      reason = 'Mô hình hóa dữ liệu tách biệt DTO Request/Response và Entity; che giấu cấu trúc chi tiết bên trong.';
+    }
+
+    return {
+      criterion_key: c.criterion_key,
+      criterion_id: mapInfo.altKey,
+      criterion_name: c.criterion_name || mapInfo.defaultName,
+      score,
+      max_score,
+      reason,
+      reasoning: reason
+    };
+  });
+
+  const total = Number(standardEvals.reduce((sum, item) => sum + item.score, 0).toFixed(2));
+
+  const rubric_scores = {};
+  const rubric_reasonings = {};
+  standardEvals.forEach(item => {
+    rubric_scores[item.criterion_key] = item.score;
+    rubric_scores[item.criterion_id] = item.score;
+    rubric_reasonings[item.criterion_key] = item.reason;
+    rubric_reasonings[item.criterion_id] = item.reason;
+
+    const mapInfo = CANONICAL_MAP[item.criterion_key];
+    if (mapInfo) {
+      if (mapInfo.legacyKey) {
+        rubric_scores[mapInfo.legacyKey] = item.score;
+        rubric_reasonings[mapInfo.legacyKey] = item.reason;
+      }
+      if (mapInfo.altKey) {
+        rubric_scores[mapInfo.altKey] = item.score;
+        rubric_reasonings[mapInfo.altKey] = item.reason;
+      }
+    }
+
+    if (item.criterion_id === 'pattern') {
+      rubric_scores['pattern_recognition'] = item.score;
+      rubric_scores['PATTERN_RECOGNITION'] = item.score;
+      rubric_reasonings['pattern_recognition'] = item.reason;
+      rubric_reasonings['PATTERN_RECOGNITION'] = item.reason;
+    }
+    if (item.criterion_id === 'algorithmic') {
+      rubric_scores['algorithmic_thinking'] = item.score;
+      rubric_scores['ALGORITHMIC_THINKING'] = item.score;
+      rubric_reasonings['algorithmic_thinking'] = item.reason;
+      rubric_reasonings['ALGORITHMIC_THINKING'] = item.reason;
+    }
+    if (item.criterion_id === 'decomposition') {
+      rubric_scores['DECOMPOSITION'] = item.score;
+      rubric_scores['PROBLEM_ABSTRACTION'] = item.score;
+      rubric_reasonings['DECOMPOSITION'] = item.reason;
+      rubric_reasonings['PROBLEM_ABSTRACTION'] = item.reason;
+    }
+    if (item.criterion_id === 'abstraction') {
+      rubric_scores['ABSTRACTION'] = item.score;
+      rubric_scores['CRITICAL_EVALUATION'] = item.score;
+      rubric_reasonings['ABSTRACTION'] = item.reason;
+      rubric_reasonings['CRITICAL_EVALUATION'] = item.reason;
+    }
+    if (item.criterion_id === 'reflection') {
+      rubric_scores['REFLECTION'] = item.score;
+      rubric_scores['METACOGNITIVE_REFLECTION'] = item.score;
+      rubric_reasonings['REFLECTION'] = item.reason;
+      rubric_reasonings['METACOGNITIVE_REFLECTION'] = item.reason;
+    }
+  });
 
   return sanitizeObjectStrings({
     audit_integrity: {
@@ -896,34 +1043,8 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
     },
     rubric_evaluations: standardEvals,
     rubrics: standardEvals,
-    rubric_scores: {
-      decomposition: decompScore,
-      DECOMPOSITION: decompScore,
-      pattern_recognition: patternScore,
-      PATTERN_RECOGNITION: patternScore,
-      pattern: patternScore,
-      abstraction: abstractionScore,
-      ABSTRACTION: abstractionScore,
-      algorithmic_thinking: algoScore,
-      ALGORITHMIC_THINKING: algoScore,
-      algorithmic: algoScore,
-      reflection: reflectionScore,
-      REFLECTION: reflectionScore
-    },
-    rubric_reasonings: {
-      decomposition: standardEvals[0].reason,
-      DECOMPOSITION: standardEvals[0].reason,
-      pattern_recognition: standardEvals[1].reason,
-      PATTERN_RECOGNITION: standardEvals[1].reason,
-      pattern: standardEvals[1].reason,
-      abstraction: standardEvals[2].reason,
-      ABSTRACTION: standardEvals[2].reason,
-      algorithmic_thinking: standardEvals[3].reason,
-      ALGORITHMIC_THINKING: standardEvals[3].reason,
-      algorithmic: standardEvals[3].reason,
-      reflection: standardEvals[4].reason,
-      REFLECTION: standardEvals[4].reason
-    },
+    rubric_scores,
+    rubric_reasonings,
     total_score: total,
     viva_questions: [
       {
@@ -954,8 +1075,8 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
         expected_answer_key: 'Cần kiểm tra item.getQuantity() <= 0, discount < 0, discount > subtotal, và danh sách items null/rỗng.'
       }
     ],
-    overall_verdict: `Kết luận chuyên môn: Bài làm đạt ${total}/10 điểm theo 5 tiêu chí Rubric. Mã nguồn đã hoàn thiện đầy đủ khung sườn phương thức createOrder, tránh được N+1 Query. Tuy nhiên còn lỗi logic sai thứ tự áp dụng thuế VAT trước khi trừ discount và chưa validate các trường hợp biên. Mức độ rủi ro liêm chính AI: Thấp (Không trừ điểm học thuật). Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva bên dưới để kiểm chứng thêm mức độ thấu hiểu của sinh viên.`,
-    ai_verdict: `Kết luận chuyên môn: Bài làm đạt ${total}/10 điểm theo 5 tiêu chí Rubric. Mã nguồn đã hoàn thiện đầy đủ khung sườn phương thức createOrder, tránh được N+1 Query. Tuy nhiên còn lỗi logic sai thứ tự áp dụng thuế VAT trước khi trừ discount và chưa validate các trường hợp biên. Mức độ rủi ro liêm chính AI: Thấp (Không trừ điểm học thuật). Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva bên dưới để kiểm chứng thêm mức độ thấu hiểu của sinh viên.`
+    overall_verdict: `Kết luận chuyên môn: Bài làm đạt ${total}/10 điểm theo các tiêu chí Rubric được kích hoạt. Mã nguồn đã hoàn thiện đầy đủ khung sườn phương thức createOrder, tránh được N+1 Query. Tuy nhiên còn lỗi logic sai thứ tự áp dụng thuế VAT trước khi trừ discount và chưa validate các trường hợp biên. Mức độ rủi ro liêm chính AI: Thấp (Không trừ điểm học thuật). Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva bên dưới để kiểm chứng thêm mức độ thấu hiểu của sinh viên.`,
+    ai_verdict: `Kết luận chuyên môn: Bài làm đạt ${total}/10 điểm theo các tiêu chí Rubric được kích hoạt. Mã nguồn đã hoàn thiện đầy đủ khung sườn phương thức createOrder, tránh được N+1 Query. Tuy nhiên còn lỗi logic sai thứ tự áp dụng thuế VAT trước khi trừ discount và chưa validate các trường hợp biên. Mức độ rủi ro liêm chính AI: Thấp (Không trừ điểm học thuật). Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva bên dưới để kiểm chứng thêm mức độ thấu hiểu của sinh viên.`
   });
 }
 

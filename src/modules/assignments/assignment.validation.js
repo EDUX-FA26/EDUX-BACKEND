@@ -23,6 +23,7 @@ const createAssignmentSchema = z.object({
   max_ai_interactions: z.coerce.number().min(0).optional().default(20),
   allow_late_submission: parseBoolean.default(false),
   publish_status: z.enum(['draft', 'published', 'closed']).default('draft'),
+  rubric_configs: z.any().optional(),
 });
 
 const updateAssignmentSchema = z.object({
@@ -38,6 +39,7 @@ const updateAssignmentSchema = z.object({
   allow_late_submission: parseBoolean.optional(),
   publish_status: z.enum(['draft', 'published', 'closed']).optional(),
   session_id: z.string().uuid('Invalid session_id').optional().nullable(),
+  rubric_configs: z.any().optional(),
 });
 
 const updateStatusSchema = z.object({

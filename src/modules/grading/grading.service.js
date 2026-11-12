@@ -552,7 +552,22 @@ const GradingService = {
       }
     }
 
-    // 7. Gọi hàm evaluateRubricWithGemini thẩm định đối soát chéo thực tế qua Gemini
+    // 7. Lấy cấu hình Rubric của bài tập (hoặc mặc định) để nạp động vào AI Grading Engine
+    let rubricConfigs = null;
+    try {
+      const AssignmentRepository = require('../assignments/assignment.repository');
+      const { DEFAULT_RUBRIC_CONFIGS } = require('../assignments/assignment.constants');
+      if (auditData?.submission?.assignment_id) {
+        rubricConfigs = await AssignmentRepository.getRubricConfigs(auditData.submission.assignment_id);
+      }
+      if (!rubricConfigs || rubricConfigs.length === 0) {
+        rubricConfigs = DEFAULT_RUBRIC_CONFIGS;
+      }
+    } catch (rubricErr) {
+      console.warn('[ART-AI] Failed to fetch assignment rubric configs, using default:', rubricErr.message);
+    }
+
+    // 8. Gọi hàm evaluateRubricWithGemini thẩm định đối soát chéo thực tế qua Gemini
     let result;
     try {
       result = await evaluateRubricWithGemini({
@@ -561,10 +576,11 @@ const GradingService = {
         gitHistory: gitHistoryStr,
         aiAuditSummary,
         oralExamLogs,
+        rubricConfigs,
       });
     } catch (evalErr) {
       console.warn(`[ART-AI] evaluateRubricWithGemini thất bại (${evalErr.status || evalErr.message}). Tự động kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng...`);
-      result = generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary });
+      result = generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, rubricConfigs });
     }
 
     // 8. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload

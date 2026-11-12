@@ -220,6 +220,51 @@ const AssignmentRepository = {
     const query = `DELETE FROM assignments WHERE id = $1 RETURNING *`;
     const { rows } = await pool.query(query, [id]);
     return rows[0];
+  },
+
+  /**
+   * Lấy danh sách cấu hình Rubric theo assignment_id
+   */
+  async getRubricConfigs(assignmentId, client = pool) {
+    const query = `
+      SELECT 
+        id, assignment_id, criterion_key, criterion_name, is_enabled, weight_percent, display_order
+      FROM assignment_rubric_configs
+      WHERE assignment_id = $1
+      ORDER BY display_order ASC;
+    `;
+    const { rows } = await client.query(query, [assignmentId]);
+    return rows;
+  },
+
+  /**
+   * Lưu hoặc cập nhật danh sách cấu hình Rubric
+   */
+  async saveRubricConfigs(assignmentId, configs, client = pool) {
+    await client.query('DELETE FROM assignment_rubric_configs WHERE assignment_id = $1', [assignmentId]);
+    if (!configs || configs.length === 0) return [];
+    
+    const saved = [];
+    for (let i = 0; i < configs.length; i++) {
+      const item = configs[i];
+      const query = `
+        INSERT INTO assignment_rubric_configs (
+          assignment_id, criterion_key, criterion_name, is_enabled, weight_percent, display_order
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *;
+      `;
+      const values = [
+        assignmentId,
+        item.criterion_key,
+        item.criterion_name,
+        item.is_enabled !== false,
+        parseInt(item.weight_percent, 10) || 0,
+        parseInt(item.display_order, 10) || (i + 1)
+      ];
+      const { rows } = await client.query(query, values);
+      saved.push(rows[0]);
+    }
+    return saved;
   }
 };
 
