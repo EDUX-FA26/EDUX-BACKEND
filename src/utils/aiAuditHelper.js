@@ -19,36 +19,36 @@ const COMPUTATIONAL_THINKING_KEYS = [
 function createDefaultDeclarations() {
   return {
     decomposition: {
-      tool: 'ChatGPT',
-      decision: 'Partially Modified',
+      tool: '',
+      decision: '',
       prompt: '',
       response: '',
       reflection: '',
     },
     pattern_recognition: {
-      tool: 'ChatGPT',
-      decision: 'Fully Accepted',
+      tool: '',
+      decision: '',
       prompt: '',
       response: '',
       reflection: '',
     },
     abstraction: {
-      tool: 'ChatGPT',
-      decision: 'Fully Accepted',
+      tool: '',
+      decision: '',
       prompt: '',
       response: '',
       reflection: '',
     },
     algorithmic_thinking: {
-      tool: 'ChatGPT',
-      decision: 'Fully Accepted',
+      tool: '',
+      decision: '',
       prompt: '',
       response: '',
       reflection: '',
     },
     reflection: {
-      tool: 'ChatGPT',
-      decision: 'Fully Accepted',
+      tool: '',
+      decision: '',
       prompt: '',
       response: '',
       reflection: '',
@@ -100,7 +100,7 @@ function normalizeDeclarationItem(item) {
     item.ai_tool_used ||
     item.toolUsed ||
     item.tool_used ||
-    'ChatGPT';
+    '';
 
   const decision =
     item.decision ||
@@ -108,7 +108,7 @@ function normalizeDeclarationItem(item) {
     item.decision_status ||
     item.yourDecision ||
     item.your_decision ||
-    'Fully Accepted';
+    '';
 
   const prompt =
     item.prompt ||
@@ -146,15 +146,16 @@ function normalizeDeclarationItem(item) {
   const hasPrompt = Boolean(prompt && prompt.trim().length > 0);
   const hasResponse = Boolean(response && response.trim().length > 0);
   const hasReflection = Boolean(reflection && reflection.trim().length > 0);
+  const hasDecision = Boolean(decision && decision.trim().length > 0 && decision.toLowerCase() !== 'not declared');
 
-  // Chỉ tính là hoàn thành khi ĐÃ ĐIỀN ĐỦ cả 3 mục text: Prompt, Response, Reflection (không tính chỉ chọn dropdown)
-  const isCompleted = hasPrompt && hasResponse && hasReflection;
-  const isPartiallyFilled = (hasPrompt || hasResponse || hasReflection) && !isCompleted;
+  // Chỉ tính là hoàn thành khi ĐÃ ĐIỀN ĐỦ cả 3 mục text và đã chọn decision
+  const isCompleted = hasPrompt && hasResponse && hasReflection && hasDecision;
+  const isPartiallyFilled = (hasPrompt || hasResponse || hasReflection || hasDecision) && !isCompleted;
 
-  // Nếu cả 3 trường text đều trống thì coi như chưa khai báo
+  // Nếu chưa có quyết định và chưa điền gì thì coi như Not Declared
   const finalDecision = isCompleted || isPartiallyFilled
-    ? (decision || 'Partially Modified')
-    : 'Not Declared';
+    ? (decision || '')
+    : (decision || 'Not Declared');
 
   return {
     tool,
