@@ -510,9 +510,9 @@ const getAuditLogs = async () => {
       SELECT
         ae.id::text AS id,
         'ai_evaluation' AS flag_type,
-        COALESCE(u.full_name, u.email, 'Hệ thống AI') AS flagged_by,
-        u.full_name AS student_name,
-        u.student_code,
+        COALESCE(up.full_name, u.username, u.email, 'Hệ thống AI') AS flagged_by,
+        COALESCE(up.full_name, u.username, u.email) AS student_name,
+        up.student_code,
         u.email AS student_email,
         c.class_code,
         sub.code AS subject_code,
@@ -529,6 +529,7 @@ const getAuditLogs = async () => {
       FROM ai_evaluations ae
       JOIN submissions s ON s.id = ae.submission_id
       JOIN users u ON u.id = s.student_id
+      LEFT JOIN user_profiles up ON up.user_id = u.id
       JOIN assignments a ON a.id = s.assignment_id
       JOIN classes c ON c.id = a.class_id
       JOIN subjects sub ON sub.id = c.subject_id
@@ -539,8 +540,8 @@ const getAuditLogs = async () => {
       SELECT
         s.id::text AS id,
         s.status AS submission_status,
-        u.full_name AS student_name,
-        u.student_code,
+        COALESCE(up.full_name, u.username, u.email) AS student_name,
+        up.student_code,
         u.email AS student_email,
         c.class_code,
         sub.code AS subject_code,
@@ -551,6 +552,7 @@ const getAuditLogs = async () => {
         COALESCE(s.last_submitted_at, s.submitted_at, s.created_at) AS created_at
       FROM submissions s
       JOIN users u ON u.id = s.student_id
+      LEFT JOIN user_profiles up ON up.user_id = u.id
       JOIN assignments a ON a.id = s.assignment_id
       JOIN classes c ON c.id = a.class_id
       JOIN subjects sub ON sub.id = c.subject_id
@@ -648,8 +650,8 @@ const getLearningActivityExportData = async () => {
   const query = `
     SELECT
       u.id AS student_id,
-      u.student_code,
-      u.full_name AS student_name,
+      up.student_code,
+      COALESCE(up.full_name, u.username, u.email) AS student_name,
       u.email,
       c.id AS class_id,
       c.class_code,
@@ -658,7 +660,7 @@ const getLearningActivityExportData = async () => {
       sub.name AS subject_name,
       a.id AS assignment_id,
       a.title AS assignment_title,
-      a.due_at AS assignment_deadline,
+      a.deadline AS assignment_deadline,
       a.max_score AS assignment_max_score,
       a.weight AS assignment_weight,
       s.id AS submission_id,
@@ -670,8 +672,8 @@ const getLearningActivityExportData = async () => {
       g.score,
       g.max_score,
       g.feedback,
-      g.rubric_Result AS rubrics,
-      grader.full_name AS grader_name,
+      g.rubrics,
+      COALESCE(grader_up.full_name, grader.username, grader.email) AS grader_name,
       g.graded_at,
       CASE
         WHEN g.id IS NOT NULL THEN 'Đã chấm'
@@ -679,6 +681,7 @@ const getLearningActivityExportData = async () => {
       END AS grading_status
     FROM submissions s
     JOIN users u ON s.student_id = u.id
+    LEFT JOIN user_profiles up ON up.user_id = u.id
     JOIN assignments a ON s.assignment_id = a.id
     JOIN classes c ON a.class_id = c.id
     JOIN subjects sub ON c.subject_id = sub.id
@@ -686,8 +689,9 @@ const getLearningActivityExportData = async () => {
     LEFT JOIN submission_versions sv ON sv.submission_id = s.id
     LEFT JOIN grades g ON g.submission_id = s.id
     LEFT JOIN users grader ON g.graded_by = grader.id
+    LEFT JOIN user_profiles grader_up ON grader_up.user_id = grader.id
     GROUP BY
-      u.id, c.id, sem.id, sub.id, a.id, s.id, g.id, grader.id
+      u.id, up.id, c.id, sem.id, sub.id, a.id, s.id, g.id, grader.id, grader_up.id
     ORDER BY COALESCE(s.last_submitted_at, s.submitted_at, s.created_at) DESC NULLS LAST;
   `;
   const { rows } = await pool.query(query);
@@ -704,8 +708,8 @@ const getAiTransparencyExportData = async () => {
       SELECT
         s.id AS submission_id,
         u.email,
-        u.full_name,
-        u.student_code,
+        COALESCE(up.full_name, u.username, u.email) AS full_name,
+        up.student_code,
         c.class_code,
         sub.code AS subject_code,
         sub.name AS subject_name,
@@ -726,6 +730,7 @@ const getAiTransparencyExportData = async () => {
       FROM ai_evaluations ae
       JOIN submissions s ON ae.submission_id = s.id
       JOIN users u ON s.student_id = u.id
+      LEFT JOIN user_profiles up ON up.user_id = u.id
       JOIN assignments a ON s.assignment_id = a.id
       JOIN classes c ON a.class_id = c.id
       JOIN subjects sub ON c.subject_id = sub.id
@@ -735,8 +740,8 @@ const getAiTransparencyExportData = async () => {
       SELECT
         s.id AS submission_id,
         u.email,
-        u.full_name,
-        u.student_code,
+        COALESCE(up.full_name, u.username, u.email) AS full_name,
+        up.student_code,
         c.class_code,
         sub.code AS subject_code,
         sub.name AS subject_name,
@@ -747,6 +752,7 @@ const getAiTransparencyExportData = async () => {
       FROM submission_versions sv
       JOIN submissions s ON sv.submission_id = s.id
       JOIN users u ON s.student_id = u.id
+      LEFT JOIN user_profiles up ON up.user_id = u.id
       JOIN assignments a ON s.assignment_id = a.id
       JOIN classes c ON a.class_id = c.id
       JOIN subjects sub ON c.subject_id = sub.id
