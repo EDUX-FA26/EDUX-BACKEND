@@ -141,6 +141,18 @@ const GradingRepository = {
     total_score = null,
     overall_verdict = ''
   }) {
+    // Chuẩn hóa an toàn risk_level theo check constraint DB: CHECK (risk_level IN ('low', 'medium', 'high'))
+    const cleanRisk = String(risk_level || 'low').trim().toLowerCase();
+    const safeRisk = (cleanRisk === 'high' || cleanRisk === 'high_risk' || cleanRisk === 'danger' || cleanRisk === 'critical')
+      ? 'high'
+      : ((cleanRisk === 'medium' || cleanRisk === 'medium_risk' || cleanRisk === 'med' || cleanRisk === 'moderate') ? 'medium' : 'low');
+
+    // Chuẩn hóa pattern theo check constraint DB: CHECK (pattern IN ('critical_engagement', 'collaborative_usage', 'passive_usage', 'high_dependency'))
+    const allowedPatterns = ['critical_engagement', 'collaborative_usage', 'passive_usage', 'high_dependency'];
+    const safePattern = allowedPatterns.includes(String(pattern).toLowerCase()) ? String(pattern).toLowerCase() : 'collaborative_usage';
+
+    const safeScore = Math.max(0, Math.min(100, Number(transparency_score) || 0));
+
     const query = `
       INSERT INTO ai_evaluations
         (submission_id, submission_version_id, assignment_id, student_id, class_id,
@@ -167,9 +179,9 @@ const GradingRepository = {
       assignment_id,
       student_id,
       class_id,
-      pattern,
-      risk_level,
-      transparency_score,
+      safePattern,
+      safeRisk,
+      safeScore,
       summary,
       evaluation_data ? JSON.stringify(evaluation_data) : null,
       rubric_scores ? JSON.stringify(rubric_scores) : null,
