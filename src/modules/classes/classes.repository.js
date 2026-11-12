@@ -159,10 +159,10 @@ const ClassesRepository = {
     const query = `
       SELECT c.*, s.name as subject_name, s.code as subject_code, sem.name as semester_name, u.full_name as lecturer_name 
       FROM classes c 
-      JOIN subjects s ON c.subject_id = s.id 
-      JOIN semesters sem ON c.semester_id = sem.id 
-      JOIN user_profiles u ON c.lecturer_id = u.user_id
-      WHERE c.id = $1
+      LEFT JOIN subjects s ON c.subject_id = s.id 
+      LEFT JOIN semesters sem ON c.semester_id = sem.id 
+      LEFT JOIN user_profiles u ON c.lecturer_id = u.user_id
+      WHERE c.id = $1::uuid
     `;
     const { rows } = await pool.query(query, [id]);
     return rows[0];

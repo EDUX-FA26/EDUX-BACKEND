@@ -22,7 +22,7 @@ const ClassesService = {
     // Admin: allowed
     // Lecturer: must be their class
     // Student: must be in class_members
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
+    if (user.role === 'lecturer' && String(classData.lecturer_id).toLowerCase() !== String(user.id).toLowerCase()) {
       throw new Error('FORBIDDEN');
     }
     if (user.role === 'student') {
@@ -130,7 +130,7 @@ const ClassesService = {
     const classData = await ClassesRepository.findById(classId);
     if (!classData) throw new Error('CLASS_NOT_FOUND');
 
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
+    if (user.role === 'lecturer' && String(classData.lecturer_id).toLowerCase() !== String(user.id).toLowerCase()) {
       throw new Error('FORBIDDEN');
     }
 
@@ -143,7 +143,7 @@ const ClassesService = {
     const classData = await ClassesRepository.findById(classId);
     if (!classData) throw new Error('CLASS_NOT_FOUND');
 
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
+    if (user.role === 'lecturer' && String(classData.lecturer_id).toLowerCase() !== String(user.id).toLowerCase()) {
       throw new Error('FORBIDDEN');
     }
 
@@ -204,7 +204,7 @@ const ClassesService = {
     const classData = await ClassesRepository.findById(classId);
     if (!classData) throw new Error('CLASS_NOT_FOUND');
 
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
+    if (user.role === 'lecturer' && String(classData.lecturer_id).toLowerCase() !== String(user.id).toLowerCase()) {
       throw new Error('FORBIDDEN');
     }
 

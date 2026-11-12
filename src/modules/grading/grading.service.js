@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 const GradingRepository = require('./grading.repository');
-const { evaluateRubricWithGemini } = require('../../config/gemini.config');
+const { evaluateRubricWithGemini, generatePedagogicalFallbackResult } = require('../../config/gemini.config');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -177,6 +177,15 @@ const GradingService = {
     // 7. Cập nhật submission status → 'graded'
     await GradingRepository.markSubmissionGraded(submissionId);
 
+    // 8. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
+    try {
+      const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
+      ClassAiAdvisorService.generateAndSaveAdvisory(submission.class_id, {
+        id: submission.assignment_id,
+        title: submission.assignment_title || 'Bài tập'
+      }).catch(e => console.warn('[createGrade] Background advisor snapshot generation failed:', e.message));
+    } catch (e) {}
+
     return grade;
   },
 
@@ -205,6 +214,15 @@ const GradingService = {
     if (grade.submission_id) {
       await GradingRepository.markSubmissionGraded(grade.submission_id);
     }
+
+    // Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
+    try {
+      const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
+      ClassAiAdvisorService.generateAndSaveAdvisory(grade.class_id, {
+        id: grade.assignment_id,
+        title: grade.assignment_title || 'Bài tập'
+      }).catch(e => console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message));
+    } catch (e) {}
 
     return updated;
   },
@@ -332,6 +350,13 @@ const GradingService = {
           const cachedData = typeof existingEval.evaluation_data === 'string'
             ? JSON.parse(existingEval.evaluation_data)
             : existingEval.evaluation_data;
+
+          if (cachedData && cachedData.audit_integrity) {
+            const rLevel = normalizeRiskLevel(cachedData.audit_integrity.risk_level || cachedData.audit_integrity.riskLevel || existingEval.risk_level);
+            cachedData.audit_integrity.riskLevel = rLevel;
+            cachedData.audit_integrity.risk_level = rLevel === 'high' ? 'HIGH_RISK' : (rLevel === 'medium' ? 'MEDIUM_RISK' : 'LOW_RISK');
+          }
+
           console.log(`[ART-AI] Returning locked evaluation snapshot from DB for submission ${submissionId}`);
           return cachedData;
         }
@@ -528,34 +553,46 @@ const GradingService = {
     }
 
     // 7. Gọi hàm evaluateRubricWithGemini thẩm định đối soát chéo thực tế qua Gemini
-    const result = await evaluateRubricWithGemini({
-      assignmentInfo,
-      sourceCode,
-      gitHistory: gitHistoryStr,
-      aiAuditSummary,
-      oralExamLogs,
-    });
+    let result;
+    try {
+      result = await evaluateRubricWithGemini({
+        assignmentInfo,
+        sourceCode,
+        gitHistory: gitHistoryStr,
+        aiAuditSummary,
+        oralExamLogs,
+      });
+    } catch (evalErr) {
+      console.warn(`[ART-AI] evaluateRubricWithGemini thất bại (${evalErr.status || evalErr.message}). Tự động kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng...`);
+      result = generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary });
+    }
 
     // 8. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload
     try {
       if (auditData.latestVersion && auditData.submission) {
+        const safeRiskLevel = normalizeRiskLevel(
+          result?.audit_integrity?.riskLevel || result?.audit_integrity?.risk_level || 'low'
+        );
+        const rawScore = Number(result?.audit_integrity?.match_percentage);
+        const safeTransparencyScore = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 95.0;
+
         await GradingRepository.saveAiEvaluation({
           submission_id: submissionId,
           submission_version_id: auditData.latestVersion.id,
           assignment_id: auditData.submission.assignment_id,
           student_id: auditData.submission.student_id,
           class_id: auditData.submission.class_id,
-          pattern: 'collaborative_usage',
-          risk_level: result?.audit_integrity?.riskLevel || 'low',
-          transparency_score: 95.0,
-          summary: result?.overall_verdict || '',
+          pattern: normalizePattern(result?.pattern || 'collaborative_usage'),
+          risk_level: safeRiskLevel,
+          transparency_score: safeTransparencyScore,
+          summary: result?.overall_verdict || result?.ai_verdict || '',
           evaluation_data: result,
           rubric_scores: result?.rubric_scores || null,
           viva_questions: result?.viva_questions || [],
           total_score: result?.total_score || null,
           overall_verdict: result?.overall_verdict || result?.ai_verdict || ''
         });
-        console.log(`[ART-AI] Saved locked evaluation snapshot to DB for submission ${submissionId}`);
+        console.log(`[ART-AI] Saved locked evaluation snapshot to DB for submission ${submissionId} (risk_level: "${safeRiskLevel}")`);
       }
     } catch (saveErr) {
       console.warn('[ART-AI] Failed to save evaluation snapshot to DB:', saveErr.message);
@@ -627,6 +664,34 @@ function _buildCsv(gradebook) {
     .join('\r\n');
 
   return { csv: csvLines, classCode: gradebook.classCode };
+}
+
+/**
+ * Chuẩn hóa giá trị risk_level để khớp chính xác check constraint của PostgreSQL:
+ * CHECK (risk_level IN ('low', 'medium', 'high'))
+ */
+function normalizeRiskLevel(rawRisk) {
+  if (!rawRisk || typeof rawRisk !== 'string') return 'low';
+  const clean = rawRisk.trim().toLowerCase();
+  if (clean === 'high' || clean === 'high_risk' || clean === 'danger' || clean === 'critical') {
+    return 'high';
+  }
+  if (clean === 'medium' || clean === 'medium_risk' || clean === 'med' || clean === 'moderate') {
+    return 'medium';
+  }
+  return 'low';
+}
+
+/**
+ * Chuẩn hóa pattern khớp check constraint của PostgreSQL:
+ * CHECK (pattern IN ('critical_engagement', 'collaborative_usage', 'passive_usage', 'high_dependency'))
+ */
+function normalizePattern(rawPattern) {
+  const allowed = ['critical_engagement', 'collaborative_usage', 'passive_usage', 'high_dependency'];
+  if (rawPattern && allowed.includes(rawPattern.trim().toLowerCase())) {
+    return rawPattern.trim().toLowerCase();
+  }
+  return 'collaborative_usage';
 }
 
 module.exports = GradingService;
