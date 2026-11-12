@@ -68,6 +68,8 @@ app.use("/api/materials/classes", materialClassesRouter);
 
 // B. Assignments & Assignment Materials
 app.use("/api/assignments", assignmentsRoutes);
+app.use("/api/lecturer/assignments", assignmentsRoutes);
+app.use("/api/student/assignments", assignmentsRoutes);
 // B. Assignment Materials
 app.use("/api/assignments/:assignmentId/materials", assignmentMaterialsRouter);
 
