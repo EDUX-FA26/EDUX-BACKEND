@@ -1,7 +1,9 @@
 const ExcelJS = require('exceljs');
 const GradingRepository = require('./grading.repository');
-const { evaluateRubricWithGemini, generatePedagogicalFallbackResult } = require('../../config/gemini.config');
+const { evaluateRubricWithGemini, generatePedagogicalFallbackResult, applyScoringGuardrails } = require('../../config/gemini.config');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
+const AssignmentRepository = require('../assignments/assignment.repository');
+const { DEFAULT_RUBRIC_CONFIGS } = require('../assignments/assignment.constants');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -553,19 +555,40 @@ const GradingService = {
     }
 
     // 7. Lấy cấu hình Rubric của bài tập (hoặc mặc định) để nạp động vào AI Grading Engine
-    let rubricConfigs = null;
+    let rawConfigs = null;
     try {
-      const AssignmentRepository = require('../assignments/assignment.repository');
-      const { DEFAULT_RUBRIC_CONFIGS } = require('../assignments/assignment.constants');
       if (auditData?.submission?.assignment_id) {
-        rubricConfigs = await AssignmentRepository.getRubricConfigs(auditData.submission.assignment_id);
+        rawConfigs = await AssignmentRepository.getRubricConfigs(auditData.submission.assignment_id);
       }
-      if (!rubricConfigs || rubricConfigs.length === 0) {
-        rubricConfigs = DEFAULT_RUBRIC_CONFIGS;
+      if (!rawConfigs || rawConfigs.length === 0) {
+        rawConfigs = DEFAULT_RUBRIC_CONFIGS;
       }
     } catch (rubricErr) {
-      console.warn('[ART-AI] Failed to fetch assignment rubric configs, using default:', rubricErr.message);
+      console.warn('[ART-AI] Failed to fetch assignment rubric configs, using default:', rubricErr?.message || rubricErr);
+      rawConfigs = DEFAULT_RUBRIC_CONFIGS;
     }
+
+    // BƯỚC 1: LỌC DANH SÁCH TIÊU CHÍ ACTIVE (is_enabled = true và weight_percent > 0)
+    const activeRubrics = (rawConfigs || [])
+      .filter((c) => c.is_enabled === true && Number(c.weight_percent) > 0)
+      .map((c, idx) => ({
+        index: idx + 1,
+        criterion_key: c.criterion_key,
+        criteria_name: c.criterion_name,
+        weight_percent: Number(c.weight_percent),
+        max_score: Number(((Number(c.weight_percent) / 100) * 10).toFixed(2)),
+      }));
+
+    // Đảm bảo luôn có ít nhất 1 rubric active
+    const finalActiveRubrics = activeRubrics.length > 0
+      ? activeRubrics
+      : [
+          { index: 1, criterion_key: 'PROBLEM_ABSTRACTION', criteria_name: 'Problem Abstraction & Solution Design', weight_percent: 20, max_score: 2.0 },
+          { index: 2, criterion_key: 'IMPLEMENTATION_QUALITY', criteria_name: 'Implementation & Code Quality', weight_percent: 30, max_score: 3.0 },
+          { index: 3, criterion_key: 'CRITICAL_EVALUATION', criteria_name: 'Critical Evaluation & Verification', weight_percent: 25, max_score: 2.5 },
+          { index: 4, criterion_key: 'AI_INTERACTION', criteria_name: 'AI Interaction & Prompt Engineering', weight_percent: 15, max_score: 1.5 },
+          { index: 5, criterion_key: 'METACOGNITIVE_REFLECTION', criteria_name: 'Metacognitive Reflection & Transparency', weight_percent: 10, max_score: 1.0 },
+        ];
 
     // 8. Gọi hàm evaluateRubricWithGemini thẩm định đối soát chéo thực tế qua Gemini
     let result;
@@ -576,18 +599,28 @@ const GradingService = {
         gitHistory: gitHistoryStr,
         aiAuditSummary,
         oralExamLogs,
-        rubricConfigs,
+        activeRubrics: finalActiveRubrics,
+        rubricConfigs: finalActiveRubrics,
       });
     } catch (evalErr) {
       console.warn(`[ART-AI] evaluateRubricWithGemini thất bại (${evalErr.status || evalErr.message}). Tự động kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng...`);
-      result = generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, rubricConfigs });
+      result = generatePedagogicalFallbackResult({
+        assignmentInfo,
+        sourceCode,
+        aiAuditSummary,
+        activeRubrics: finalActiveRubrics,
+        rubricConfigs: finalActiveRubrics,
+      });
     }
 
-    // 8. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload
+    // BƯỚC 3: CƠ CHẾ PHÒNG VỆ HẬU KỲ (BACKEND SCORING GUARDRAILS)
+    result = applyScoringGuardrails(result, finalActiveRubrics);
+
+    // 9. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload
     try {
       if (auditData.latestVersion && auditData.submission) {
         const safeRiskLevel = normalizeRiskLevel(
-          result?.audit_integrity?.riskLevel || result?.audit_integrity?.risk_level || 'low'
+          result?.risk_level || result?.audit_integrity?.riskLevel || result?.audit_integrity?.risk_level || 'low'
         );
         const rawScore = Number(result?.audit_integrity?.match_percentage);
         const safeTransparencyScore = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 95.0;
@@ -605,7 +638,7 @@ const GradingService = {
           evaluation_data: result,
           rubric_scores: result?.rubric_scores || null,
           viva_questions: result?.viva_questions || [],
-          total_score: result?.total_score || null,
+          total_score: result?.total_score_10 ?? result?.total_score ?? null,
           overall_verdict: result?.overall_verdict || result?.ai_verdict || ''
         });
         console.log(`[ART-AI] Saved locked evaluation snapshot to DB for submission ${submissionId} (risk_level: "${safeRiskLevel}")`);
