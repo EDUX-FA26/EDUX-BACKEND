@@ -11,7 +11,8 @@ const parseBoolean = z.preprocess((val) => {
 
 const createAssignmentSchema = z.object({
   class_id: z.string().uuid('Invalid class_id'),
-  session_id: z.string().uuid('Invalid session_id').optional().nullable(),
+  slot_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().nullable(),
+  session_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().nullable(),
   title: z.string().min(1, 'Title is required').max(255, 'Title too long'),
   description: z.string().optional(),
   instructions: z.string().optional(),
@@ -38,7 +39,8 @@ const updateAssignmentSchema = z.object({
   max_ai_interactions: z.coerce.number().min(0).optional(),
   allow_late_submission: parseBoolean.optional(),
   publish_status: z.enum(['draft', 'published', 'closed']).optional(),
-  session_id: z.string().uuid('Invalid session_id').optional().nullable(),
+  slot_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().nullable(),
+  session_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().nullable(),
   rubric_configs: z.any().optional(),
 });
 
@@ -52,6 +54,8 @@ const queryAssignmentsSchema = z.object({
   page: z.coerce.number().min(1).default(1),
   limit: z.coerce.number().min(1).max(100).default(10),
   class_id: z.string().uuid('Invalid class_id').optional(),
+  slot_id: z.string().uuid('Invalid slot_id').optional(),
+  session_id: z.string().uuid('Invalid session_id').optional(),
   publish_status: z.enum(['draft', 'published', 'closed']).optional(),
   search: z.string().optional(),
 });

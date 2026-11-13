@@ -52,10 +52,19 @@ app.use(express.urlencoded({ extended: true }));
 // Health Check
 // =========================
 
+const { authenticate } = require("./middlewares/auth.middleware");
+const classesController = require("./modules/classes/classes.controller");
+const slotsRouter = express.Router();
+slotsRouter.use(authenticate);
+slotsRouter.get("/:slotId", classesController.getSlotById);
+
 // API routes
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/classes", classesRoutes);
+app.use("/api/lecturer/classes", classesRoutes);
+app.use("/api/student/classes", classesRoutes);
+app.use("/api/slots", slotsRouter);
 app.use("/api/notifications", notificationsRoutes);
 app.use("/api/dashboards", dashboardRoutes);
 app.use("/api/flashcards", flashcardsRoutes);

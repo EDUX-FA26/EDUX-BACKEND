@@ -54,10 +54,21 @@ router.post(
   classAiAdvisorController.refreshAiAdvisor
 );
 
+const AssignmentService = require('../assignments/assignment.service');
+
 // Classes CRUD
 router.get('/', validate(getClassesQuery, 'query'), classesController.getClasses);
 router.get('/:id', classesController.getClassById);
 router.get('/:id/slots', classesController.getSlots);
+router.get('/:id/slots/:slotId', classesController.getSlotById);
+router.get('/:id/assignments', async (req, res, next) => {
+  try {
+    const result = await AssignmentService.getAssignments({ ...req.query, class_id: req.params.id, limit: Number(req.query.limit) || 100 }, req.user);
+    res.json({ success: true, data: result.data || result });
+  } catch (error) {
+    next(error);
+  }
+});
 router.post('/', authorize('admin'), validate(createClass), classesController.createClass);
 router.patch('/:id', authorize('admin'), validate(updateClass), classesController.updateClass);
 router.delete('/:id', authorize('admin'), classesController.deleteClass);

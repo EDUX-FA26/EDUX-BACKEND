@@ -48,11 +48,21 @@ const AssignmentController = {
 
   async deleteAssignment(req, res, next) {
     try {
-      const { id } = req.params;
-      await AssignmentService.deleteAssignment(id, req.user);
+      const id = req.params.assignmentId || req.params.id;
+      const force = req.query.force === 'true' || req.query.force === true;
+      await AssignmentService.deleteAssignment(id, req.user, { force });
       res.status(200).json({ success: true, message: 'Assignment deleted successfully' });
     } catch (error) {
+      if (error.code === 'SUBMISSIONS_EXIST') {
+        return res.status(400).json({
+          success: false,
+          code: 'SUBMISSIONS_EXIST',
+          message: error.message,
+          submission_count: error.submissionCount
+        });
+      }
       if (error.message === 'ASSIGNMENT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Assignment not found' });
+      if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }

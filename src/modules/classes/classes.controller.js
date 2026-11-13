@@ -63,6 +63,16 @@ const ClassesController = {
     }
   },
 
+  async getSlotById(req, res, next) {
+    try {
+      const slotId = req.params.slotId || req.params.id;
+      const slot = await ClassesService.getSlotById(slotId, req.user);
+      res.json({ success: true, data: slot });
+    } catch (error) {
+      next(error);
+    }
+  },
+
 
   async createClass(req, res, next) {
     try {
