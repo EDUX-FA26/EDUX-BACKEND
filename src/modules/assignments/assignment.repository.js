@@ -260,6 +260,55 @@ const AssignmentRepository = {
   },
 
   /**
+   * Xóa assignment và các quan hệ phụ thuộc an toàn trong Transaction
+   */
+  async deleteAssignmentWithRelations(id, { force = false } = {}) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Kiểm tra / lấy danh sách bài nộp
+      const { rows: subs } = await client.query('SELECT id FROM submissions WHERE assignment_id = $1', [id]);
+      const subIds = subs.map(s => s.id);
+
+      if (subIds.length > 0) {
+        if (!force) {
+          const err = new Error(`Bài tập đã có ${subIds.length} bài nộp của sinh viên.`);
+          err.code = 'SUBMISSIONS_EXIST';
+          err.submissionCount = subIds.length;
+          throw err;
+        }
+
+        // Xóa các bảng liên quan đến submissions
+        await client.query('DELETE FROM grades WHERE submission_id = ANY($1)', [subIds]);
+        await client.query('DELETE FROM submission_materials WHERE submission_id = ANY($1)', [subIds]);
+        await client.query('DELETE FROM submission_versions WHERE submission_id = ANY($1)', [subIds]);
+        await client.query('DELETE FROM ai_evaluations WHERE submission_id = ANY($1)', [subIds]);
+        await client.query('DELETE FROM ai_interactions WHERE submission_id = ANY($1)', [subIds]);
+        await client.query('DELETE FROM submissions WHERE assignment_id = $1', [id]);
+      }
+
+      // 2. Xóa các quan hệ trực tiếp của assignment
+      await client.query('DELETE FROM ai_evaluations WHERE assignment_id = $1', [id]);
+      await client.query('DELETE FROM ai_interactions WHERE assignment_id = $1', [id]);
+      await client.query('DELETE FROM class_ai_advisories WHERE assignment_id = $1', [id]);
+      await client.query('DELETE FROM assignment_rubric_configs WHERE assignment_id = $1', [id]);
+      await client.query('DELETE FROM assignment_materials WHERE assignment_id = $1', [id]);
+
+      // 3. Xóa chính assignment
+      const { rows } = await client.query('DELETE FROM assignments WHERE id = $1 RETURNING *', [id]);
+
+      await client.query('COMMIT');
+      return rows[0];
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  /**
    * Lấy danh sách cấu hình Rubric theo assignment_id
    */
   async getRubricConfigs(assignmentId, client = pool) {

@@ -234,7 +234,7 @@ const AssignmentService = {
   /**
    * Xóa bài tập
    */
-  async deleteAssignment(id, user) {
+  async deleteAssignment(id, user, options = {}) {
     const assignment = await AssignmentRepository.findById(id);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
@@ -243,16 +243,30 @@ const AssignmentService = {
     // Get all materials to delete from S3
     const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, { limit: 1000 });
     
-    // DB delete
-    await AssignmentRepository.delete(id);
+    // Kiểm tra số lượng bài nộp (Submissions Guard)
+    const { rows: subRows } = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM submissions WHERE assignment_id = $1',
+      [id]
+    );
+    const submissionCount = subRows[0]?.count || 0;
+
+    if (submissionCount > 0 && !options.force) {
+      const err = new Error(`Bài tập đã có ${submissionCount} bài nộp của sinh viên. Vui lòng xác nhận để xóa toàn bộ.`);
+      err.code = 'SUBMISSIONS_EXIST';
+      err.submissionCount = submissionCount;
+      throw err;
+    }
+
+    // Xóa an toàn trong DB transaction
+    const deleted = await AssignmentRepository.deleteAssignmentWithRelations(id, { force: options.force });
 
     // Delete files from S3 after DB delete succeeds
-    if (materials.length > 0) {
-      const keys = materials.map(m => m.file_key);
+    if (materials && materials.length > 0) {
+      const keys = materials.map(m => m.file_key).filter(Boolean);
       await this.cleanupS3Files(keys);
     }
 
-    return assignment;
+    return deleted || assignment;
   },
 
   /**
