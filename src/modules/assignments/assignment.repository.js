@@ -6,20 +6,24 @@ const AssignmentRepository = {
    * Cho phép truyền client (để dùng trong transaction) hoặc dùng default pool
    */
   async create(data, client = pool) {
+    const rawSlotId = data.slot_id !== undefined ? data.slot_id : data.session_id;
+    const resolvedSlotId = (rawSlotId && typeof rawSlotId === 'string' && rawSlotId.trim() !== '') ? rawSlotId.trim() : (rawSlotId || null);
+
     const query = `
       INSERT INTO assignments (
-        id, uuid, class_id, session_id, title, description, instructions, deadline,
+        id, uuid, class_id, slot_id, session_id, title, description, instructions, deadline,
         max_score, weight, ai_declaration_required, min_ai_interactions,
         max_ai_interactions, allow_late_submission, publish_status, published_at, created_by
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
       ) RETURNING *;
     `;
     const values = [
       data.id,
       data.uuid,
       data.class_id,
-      data.session_id,
+      resolvedSlotId,
+      resolvedSlotId,
       data.title,
       data.description || '',
       data.instructions || '',
@@ -46,17 +50,26 @@ const AssignmentRepository = {
     const allowedFields = [
       'title', 'description', 'instructions', 'deadline', 'max_score', 'weight',
       'ai_declaration_required', 'min_ai_interactions', 'max_ai_interactions',
-      'allow_late_submission', 'publish_status', 'session_id'
+      'allow_late_submission', 'publish_status', 'session_id', 'slot_id'
     ];
     
+    // Đồng bộ slot_id và session_id nếu 1 trong 2 được truyền vào
+    const normalizedData = { ...data };
+    if (normalizedData.slot_id !== undefined || normalizedData.session_id !== undefined) {
+      const rawSlot = normalizedData.slot_id !== undefined ? normalizedData.slot_id : normalizedData.session_id;
+      const resolved = (rawSlot && typeof rawSlot === 'string' && rawSlot.trim() !== '') ? rawSlot.trim() : (rawSlot || null);
+      normalizedData.slot_id = resolved;
+      normalizedData.session_id = resolved;
+    }
+
     const fields = [];
     const values = [];
     let idx = 1;
 
     for (const key of allowedFields) {
-      if (data[key] !== undefined) {
+      if (normalizedData[key] !== undefined) {
         fields.push(`${key} = $${idx}`);
-        values.push(data[key]);
+        values.push(normalizedData[key]);
         idx++;
       }
     }
@@ -111,6 +124,13 @@ const AssignmentRepository = {
     const query = `
       SELECT 
         a.*, 
+        COALESCE(a.slot_id, a.session_id) as slot_id,
+        COALESCE(a.slot_id, a.session_id) as session_id,
+        ses.session_no as slot_number,
+        ses.session_no,
+        ses.title as slot_title,
+        ses.learning_date as slot_date,
+        ses.slot_time,
         c.class_code, 
         c.lecturer_id,
         c.semester_id,
@@ -122,6 +142,7 @@ const AssignmentRepository = {
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
       JOIN subjects s ON c.subject_id = s.id
+      LEFT JOIN sessions ses ON ses.id = COALESCE(a.slot_id, a.session_id)
       LEFT JOIN semesters sem ON c.semester_id = sem.id
       LEFT JOIN user_profiles u ON a.created_by = u.user_id
       WHERE a.id = $1
@@ -131,9 +152,9 @@ const AssignmentRepository = {
   },
 
   /**
-   * Lấy danh sách phân trang (có filter theo class, role, trạng thái)
+   * Lấy danh sách phân trang (có filter theo class, role, trạng thái, slot_id)
    */
-  async findMany({ page = 1, limit = 10, search, class_id, publish_status }, user) {
+  async findMany({ page = 1, limit = 10, search, class_id, slot_id, session_id, publish_status }, user) {
     const offset = (page - 1) * limit;
     let whereClauses = [];
     let values = [];
@@ -143,6 +164,14 @@ const AssignmentRepository = {
     if (class_id) {
       whereClauses.push(`a.class_id = $${idx++}`);
       values.push(class_id);
+    }
+
+    // Filter by slot_id or session_id if provided
+    const targetSlotId = slot_id || session_id;
+    if (targetSlotId) {
+      whereClauses.push(`(a.slot_id = $${idx} OR a.session_id = $${idx})`);
+      values.push(targetSlotId);
+      idx++;
     }
 
     // Filter by publish_status if provided
@@ -195,6 +224,13 @@ const AssignmentRepository = {
     const query = `
       SELECT 
         a.*,
+        COALESCE(a.slot_id, a.session_id) as slot_id,
+        COALESCE(a.slot_id, a.session_id) as session_id,
+        ses.session_no as slot_number,
+        ses.session_no,
+        ses.title as slot_title,
+        ses.learning_date as slot_date,
+        ses.slot_time,
         c.class_code,
         c.semester_id,
         s.id as subject_id,
@@ -203,6 +239,7 @@ const AssignmentRepository = {
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
       JOIN subjects s ON c.subject_id = s.id
+      LEFT JOIN sessions ses ON ses.id = COALESCE(a.slot_id, a.session_id)
       ${whereString}
       ORDER BY a.created_at DESC
       LIMIT $${idx++} OFFSET $${idx++}

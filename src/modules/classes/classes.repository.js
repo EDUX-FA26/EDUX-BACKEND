@@ -170,18 +170,73 @@ const ClassesRepository = {
   async getSlots(classId) {
     const query = `
       SELECT 
-        id, 
-        session_no as slot_number, 
-        learning_date as date, 
-        COALESCE(slot_time, '09:30-11:45') as time, 
-        title, 
-        note as content
-      FROM sessions 
-      WHERE class_id = $1 
-      ORDER BY session_no ASC
+        s.id, 
+        s.session_no as slot_number, 
+        s.learning_date as date, 
+        COALESCE(s.slot_time, '09:30-11:45') as time, 
+        s.title, 
+        s.note as content,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'id', a.id,
+                'title', a.title,
+                'description', a.description,
+                'deadline', a.deadline,
+                'max_score', a.max_score,
+                'weight', a.weight,
+                'publish_status', a.publish_status,
+                'slot_id', COALESCE(a.slot_id, a.session_id)
+              ) ORDER BY a.created_at ASC
+            )
+            FROM assignments a
+            WHERE (a.slot_id = s.id OR a.session_id = s.id)
+          ),
+          '[]'::json
+        ) as assignments
+      FROM sessions s
+      WHERE s.class_id = $1 
+      ORDER BY s.session_no ASC
     `;
     const { rows } = await pool.query(query, [classId]);
     return rows;
+  },
+
+  async getSlotById(slotId) {
+    const query = `
+      SELECT 
+        s.id, 
+        s.class_id,
+        s.session_no as slot_number, 
+        s.learning_date as date, 
+        COALESCE(s.slot_time, '09:30-11:45') as time, 
+        s.title, 
+        s.note as content,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'id', a.id,
+                'title', a.title,
+                'description', a.description,
+                'deadline', a.deadline,
+                'max_score', a.max_score,
+                'weight', a.weight,
+                'publish_status', a.publish_status,
+                'slot_id', COALESCE(a.slot_id, a.session_id)
+              ) ORDER BY a.created_at ASC
+            )
+            FROM assignments a
+            WHERE (a.slot_id = s.id OR a.session_id = s.id)
+          ),
+          '[]'::json
+        ) as assignments
+      FROM sessions s
+      WHERE s.id = $1 
+    `;
+    const { rows } = await pool.query(query, [slotId]);
+    return rows[0] || null;
   },
 
 

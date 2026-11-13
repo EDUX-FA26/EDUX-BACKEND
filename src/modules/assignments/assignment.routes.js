@@ -64,6 +64,14 @@ router.patch(
   AssignmentController.updateAssignment
 );
 
+router.put(
+  '/:id', 
+  authorize('admin', 'lecturer'), 
+  upload.array('materials'),
+  validate(updateAssignmentSchema), 
+  AssignmentController.updateAssignment
+);
+
 router.patch(
   '/:id/publish-status', 
   authorize('admin', 'lecturer'), 

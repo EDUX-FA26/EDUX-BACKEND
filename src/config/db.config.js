@@ -107,6 +107,27 @@ async function connectDB() {
       console.warn("⚠️ Assignment Rubric Configs table migration notice:", migErr.message);
     }
 
+    // Auto-check và bổ sung slot_id vào bảng assignments nếu chưa có
+    try {
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'assignments' AND column_name = 'slot_id'
+          ) THEN
+            ALTER TABLE assignments ADD COLUMN slot_id UUID REFERENCES sessions(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS idx_assignments_slot_id ON assignments(slot_id);
+          END IF;
+
+          UPDATE assignments SET slot_id = session_id WHERE slot_id IS NULL AND session_id IS NOT NULL;
+          UPDATE assignments SET session_id = slot_id WHERE session_id IS NULL AND slot_id IS NOT NULL;
+        END $$;
+      `);
+    } catch (migErr) {
+      console.warn("⚠️ Assignments slot_id migration notice:", migErr.message);
+    }
+
     console.log("✅ PostgreSQL connected");
 
     client.release();

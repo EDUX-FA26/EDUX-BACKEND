@@ -41,6 +41,15 @@ const ClassesService = {
     return await ClassesRepository.getSlots(classId);
   },
 
+  async getSlotById(slotId, user) {
+    const slot = await ClassesRepository.getSlotById(slotId);
+    if (!slot) throw new Error('SLOT_NOT_FOUND');
+    if (slot.class_id) {
+      await this.getClassById(slot.class_id, user);
+    }
+    return slot;
+  },
+
 
   async createClass(data) {
     // Could add uniqueness check for class_code + semester_id + subject_id here 
