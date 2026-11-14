@@ -1,18 +1,30 @@
+"use strict";
+
 const express = require("express");
 const router = express.Router();
 const communicationsController = require("./communications.controller");
 const { authenticate } = require("../../middlewares/auth.middleware");
-const { authorize } = require("../../middlewares/role.middleware");
+const { requireSchoolContext } = require("../../middlewares/requireSchoolContext");
+const { authorizeSchoolRoles } = require("../../middlewares/authorizeSchoolRoles");
 
-// Yêu cầu đăng nhập, và ở đây theo yêu cầu của bạn, mình set quyền truy cập cho Admin
-// Hoặc có thể thêm "student" nếu UC đó thực sự trigger từ frontend của student.
-// Ở đây mình cứ thêm cả admin và student để đảm bảo không bị chặn lúc test.
-router.use(authenticate, authorize(["admin", "student"]));
+// ==========================================
+// Multi-Tenant Middleware Chain
+// authenticate -> requireSchoolContext
+// ==========================================
+router.use(authenticate, requireSchoolContext);
 
-// UC 97: Send Assignment Deadline Notification
-router.post("/assignment-deadline", communicationsController.sendAssignmentDeadline);
+// UC 97: Send Assignment Deadline Notification (Student, Lecturer, School Admin)
+router.post(
+  "/assignment-deadline",
+  authorizeSchoolRoles("student", "lecturer", "school_admin"),
+  communicationsController.sendAssignmentDeadline
+);
 
-// UC 98: Send Submission Confirmation Email
-router.post("/submission-confirmation", communicationsController.sendSubmissionConfirmation);
+// UC 98: Send Submission Confirmation Email (Student, Lecturer, School Admin)
+router.post(
+  "/submission-confirmation",
+  authorizeSchoolRoles("student", "lecturer", "school_admin"),
+  communicationsController.sendSubmissionConfirmation
+);
 
 module.exports = router;
