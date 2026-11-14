@@ -3,9 +3,20 @@ const { redis } = require('../../config/redis.config');
 
 class DashboardService {
 
-  async getDashboard(user) {
-    const { id: userId, role } = user;
-    const cacheKey = `dashboard:${userId}`;
+  async getDashboard(tenant) {
+    const userId = tenant?.userId || tenant?.id;
+    const schoolId = tenant?.schoolId;
+    const role = tenant?.role;
+
+    // Nguyên tắc Fail-Closed: Bắt buộc phải có schoolId và userId hợp lệ
+    if (!userId || !schoolId || !role) {
+      const error = new Error('SCHOOL_CONTEXT_REQUIRED');
+      error.status = 400;
+      throw error;
+    }
+
+    // Cache key phân vùng theo Tenant Scope: dashboard:${schoolId}:${userId}:${role}
+    const cacheKey = `dashboard:${schoolId}:${userId}:${role}`;
 
     // 1. Check Redis cache
     try {
@@ -19,19 +30,20 @@ class DashboardService {
       // Ignore cache error, fallback to DB
     }
 
-    // 2. Fetch from database
+    // 2. Fetch from database with Tenant Scope
     let data;
     switch (role) {
       case 'student':
-        data = await this._buildStudentDashboard(userId);
+        data = await this._buildStudentDashboard(userId, schoolId);
         break;
 
       case 'lecturer':
-        data = await this._buildLecturerDashboard(userId);
+        data = await this._buildLecturerDashboard(userId, schoolId);
         break;
 
-      case 'admin':
-        data = await this._buildAdminDashboard(userId);
+      case 'school_admin':
+      case 'admin': // Hỗ trợ vai trò quản trị trường
+        data = await this._buildSchoolAdminDashboard(userId, schoolId);
         break;
 
       default: {
@@ -53,10 +65,19 @@ class DashboardService {
     return data;
   }
 
-  async getDashboardNotifications(userId) {
+  async getDashboardNotifications(tenant) {
+    const userId = tenant?.userId || tenant?.id;
+    const schoolId = tenant?.schoolId;
+
+    if (!userId || !schoolId) {
+      const error = new Error('SCHOOL_CONTEXT_REQUIRED');
+      error.status = 400;
+      throw error;
+    }
+
     const [notifications, unreadCount] = await Promise.all([
-      DashboardRepository.getRecentNotifications(userId),
-      DashboardRepository.getUnreadCount(userId),
+      DashboardRepository.getRecentNotifications(userId, schoolId),
+      DashboardRepository.getUnreadCount(userId, schoolId),
     ]);
 
     return {
@@ -69,10 +90,10 @@ class DashboardService {
   // STUDENT
   // ─────────────────────────────────────────────
 
-  async _buildStudentDashboard(userId) {
+  async _buildStudentDashboard(userId, schoolId) {
     const [statistics, recentAssignments] = await Promise.all([
-      DashboardRepository.getStudentStatistics(userId),
-      DashboardRepository.getStudentRecentAssignments(userId),
+      DashboardRepository.getStudentStatistics(userId, schoolId),
+      DashboardRepository.getStudentRecentAssignments(userId, schoolId),
     ]);
 
     return {
@@ -86,10 +107,10 @@ class DashboardService {
   // LECTURER
   // ─────────────────────────────────────────────
 
-  async _buildLecturerDashboard(userId) {
+  async _buildLecturerDashboard(userId, schoolId) {
     const [statistics, recentSubmissions] = await Promise.all([
-      DashboardRepository.getLecturerStatistics(userId),
-      DashboardRepository.getLecturerRecentSubmissions(userId),
+      DashboardRepository.getLecturerStatistics(userId, schoolId),
+      DashboardRepository.getLecturerRecentSubmissions(userId, schoolId),
     ]);
 
     return {
@@ -100,17 +121,17 @@ class DashboardService {
   }
 
   // ─────────────────────────────────────────────
-  // ADMIN
+  // SCHOOL ADMIN
   // ─────────────────────────────────────────────
 
-  async _buildAdminDashboard(userId) {
+  async _buildSchoolAdminDashboard(userId, schoolId) {
     const [statistics, recentUsers] = await Promise.all([
-      DashboardRepository.getAdminStatistics(),
-      DashboardRepository.getAdminRecentUsers(),
+      DashboardRepository.getAdminStatistics(schoolId),
+      DashboardRepository.getAdminRecentUsers(schoolId),
     ]);
 
     return {
-      role: 'admin',
+      role: 'school_admin',
       statistics,
       recentUsers,
     };
