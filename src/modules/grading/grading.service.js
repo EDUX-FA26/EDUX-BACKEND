@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 const GradingRepository = require('./grading.repository');
-const { evaluateRubricWithGemini, generatePedagogicalFallbackResult, applyScoringGuardrails } = require('../../config/gemini.config');
+const { evaluateRubricWithGemini, generatePedagogicalFallbackResult, applyScoringGuardrails, filterAndRescaleRubricsForNonAi } = require('../../config/gemini.config');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 const AssignmentRepository = require('../assignments/assignment.repository');
 const { DEFAULT_RUBRIC_CONFIGS } = require('../assignments/assignment.constants');
@@ -183,10 +183,14 @@ const GradingService = {
     // 8. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
     try {
       const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
-      ClassAiAdvisorService.generateAndSaveAdvisory(submission.class_id, {
-        id: submission.assignment_id,
-        title: submission.assignment_title || 'Bài tập'
-      }).catch(e => console.warn('[createGrade] Background advisor snapshot generation failed:', e.message));
+      ClassAiAdvisorService.generateAndSaveAdvisory(
+        submission.class_id,
+        {
+          id: submission.assignment_id,
+          title: submission.assignment_title || 'Bài tập'
+        },
+        tenant.schoolId
+      ).catch(e => console.warn('[createGrade] Background advisor snapshot generation failed:', e.message));
     } catch (e) {}
 
     return grade;
@@ -221,10 +225,14 @@ const GradingService = {
     // Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
     try {
       const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
-      ClassAiAdvisorService.generateAndSaveAdvisory(grade.class_id, {
-        id: grade.assignment_id,
-        title: grade.assignment_title || 'Bài tập'
-      }).catch(e => console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message));
+      ClassAiAdvisorService.generateAndSaveAdvisory(
+        grade.class_id,
+        {
+          id: grade.assignment_id,
+          title: grade.assignment_title || 'Bài tập'
+        },
+        tenant.schoolId
+      ).catch(e => console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message));
     } catch (e) {}
 
     return updated;
@@ -467,77 +475,87 @@ const GradingService = {
       gitHistoryStr = 'Không tìm thấy thư mục .git trong bài nộp.';
     }
 
-    // 4. Phân tích ghi chú phiên bản và Khai báo AI của sinh viên qua helper normalizeAuditData (Backward Compatible)
-    const normalizedAudit = normalizeAuditData(
-      auditData.latestVersion?.note ||
-      clientContext.aiAuditData ||
-      clientContext.aiDeclarations
-    );
-    const scopes = normalizedAudit?.scopes || [];
+    // Kiểm tra xem bài tập có yêu cầu khai báo AI Audit Log hay không
+    const isAiRequired =
+      auditData.submission.assignment_ai_declaration_required !== false &&
+      auditData.submission.ai_declaration_required !== false &&
+      clientContext.ai_declaration_required !== false;
 
-    // 5. Chuẩn bị AI Audit Declarations theo mô hình Đa phân rã (Multi-Scope)
+    // 4. Phân tích ghi chú phiên bản và Khai báo AI của sinh viên qua helper normalizeAuditData (Backward Compatible)
     let aiAuditSummary = '';
 
-    if (scopes.length > 0) {
-      aiAuditSummary += `[KIỂM TOÁN KHAI BÁO AI THEO MÔ HÌNH ĐA PHÂN RÃ (MULTI-SCOPE AI AUDIT) - TỔNG CỘNG ${scopes.length} PHẠM VI/MODULE]:\n`;
-      aiAuditSummary += `Sinh viên đã phân rã bài toán thành ${scopes.length} phạm vi kỹ thuật độc lập để tương tác với AI:\n`;
+    if (isAiRequired) {
+      const normalizedAudit = normalizeAuditData(
+        auditData.latestVersion?.note ||
+        clientContext.aiAuditData ||
+        clientContext.aiDeclarations
+      );
+      const scopes = normalizedAudit?.scopes || [];
 
-      const allPrompts = [];
+      // 5. Chuẩn bị AI Audit Declarations theo mô hình Đa phân rã (Multi-Scope)
+      if (scopes.length > 0) {
+        aiAuditSummary += `[KIỂM TOÁN KHAI BÁO AI THEO MÔ HÌNH ĐA PHÂN RÃ (MULTI-SCOPE AI AUDIT) - TỔNG CỘNG ${scopes.length} PHẠM VI/MODULE]:\n`;
+        aiAuditSummary += `Sinh viên đã phân rã bài toán thành ${scopes.length} phạm vi kỹ thuật độc lập để tương tác với AI:\n`;
 
-      scopes.forEach((scope, sIdx) => {
-        const scopeTitle = scope.scope_title || scope.title || `Scope ${sIdx + 1}`;
-        const scopeDesc = scope.scope_description || scope.description || 'Chưa cung cấp mô tả kỹ thuật chi tiết.';
+        const allPrompts = [];
 
-        aiAuditSummary += `\n--- PHẠM VI ${sIdx + 1}: ${scopeTitle} ---\n`;
-        aiAuditSummary += `Mô tả: ${scopeDesc}\n`;
-        aiAuditSummary += `Chi tiết 5 tiêu chí:\n`;
+        scopes.forEach((scope, sIdx) => {
+          const scopeTitle = scope.scope_title || scope.title || `Scope ${sIdx + 1}`;
+          const scopeDesc = scope.scope_description || scope.description || 'Chưa cung cấp mô tả kỹ thuật chi tiết.';
 
-        const decs = scope.declarations || {};
-        const criteriaList = [
-          { key: 'decomposition', name: 'Decomposition (Phân rã bài toán)' },
-          { key: 'pattern_recognition', altKey: 'pattern', name: 'Pattern Recognition (Nhận diện mẫu)' },
-          { key: 'abstraction', name: 'Abstraction (Trừu tượng hóa & Mô hình)' },
-          { key: 'algorithmic_thinking', altKey: 'algorithmic', name: 'Algorithmic Thinking (Tư duy thuật toán)' },
-          { key: 'reflection', name: 'Reflection (Phản tư & Đánh giá giải pháp)' },
-        ];
+          aiAuditSummary += `\n--- PHẠM VI ${sIdx + 1}: ${scopeTitle} ---\n`;
+          aiAuditSummary += `Mô tả: ${scopeDesc}\n`;
+          aiAuditSummary += `Chi tiết 5 tiêu chí:\n`;
 
-        criteriaList.forEach((crit) => {
-          const d = decs[crit.key] || (crit.altKey ? decs[crit.altKey] : null) || {};
-          const promptText = (d.prompt || '').trim();
-          if (promptText) allPrompts.push(promptText);
+          const decs = scope.declarations || {};
+          const criteriaList = [
+            { key: 'decomposition', name: 'Decomposition (Phân rã bài toán)' },
+            { key: 'pattern_recognition', altKey: 'pattern', name: 'Pattern Recognition (Nhận diện mẫu)' },
+            { key: 'abstraction', name: 'Abstraction (Trừu tượng hóa & Mô hình)' },
+            { key: 'algorithmic_thinking', altKey: 'algorithmic', name: 'Algorithmic Thinking (Tư duy thuật toán)' },
+            { key: 'reflection', name: 'Reflection (Phản tư & Đánh giá giải pháp)' },
+          ];
 
-          aiAuditSummary += `  * [${crit.name}]:
-    - Tool & Decision: ${d.tool || d.aiTool || 'Chưa khai báo'} | Quyết định: ${d.decision || 'Chưa khai báo'}
-    - Prompt/Input Used: ${d.prompt || 'Không có câu lệnh'}
-    - AI Respond Summary: ${d.response || d.responseSummary || d.aiResponseSummary || 'Không có tóm tắt'}
-    - Student Self-Reflection: ${d.reflection || d.studentReflection || 'Không có phản tư'}\n`;
+          criteriaList.forEach((crit) => {
+            const d = decs[crit.key] || (crit.altKey ? decs[crit.altKey] : null) || {};
+            const promptText = (d.prompt || '').trim();
+            if (promptText) allPrompts.push(promptText);
+
+            aiAuditSummary += `  * [${crit.name}]:
+      - Tool & Decision: ${d.tool || d.aiTool || 'Chưa khai báo'} | Quyết định: ${d.decision || 'Chưa khai báo'}
+      - Prompt/Input Used: ${d.prompt || 'Không có câu lệnh'}
+      - AI Respond Summary: ${d.response || d.responseSummary || d.aiResponseSummary || 'Không có tóm tắt'}
+      - Student Self-Reflection: ${d.reflection || d.studentReflection || 'Không có phản tư'}\n`;
+          });
         });
-      });
 
-      const uniquePrompts = new Set(allPrompts);
-      if (allPrompts.length >= 3 && uniquePrompts.size === 1) {
-        aiAuditSummary += `\n\n[CẢNH BÁO KIỂM TOÁN TỰ ĐỘNG]: Tất cả ${allPrompts.length} câu lệnh (Prompt) qua các phạm vi đều copy-paste giống hệt nhau ('${allPrompts[0].slice(0, 80)}...'). Đây là hành vi khai báo đối phó, sơ sài, thiếu chiều sâu kỹ thuật. Cần kiểm tra xem nội dung khai báo có khớp với công nghệ của mã nguồn thực tế hay hoàn toàn lạc đề, và trừ điểm tiêu chí reflection.`;
+        const uniquePrompts = new Set(allPrompts);
+        if (allPrompts.length >= 3 && uniquePrompts.size === 1) {
+          aiAuditSummary += `\n\n[CẢNH BÁO KIỂM TOÁN TỰ ĐỘNG]: Tất cả ${allPrompts.length} câu lệnh (Prompt) qua các phạm vi đều copy-paste giống hệt nhau ('${allPrompts[0].slice(0, 80)}...'). Đây là hành vi khai báo đối phó, sơ sài, thiếu chiều sâu kỹ thuật. Cần kiểm tra xem nội dung khai báo có khớp với công nghệ của mã nguồn thực tế hay hoàn toàn lạc đề, và trừ điểm tiêu chí reflection.`;
+        }
+      } else {
+        aiAuditSummary = 'Sinh viên KHÔNG thực hiện khai báo sử dụng AI trong ghi chú bài nộp.';
+      }
+
+      // Tích hợp dữ liệu từ bảng ai_interactions (nếu có)
+      if (Array.isArray(auditData.aiInteractions) && auditData.aiInteractions.length > 0) {
+        aiAuditSummary += '\n\n[LỊCH SỬ TƯƠNG TÁC AI TỪ DATABASE (AI INTERACTIONS)]:\n';
+        auditData.aiInteractions.forEach((interaction, idx) => {
+          aiAuditSummary += `\n* Lượt tương tác #${idx + 1}:
+    - Công cụ: ${interaction.ai_tool} | Mục đích: ${interaction.usage_purpose}
+    - Quyết định: ${interaction.student_decision}
+    - Nội dung prompt: ${interaction.prompt_content}
+    - Tóm tắt phản hồi AI: ${interaction.ai_response_summary}
+    - Tự phản tư: ${interaction.reflection_text}`;
+        });
+      }
+
+      // Tích hợp kết quả đánh giá AI từ bảng ai_evaluations (nếu có)
+      if (auditData.aiEvaluation) {
+        aiAuditSummary += `\n\n[KẾT QUẢ ĐÁNH GIÁ AI TỪ DATABASE (AI EVALUATION)]: Pattern: ${auditData.aiEvaluation.pattern}, Risk: ${auditData.aiEvaluation.risk_level}, Transparency Score: ${auditData.aiEvaluation.transparency_score}, Summary: ${auditData.aiEvaluation.summary}`;
       }
     } else {
-      aiAuditSummary = 'Sinh viên KHÔNG thực hiện khai báo sử dụng AI trong ghi chú bài nộp.';
-    }
-
-    // Tích hợp dữ liệu từ bảng ai_interactions (nếu có)
-    if (Array.isArray(auditData.aiInteractions) && auditData.aiInteractions.length > 0) {
-      aiAuditSummary += '\n\n[LỊCH SỬ TƯƠNG TÁC AI TỪ DATABASE (AI INTERACTIONS)]:\n';
-      auditData.aiInteractions.forEach((interaction, idx) => {
-        aiAuditSummary += `\n* Lượt tương tác #${idx + 1}:
-  - Công cụ: ${interaction.ai_tool} | Mục đích: ${interaction.usage_purpose}
-  - Quyết định: ${interaction.student_decision}
-  - Nội dung prompt: ${interaction.prompt_content}
-  - Tóm tắt phản hồi AI: ${interaction.ai_response_summary}
-  - Tự phản tư: ${interaction.reflection_text}`;
-      });
-    }
-
-    // Tích hợp kết quả đánh giá AI từ bảng ai_evaluations (nếu có)
-    if (auditData.aiEvaluation) {
-      aiAuditSummary += `\n\n[KẾT QUẢ ĐÁNH GIÁ AI TỪ DATABASE (AI EVALUATION)]: Pattern: ${auditData.aiEvaluation.pattern}, Risk: ${auditData.aiEvaluation.risk_level}, Transparency Score: ${auditData.aiEvaluation.transparency_score}, Summary: ${auditData.aiEvaluation.summary}`;
+      aiAuditSummary = null;
     }
 
     // 6. Oral Exam / Viva Logs nếu client đã cung cấp từ trước
@@ -573,6 +591,11 @@ const GradingService = {
       rawConfigs = DEFAULT_RUBRIC_CONFIGS;
     }
 
+    // Nếu bài tập KHÔNG yêu cầu khai báo AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
+    if (!isAiRequired) {
+      rawConfigs = filterAndRescaleRubricsForNonAi(rawConfigs);
+    }
+
     // BƯỚC 1: LỌC DANH SÁCH TIÊU CHÍ ACTIVE (is_enabled = true và weight_percent > 0)
     const activeRubrics = (rawConfigs || [])
       .filter((c) => c.is_enabled === true && Number(c.weight_percent) > 0)
@@ -587,13 +610,20 @@ const GradingService = {
     // Đảm bảo luôn có ít nhất 1 rubric active
     const finalActiveRubrics = activeRubrics.length > 0
       ? activeRubrics
-      : [
-          { index: 1, criterion_key: 'PROBLEM_ABSTRACTION', criteria_name: 'Problem Abstraction & Solution Design', weight_percent: 20, max_score: 2.0 },
-          { index: 2, criterion_key: 'IMPLEMENTATION_QUALITY', criteria_name: 'Implementation & Code Quality', weight_percent: 30, max_score: 3.0 },
-          { index: 3, criterion_key: 'CRITICAL_EVALUATION', criteria_name: 'Critical Evaluation & Verification', weight_percent: 25, max_score: 2.5 },
-          { index: 4, criterion_key: 'AI_INTERACTION', criteria_name: 'AI Interaction & Prompt Engineering', weight_percent: 15, max_score: 1.5 },
-          { index: 5, criterion_key: 'METACOGNITIVE_REFLECTION', criteria_name: 'Metacognitive Reflection & Transparency', weight_percent: 10, max_score: 1.0 },
-        ];
+      : (!isAiRequired
+          ? [
+              { index: 1, criterion_key: 'PROBLEM_ABSTRACTION', criteria_name: 'Problem Abstraction & Solution Design', weight_percent: 30, max_score: 3.0 },
+              { index: 2, criterion_key: 'IMPLEMENTATION_QUALITY', criteria_name: 'Implementation & Code Quality', weight_percent: 40, max_score: 4.0 },
+              { index: 3, criterion_key: 'CRITICAL_EVALUATION', criteria_name: 'Critical Evaluation & Verification', weight_percent: 30, max_score: 3.0 },
+            ]
+          : [
+              { index: 1, criterion_key: 'PROBLEM_ABSTRACTION', criteria_name: 'Problem Abstraction & Solution Design', weight_percent: 20, max_score: 2.0 },
+              { index: 2, criterion_key: 'IMPLEMENTATION_QUALITY', criteria_name: 'Implementation & Code Quality', weight_percent: 30, max_score: 3.0 },
+              { index: 3, criterion_key: 'CRITICAL_EVALUATION', criteria_name: 'Critical Evaluation & Verification', weight_percent: 25, max_score: 2.5 },
+              { index: 4, criterion_key: 'AI_INTERACTION', criteria_name: 'AI Interaction & Prompt Engineering', weight_percent: 15, max_score: 1.5 },
+              { index: 5, criterion_key: 'METACOGNITIVE_REFLECTION', criteria_name: 'Metacognitive Reflection & Transparency', weight_percent: 10, max_score: 1.0 },
+            ]
+        );
 
     // 8. Gọi hàm evaluateRubricWithGemini thẩm định đối soát chéo thực tế qua Gemini
     let result;
@@ -606,6 +636,7 @@ const GradingService = {
         oralExamLogs,
         activeRubrics: finalActiveRubrics,
         rubricConfigs: finalActiveRubrics,
+        aiDeclarationRequired: isAiRequired,
       });
     } catch (evalErr) {
       console.warn(`[ART-AI] evaluateRubricWithGemini thất bại (${evalErr.status || evalErr.message}). Tự động kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng...`);
@@ -615,20 +646,21 @@ const GradingService = {
         aiAuditSummary,
         activeRubrics: finalActiveRubrics,
         rubricConfigs: finalActiveRubrics,
+        aiDeclarationRequired: isAiRequired,
       });
     }
 
     // BƯỚC 3: CƠ CHẾ PHÒNG VỆ HẬU KỲ (BACKEND SCORING GUARDRAILS)
-    result = applyScoringGuardrails(result, finalActiveRubrics);
+    result = applyScoringGuardrails(result, finalActiveRubrics, isAiRequired);
 
     // 9. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload
     try {
       if (auditData.latestVersion && auditData.submission) {
-        const safeRiskLevel = normalizeRiskLevel(
+        const safeRiskLevel = !isAiRequired ? 'low' : normalizeRiskLevel(
           result?.risk_level || result?.audit_integrity?.riskLevel || result?.audit_integrity?.risk_level || 'low'
         );
         const rawScore = Number(result?.audit_integrity?.match_percentage);
-        const safeTransparencyScore = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 95.0;
+        const safeTransparencyScore = !isAiRequired ? 100.0 : (Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 95.0);
 
         await GradingRepository.saveAiEvaluation({
           school_id: tenant.schoolId,

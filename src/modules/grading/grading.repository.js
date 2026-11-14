@@ -18,6 +18,7 @@ const GradingRepository = {
         a.title               AS assignment_title,
         a.class_id,
         a.max_score           AS assignment_max_score,
+        a.ai_declaration_required AS assignment_ai_declaration_required,
         c.lecturer_id
       FROM submissions s
       JOIN assignments a ON s.assignment_id = a.id AND a.school_id = s.school_id
@@ -292,6 +293,7 @@ const GradingRepository = {
         a.description         AS assignment_description,
         a.instructions        AS assignment_instructions,
         a.max_score           AS assignment_max_score,
+        a.ai_declaration_required AS assignment_ai_declaration_required,
         a.class_id,
         c.lecturer_id,
         up.full_name          AS student_name,

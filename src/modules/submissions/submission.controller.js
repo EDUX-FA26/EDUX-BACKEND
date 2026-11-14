@@ -281,6 +281,22 @@ const SubmissionController = {
     } catch (error) {
       next(error);
     }
+  },
+
+  async supplementAiDeclarations(req, res, next) {
+    try {
+      const { assignmentId } = req.params;
+      const result = await SubmissionService.supplementAiDeclarations(assignmentId, req.tenant, req.body);
+      res.status(200).json({ success: true, data: result, message: 'AI declarations supplemented successfully' });
+    } catch (error) {
+      if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED', 'SUBMISSION_IS_DRAFT', 'FORBIDDEN'].includes(error.message)) {
+        return res.status(403).json({ success: false, message: error.message });
+      }
+      if (['ASSIGNMENT_NOT_FOUND', 'ASSIGNMENT_NOT_PUBLISHED', 'SUBMISSION_NOT_FOUND', 'VERSION_NOT_FOUND'].includes(error.message)) {
+        return res.status(404).json({ success: false, message: error.message });
+      }
+      next(error);
+    }
   }
 };
 

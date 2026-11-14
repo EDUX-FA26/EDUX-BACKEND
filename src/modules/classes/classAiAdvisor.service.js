@@ -72,14 +72,15 @@ const ClassAiAdvisorService = {
    * 2. Nếu ĐÃ CÓ trong DB: Trả về NGAY LẬP TỨC từ cache, không gọi lại Gemini.
    * 3. Nếu CHƯA CÓ: Tự động tổng hợp dữ liệu bài tập gần nhất có bài nộp/hết hạn và chạy phân tích lưu vào DB.
    * @param {string} classId
-   * @param {Object} user
+   * @param {Object} tenant
    */
-  async getAiAdvisor(classId, user) {
+  async getAiAdvisor(classId, tenant) {
+    const schoolId = tenant?.schoolId;
     // 1. Kiểm tra quyền truy cập lớp học (Lecturer chỉ xem lớp của mình, Admin xem tất cả)
-    await ClassesService.getClassById(classId, user);
+    await ClassesService.getClassById(classId, tenant);
 
     // 2. KIỂM TRA SNAPSHOT ĐÃ LƯU TRONG DATABASE (CACHE-FIRST)
-    const cachedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    const cachedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId, schoolId);
 
     if (cachedSnapshots && cachedSnapshots.length > 0) {
       return formatAdvisories(cachedSnapshots);
@@ -87,7 +88,7 @@ const ClassAiAdvisorService = {
 
     // 3. NẾU CHƯA CÓ TRONG DB: TỰ ĐỘNG CHẠY LẦN ĐẦU (Automatic First Run)
     // Tìm bài tập gần nhất của lớp có bài nộp hoặc đã kết thúc deadline
-    const targetAssignment = await ClassAiAdvisorRepository.getLatestAssignmentForAdvisory(classId);
+    const targetAssignment = await ClassAiAdvisorRepository.getLatestAssignmentForAdvisory(classId, schoolId);
 
     if (!targetAssignment) {
       return {
@@ -100,13 +101,13 @@ const ClassAiAdvisorService = {
     // Gom dữ liệu bài nộp thật từ DB, gọi Gemini phân tích và INSERT CỨNG vào class_ai_advisories
     let savedSnapshot = null;
     try {
-      savedSnapshot = await this.generateAndSaveAdvisory(classId, targetAssignment);
+      savedSnapshot = await this.generateAndSaveAdvisory(classId, targetAssignment, schoolId);
     } catch (err) {
       console.warn(`[ClassAiAdvisorService] Automatic initial run failed for assignment ${targetAssignment.id}:`, err.message);
     }
 
     // Lấy lại danh sách sau khi đã lưu snapshot
-    let updatedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    let updatedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId, schoolId);
     if ((!updatedSnapshots || updatedSnapshots.length === 0) && savedSnapshot) {
       updatedSnapshots = [savedSnapshot];
     }
@@ -116,14 +117,15 @@ const ClassAiAdvisorService = {
   /**
    * Buộc phân tích lại bài tập và cập nhật snapshot tương ứng trong DB khi Giảng viên nhấn nút "Chạy lại"
    * @param {string} classId
-   * @param {Object} user
+   * @param {Object} tenant
    */
-  async refreshAiAdvisor(classId, user) {
+  async refreshAiAdvisor(classId, tenant) {
+    const schoolId = tenant?.schoolId;
     // 1. Kiểm tra quyền truy cập lớp học
-    await ClassesService.getClassById(classId, user);
+    await ClassesService.getClassById(classId, tenant);
 
     // Kiểm tra bài tập phù hợp nhất để phân tích lại
-    const targetAssignment = await ClassAiAdvisorRepository.getLatestAssignmentForAdvisory(classId);
+    const targetAssignment = await ClassAiAdvisorRepository.getLatestAssignmentForAdvisory(classId, schoolId);
 
     if (!targetAssignment) {
       return {
@@ -134,23 +136,23 @@ const ClassAiAdvisorService = {
     }
 
     // Buộc gọi lại Gemini AI và cập nhật snapshot tương ứng
-    await this.generateAndSaveAdvisory(classId, targetAssignment);
+    await this.generateAndSaveAdvisory(classId, targetAssignment, schoolId);
 
     // Trả về danh sách advisories đã cập nhật từ DB snapshot
-    const updatedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId);
+    const updatedSnapshots = await ClassAiAdvisorRepository.getAdvisoriesByClassId(classId, schoolId);
     return formatAdvisories(updatedSnapshots);
   },
 
   /**
    * Phân tích và lưu snapshot báo cáo sư phạm AI cho một bài tập
    */
-  async generateAndSaveAdvisory(classId, assignment) {
+  async generateAndSaveAdvisory(classId, assignment, schoolId) {
     // 1. Lấy thông tin lớp học và số lượng sinh viên
-    const classStats = await ClassAiAdvisorRepository.getClassAndMemberStats(classId);
+    const classStats = await ClassAiAdvisorRepository.getClassAndMemberStats(classId, schoolId);
     let totalStudents = classStats?.total_students || 0;
 
     // 2. Lấy danh sách bài nộp và báo cáo audit AI của bài tập
-    const submissions = await ClassAiAdvisorRepository.getSubmissionsAndAuditForAssignment(classId, assignment.id);
+    const submissions = await ClassAiAdvisorRepository.getSubmissionsAndAuditForAssignment(classId, assignment.id, schoolId);
     const submittedCount = submissions.length;
 
     if (totalStudents < submittedCount) {
@@ -266,6 +268,7 @@ const ClassAiAdvisorService = {
 
     // 7. Lưu snapshot vào database
     const saved = await ClassAiAdvisorRepository.upsertAdvisory({
+      school_id: schoolId,
       class_id: classId,
       assignment_id: assignment.id,
       assignment_title: assignment.title,

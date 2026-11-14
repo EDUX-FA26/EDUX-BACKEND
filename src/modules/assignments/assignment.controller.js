@@ -53,7 +53,7 @@ const AssignmentController = {
     try {
       const id = req.params.assignmentId || req.params.id;
       const force = req.query.force === 'true' || req.query.force === true;
-      await AssignmentService.deleteAssignment(id, req.user, { force });
+      await AssignmentService.deleteAssignment(id, req.tenant, { force });
       res.status(200).json({ success: true, message: 'Assignment deleted successfully' });
     } catch (error) {
       if (error.code === 'SUBMISSIONS_EXIST') {

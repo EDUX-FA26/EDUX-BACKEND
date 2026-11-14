@@ -53,11 +53,11 @@ const ClassesService = {
     );
   },
 
-  async getSlotById(slotId, user) {
-    const slot = await ClassesRepository.getSlotById(slotId);
+  async getSlotById(slotId, tenant) {
+    const slot = await ClassesRepository.getSlotById(slotId, tenant?.schoolId);
     if (!slot) throw new Error('SLOT_NOT_FOUND');
     if (slot.class_id) {
-      await this.getClassById(slot.class_id, user);
+      await this.getClassById(slot.class_id, tenant);
     }
     return slot;
   },

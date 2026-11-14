@@ -6,10 +6,18 @@ const ClassAiAdvisorRepository = {
    * nối với bảng assignments để lấy thông tin hạn nộp (deadline),
    * sắp xếp theo thời điểm tạo snapshot mới nhất (generated_at DESC).
    */
-  async getAdvisoriesByClassId(classId) {
+  async getAdvisoriesByClassId(classId, schoolId) {
+    let whereCondition = 'WHERE caa.class_id = $1::uuid';
+    const params = [classId];
+    if (schoolId) {
+      whereCondition += ' AND (caa.school_id = $2::uuid OR caa.school_id IS NULL)';
+      params.push(schoolId);
+    }
+
     const query = `
       SELECT
         caa.id,
+        caa.school_id,
         caa.class_id,
         caa.assignment_id,
         caa.assignment_title,
@@ -24,10 +32,10 @@ const ClassAiAdvisorRepository = {
         a.publish_status
       FROM class_ai_advisories caa
       LEFT JOIN assignments a ON caa.assignment_id = a.id
-      WHERE caa.class_id = $1::uuid
+      ${whereCondition}
       ORDER BY caa.generated_at DESC;
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, params);
     return rows;
   },
 
@@ -37,7 +45,16 @@ const ClassAiAdvisorRepository = {
    * Ưu tiên 2: Nếu chưa qua deadline nhưng đã có sinh viên nộp bài (status != 'draft')
    * Ưu tiên 3: Bài tập gần nhất của lớp
    */
-  async getLatestAssignmentForAdvisory(classId) {
+  async getLatestAssignmentForAdvisory(classId, schoolId) {
+    let whereCondition = 'WHERE a.class_id = $1::uuid';
+    let subSchoolCheck = '';
+    const params = [classId];
+    if (schoolId) {
+      whereCondition += ' AND a.school_id = $2::uuid';
+      subSchoolCheck = 'AND s.school_id = a.school_id';
+      params.push(schoolId);
+    }
+
     const query = `
       SELECT
         a.id,
@@ -50,8 +67,8 @@ const ClassAiAdvisorRepository = {
         a.created_at,
         COUNT(s.id)::int AS submission_count
       FROM assignments a
-      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.status != 'draft'
-      WHERE a.class_id = $1::uuid
+      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.status != 'draft' ${subSchoolCheck}
+      ${whereCondition}
       GROUP BY a.id
       ORDER BY 
         -- Ưu tiên 1: Đã qua deadline VÀ có bài nộp
@@ -65,14 +82,23 @@ const ClassAiAdvisorRepository = {
         a.created_at DESC
       LIMIT 1;
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 
   /**
    * Lấy danh sách bài tập của lớp phục vụ tư vấn AI
    */
-  async getAssignmentsForAdvisory(classId) {
+  async getAssignmentsForAdvisory(classId, schoolId) {
+    let whereCondition = 'WHERE a.class_id = $1::uuid';
+    let subSchoolCheck = '';
+    const params = [classId];
+    if (schoolId) {
+      whereCondition += ' AND a.school_id = $2::uuid';
+      subSchoolCheck = 'AND s.school_id = a.school_id';
+      params.push(schoolId);
+    }
+
     const query = `
       SELECT
         a.id,
@@ -85,8 +111,8 @@ const ClassAiAdvisorRepository = {
         a.created_at,
         COUNT(s.id)::int AS submission_count
       FROM assignments a
-      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.status != 'draft'
-      WHERE a.class_id = $1::uuid
+      LEFT JOIN submissions s ON a.id = s.assignment_id AND s.status != 'draft' ${subSchoolCheck}
+      ${whereCondition}
       GROUP BY a.id
       ORDER BY 
         (a.deadline IS NOT NULL AND a.deadline < NOW() AND COUNT(s.id) > 0) DESC,
@@ -95,7 +121,7 @@ const ClassAiAdvisorRepository = {
         a.deadline DESC NULLS LAST,
         a.created_at DESC;
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, params);
     return rows;
   },
 
@@ -103,7 +129,13 @@ const ClassAiAdvisorRepository = {
    * Lấy toàn bộ danh sách bài tập/lab quá hạn nộp (deadline < NOW()) của một lớp học từ bảng assignments,
    * sắp xếp theo hạn nộp gần nhất trước (deadline DESC).
    */
-  async getExpiredAssignmentsByClassId(classId) {
+  async getExpiredAssignmentsByClassId(classId, schoolId) {
+    let whereCondition = 'WHERE a.class_id = $1::uuid AND a.deadline IS NOT NULL AND a.deadline < NOW()';
+    const params = [classId];
+    if (schoolId) {
+      whereCondition += ' AND a.school_id = $2::uuid';
+      params.push(schoolId);
+    }
     const query = `
       SELECT
         a.id,
@@ -115,19 +147,23 @@ const ClassAiAdvisorRepository = {
         a.publish_status,
         a.created_at
       FROM assignments a
-      WHERE a.class_id = $1::uuid
-        AND a.deadline IS NOT NULL
-        AND a.deadline < NOW()
+      ${whereCondition}
       ORDER BY a.deadline DESC;
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, params);
     return rows;
   },
 
   /**
    * Kiểm tra bài tập quá hạn nộp gần nhất (deadline < NOW()) của một lớp học.
    */
-  async getLatestExpiredAssignment(classId) {
+  async getLatestExpiredAssignment(classId, schoolId) {
+    let whereCondition = 'WHERE a.class_id = $1::uuid AND a.deadline IS NOT NULL AND a.deadline < NOW()';
+    const params = [classId];
+    if (schoolId) {
+      whereCondition += ' AND a.school_id = $2::uuid';
+      params.push(schoolId);
+    }
     const query = `
       SELECT
         a.id,
@@ -137,34 +173,44 @@ const ClassAiAdvisorRepository = {
         a.deadline,
         a.class_id
       FROM assignments a
-      WHERE a.class_id = $1::uuid
-        AND a.deadline IS NOT NULL
-        AND a.deadline < NOW()
+      ${whereCondition}
       ORDER BY a.deadline DESC
       LIMIT 1;
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 
   /**
    * Lấy snapshot advisory theo class_id và assignment_id
    */
-  async getAdvisoryByClassAndAssignment(classId, assignmentId) {
+  async getAdvisoryByClassAndAssignment(classId, assignmentId, schoolId) {
+    let whereCondition = 'WHERE class_id = $1::uuid AND assignment_id = $2::uuid';
+    const params = [classId, assignmentId];
+    if (schoolId) {
+      whereCondition += ' AND (school_id = $3::uuid OR school_id IS NULL)';
+      params.push(schoolId);
+    }
     const query = `
       SELECT *
       FROM class_ai_advisories
-      WHERE class_id = $1::uuid AND assignment_id = $2::uuid
+      ${whereCondition}
       LIMIT 1;
     `;
-    const { rows } = await pool.query(query, [classId, assignmentId]);
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 
   /**
    * Lấy thông tin lớp học, môn học và tổng số sinh viên đăng ký
    */
-  async getClassAndMemberStats(classId) {
+  async getClassAndMemberStats(classId, schoolId) {
+    let whereCondition = 'WHERE c.id = $1::uuid';
+    const params = [classId];
+    if (schoolId) {
+      whereCondition += ' AND c.school_id = $2::uuid';
+      params.push(schoolId);
+    }
     const query = `
       SELECT
         c.id,
@@ -177,16 +223,22 @@ const ClassAiAdvisorRepository = {
         ) AS total_students
       FROM classes c
       LEFT JOIN subjects s ON c.subject_id = s.id
-      WHERE c.id = $1::uuid;
+      ${whereCondition};
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 
   /**
    * Lấy danh sách bài nộp và báo cáo audit AI của sinh viên trong lớp cho một bài tập
    */
-  async getSubmissionsAndAuditForAssignment(classId, assignmentId) {
+  async getSubmissionsAndAuditForAssignment(classId, assignmentId, schoolId) {
+    let schoolFilter = '';
+    const params = [classId, assignmentId];
+    if (schoolId) {
+      schoolFilter = 'AND a.school_id = $3::uuid AND (s.school_id = a.school_id OR s.school_id IS NULL)';
+      params.push(schoolId);
+    }
     const query = `
       SELECT
         s.id AS submission_id,
@@ -229,9 +281,10 @@ const ClassAiAdvisorRepository = {
         LIMIT 1
       ) ae ON TRUE
       WHERE s.assignment_id = $2::uuid
-        AND s.status != 'draft';
+        AND s.status != 'draft'
+        ${schoolFilter};
     `;
-    const { rows } = await pool.query(query, [classId, assignmentId]);
+    const { rows } = await pool.query(query, params);
     return rows;
   },
 
@@ -239,6 +292,7 @@ const ClassAiAdvisorRepository = {
    * Lưu hoặc cập nhật (upsert) bản ghi snapshot khuyến nghị AI cho bài tập
    */
   async upsertAdvisory({
+    school_id,
     class_id,
     assignment_id,
     assignment_title,
@@ -251,6 +305,7 @@ const ClassAiAdvisorRepository = {
   }) {
     const query = `
       INSERT INTO class_ai_advisories (
+        school_id,
         class_id,
         assignment_id,
         assignment_title,
@@ -261,8 +316,9 @@ const ClassAiAdvisorRepository = {
         next_slot_recommendation,
         raw_payload,
         generated_at
-      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, NOW())
+      ) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, NOW())
       ON CONFLICT (class_id, assignment_id) DO UPDATE SET
+        school_id = COALESCE(EXCLUDED.school_id, class_ai_advisories.school_id),
         assignment_title = EXCLUDED.assignment_title,
         mode = EXCLUDED.mode,
         submission_rate_text = EXCLUDED.submission_rate_text,
@@ -274,6 +330,7 @@ const ClassAiAdvisorRepository = {
       RETURNING *;
     `;
     const values = [
+      school_id || null,
       class_id,
       assignment_id,
       assignment_title,
