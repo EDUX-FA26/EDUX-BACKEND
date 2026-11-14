@@ -1,4 +1,3 @@
-
 "use strict";
 
 const { pool } = require("../config/db.config");
@@ -12,8 +11,8 @@ const UUID_REGEX =
  * REQUIREMENTS:
  * - authenticate middleware must run first.
  * - req.user.id comes from verified JWT.
- * - X-School-Id is only a requested school,
- *   never proof of authorization.
+ * - X-School-Id is only a requested school, never proof of authorization.
+ * - Handles school lifecycle: active, new, locked, suspended, soft-deleted.
  */
 async function requireSchoolContext(req, res, next) {
   try {
@@ -68,7 +67,11 @@ async function requireSchoolContext(req, res, next) {
         s.code AS school_code,
         s.name AS school_name,
         s.slug AS school_slug,
-        s.status AS school_status
+        s.status AS school_status,
+        s.setup_completed,
+        s.lock_reason,
+        s.suspension_reason,
+        s.deleted_at
 
       FROM public.school_memberships sm
 
@@ -78,7 +81,6 @@ async function requireSchoolContext(req, res, next) {
       WHERE sm.user_id = $1
         AND sm.school_id = $2
         AND sm.status = 'active'
-        AND s.status = 'active'
 
       LIMIT 1
       `,
@@ -96,7 +98,64 @@ async function requireSchoolContext(req, res, next) {
     }
 
     // =========================================
-    // 4. TRUSTED TENANT CONTEXT
+    // 4. CHECK SCHOOL LIFECYCLE & STATUS
+    // =========================================
+
+    // Soft-deleted school
+    if (membership.deleted_at) {
+      return res.status(404).json({
+        success: false,
+        code: "SCHOOL_NOT_FOUND",
+        message: "Trường học không tồn tại hoặc đã bị xóa",
+      });
+    }
+
+    // Locked school: all actions blocked
+    if (membership.school_status === "locked") {
+      return res.status(403).json({
+        success: false,
+        code: "SCHOOL_LOCKED",
+        message: "Trường học hiện đang bị khóa.",
+        lock_reason: membership.lock_reason || null,
+      });
+    }
+
+    // Suspended school (e.g. overdue contract):
+    // School Admin is allowed to access billing/settings to renew
+    const isBillingOrSettingsPath =
+      req.originalUrl &&
+      (req.originalUrl.includes("/billing") ||
+        req.originalUrl.includes("/schools/settings"));
+
+    if (membership.school_status === "suspended") {
+      if (membership.role === "school_admin" && isBillingOrSettingsPath) {
+        // Allow school admin to renew contract
+      } else {
+        return res.status(403).json({
+          success: false,
+          code: "SCHOOL_SUSPENDED",
+          message:
+            "Trường học đang bị tạm dừng dịch vụ do hết hạn hợp đồng. Vui lòng liên hệ quản trị trường để gia hạn.",
+          suspension_reason: membership.suspension_reason || null,
+        });
+      }
+    }
+
+    // Pending tenant (not yet set up):
+    // Only school_admin can access to complete onboarding/setup and billing
+    if (
+      ["new", "pending_setup"].includes(membership.school_status) &&
+      membership.role !== "school_admin"
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: "SCHOOL_PENDING_SETUP",
+        message: "Trường học đang trong quá trình thiết lập ban đầu.",
+      });
+    }
+
+    // =========================================
+    // 5. TRUSTED TENANT CONTEXT
     // =========================================
 
     req.tenant = Object.freeze({
@@ -109,6 +168,8 @@ async function requireSchoolContext(req, res, next) {
       schoolCode: membership.school_code,
       schoolName: membership.school_name,
       schoolSlug: membership.school_slug,
+      schoolStatus: membership.school_status,
+      setupCompleted: Boolean(membership.setup_completed),
     });
 
     return next();
