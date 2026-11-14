@@ -1,8 +1,10 @@
 
+"use strict";
+
 const { pool } = require('../../config/db.config');
 
 const ProjectsRepository = {
-    async create({ classId, ownerId, name, description }) {
+    async create({ classId, ownerId, schoolId, name, description }) {
         const client = await pool.connect();
 
         try {
@@ -10,8 +12,8 @@ const ProjectsRepository = {
 
             const classResult = await client.query(
                 `SELECT id FROM classes
-         WHERE id = $1 AND is_active = true`,
-                [classId]
+                 WHERE id = $1 AND school_id = $2 AND is_active = true`,
+                [classId, schoolId]
             );
 
             if (!classResult.rowCount) {
@@ -19,11 +21,14 @@ const ProjectsRepository = {
             }
 
             const memberResult = await client.query(
-                `SELECT 1 FROM class_members
-         WHERE class_id = $1
-           AND student_id = $2
-           AND status = 'active'`,
-                [classId, ownerId]
+                `SELECT 1 FROM class_members cm
+                 JOIN public.school_memberships sm
+                   ON sm.user_id = cm.student_id AND sm.school_id = $3
+                 WHERE cm.class_id = $1
+                   AND cm.student_id = $2
+                   AND cm.status = 'active'
+                   AND sm.status = 'active'`,
+                [classId, ownerId, schoolId]
             );
 
             if (!memberResult.rowCount) {
@@ -32,20 +37,20 @@ const ProjectsRepository = {
 
             const created = await client.query(
                 `INSERT INTO projects
-           (class_id, owner_id, name, description)
-         VALUES ($1, $2, $3, $4)
-         RETURNING *`,
-                [classId, ownerId, name, description]
+                   (class_id, owner_id, name, description, school_id)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING *`,
+                [classId, ownerId, name, description, schoolId]
             );
 
             const project = created.rows[0];
 
             await client.query(
                 `INSERT INTO project_members
-           (project_id, class_id, user_id, role,
-            status, joined_at)
-         VALUES ($1, $2, $3, 'owner', 'active', NOW())`,
-                [project.id, classId, ownerId]
+                   (project_id, class_id, user_id, role,
+                    status, joined_at, school_id)
+                 VALUES ($1, $2, $3, 'owner', 'active', NOW(), $4)`,
+                [project.id, classId, ownerId, schoolId]
             );
 
             await client.query('COMMIT');
@@ -58,151 +63,216 @@ const ProjectsRepository = {
         }
     },
 
-    async findById(projectId) {
+    async findById(projectId, schoolId) {
         const { rows } = await pool.query(
             `SELECT p.*,
-              c.class_code,
-              s.name AS subject_name,
-              up.full_name AS owner_name
-       FROM projects p
-       JOIN classes c ON c.id = p.class_id
-       JOIN subjects s ON s.id = c.subject_id
-       LEFT JOIN user_profiles up
-         ON up.user_id = p.owner_id
-       WHERE p.id = $1`,
-            [projectId]
+                    c.class_code,
+                    s.name AS subject_name,
+                    up.full_name AS owner_name
+             FROM projects p
+             JOIN classes c ON c.id = p.class_id
+             JOIN subjects s ON s.id = c.subject_id
+             LEFT JOIN user_profiles up
+               ON up.user_id = p.owner_id
+             WHERE p.id = $1
+               AND p.school_id = $2
+               AND c.school_id = $2`,
+            [projectId, schoolId]
         );
 
         return rows[0];
     },
 
-    async findMyProjects(userId) {
+    async findMyProjects(userId, schoolId) {
         const { rows } = await pool.query(
             `SELECT p.id, p.name, p.description,
-              p.class_id, p.status,
-              p.created_at,
-              c.class_code,
-              s.name AS subject_name,
-              pm.role AS my_role
-       FROM project_members pm
-       JOIN projects p ON p.id = pm.project_id
-       JOIN classes c ON c.id = p.class_id
-       JOIN subjects s ON s.id = c.subject_id
-       WHERE pm.user_id = $1
-         AND pm.status = 'active'
-         AND p.status = 'active'
-       ORDER BY p.created_at DESC`,
-            [userId]
+                    p.class_id, p.status,
+                    p.created_at,
+                    c.class_code,
+                    s.name AS subject_name,
+                    pm.role AS my_role
+             FROM project_members pm
+             JOIN projects p ON p.id = pm.project_id
+             JOIN classes c ON c.id = p.class_id
+             JOIN subjects s ON s.id = c.subject_id
+             WHERE pm.user_id = $1
+               AND pm.status = 'active'
+               AND p.status = 'active'
+               AND pm.school_id = $2
+               AND p.school_id = $2
+               AND c.school_id = $2
+             ORDER BY p.created_at DESC`,
+            [userId, schoolId]
         );
 
         return rows;
     },
 
-    async findByClass(classId) {
+    async findByClass(classId, schoolId, userId, role) {
+        const params = [classId, schoolId];
+        let lecturerFilter = '';
+
+        if (role === 'lecturer') {
+            params.push(userId);
+            lecturerFilter = ` AND c.lecturer_id = $${params.length}`;
+        }
+
         const { rows } = await pool.query(
             `SELECT p.*,
-              up.full_name AS owner_name,
-              COUNT(pm.id) FILTER (
-                WHERE pm.status = 'active'
-              )::int AS member_count
-       FROM projects p
-       LEFT JOIN user_profiles up
-         ON up.user_id = p.owner_id
-       LEFT JOIN project_members pm
-         ON pm.project_id = p.id
-       WHERE p.class_id = $1
-       GROUP BY p.id, up.full_name
-       ORDER BY p.created_at DESC`,
-            [classId]
+                    up.full_name AS owner_name,
+                    COUNT(pm.id) FILTER (
+                      WHERE pm.status = 'active'
+                    )::int AS member_count
+             FROM projects p
+             JOIN classes c ON c.id = p.class_id
+             LEFT JOIN user_profiles up
+               ON up.user_id = p.owner_id
+             LEFT JOIN project_members pm
+               ON pm.project_id = p.id AND pm.school_id = $2
+             WHERE p.class_id = $1
+               AND p.school_id = $2
+               AND c.school_id = $2${lecturerFilter}
+             GROUP BY p.id, up.full_name
+             ORDER BY p.created_at DESC`,
+            params
         );
 
         return rows;
     },
 
-    async findMembers(projectId) {
+    async findMembers(projectId, schoolId) {
         const { rows } = await pool.query(
             `SELECT pm.id, pm.user_id, pm.role,
-              pm.status, pm.joined_at,
-              up.full_name, up.student_code
-       FROM project_members pm
-       LEFT JOIN user_profiles up
-         ON up.user_id = pm.user_id
-       WHERE pm.project_id = $1
-         AND pm.status = 'active'
-       ORDER BY pm.joined_at, pm.created_at`,
-            [projectId]
+                    pm.status, pm.joined_at,
+                    up.full_name, up.student_code
+             FROM project_members pm
+             JOIN projects p ON p.id = pm.project_id
+             JOIN classes c ON c.id = p.class_id
+             LEFT JOIN user_profiles up
+               ON up.user_id = pm.user_id
+             WHERE pm.project_id = $1
+               AND pm.status = 'active'
+               AND pm.school_id = $2
+               AND p.school_id = $2
+               AND c.school_id = $2
+             ORDER BY pm.joined_at, pm.created_at`,
+            [projectId, schoolId]
         );
 
         return rows;
     },
 
-    async findActiveMember(projectId, userId) {
+    async findActiveMember(projectId, userId, schoolId) {
         const { rows } = await pool.query(
-            `SELECT *
-       FROM project_members
-       WHERE project_id = $1
-         AND user_id = $2
-         AND status = 'active'`,
-            [projectId, userId]
+            `SELECT pm.*
+             FROM project_members pm
+             JOIN projects p ON p.id = pm.project_id
+             JOIN classes c ON c.id = p.class_id
+             WHERE pm.project_id = $1
+               AND pm.user_id = $2
+               AND pm.status = 'active'
+               AND pm.school_id = $3
+               AND p.school_id = $3
+               AND c.school_id = $3`,
+            [projectId, userId, schoolId]
         );
 
         return rows[0];
     },
 
-    async isActiveClassMember(classId, userId) {
+    async isActiveClassMember(classId, userId, schoolId) {
         const { rows } = await pool.query(
             `SELECT 1
-       FROM class_members
-       WHERE class_id = $1
-         AND student_id = $2
-         AND status = 'active'
-       LIMIT 1`,
-            [classId, userId]
+             FROM class_members cm
+             JOIN classes c ON c.id = cm.class_id
+             JOIN public.school_memberships sm
+               ON sm.user_id = cm.student_id AND sm.school_id = c.school_id
+             WHERE cm.class_id = $1
+               AND cm.student_id = $2
+               AND cm.status = 'active'
+               AND c.school_id = $3
+               AND sm.status = 'active'`,
+            [classId, userId, schoolId]
         );
 
         return rows.length > 0;
     },
 
-    async invite({ projectId, classId, userId, invitedBy }) {
-        // Cho phép mời lại người từng reject hoặc leave.
+    async isActiveSchoolMember(userId, schoolId) {
+        const { rows } = await pool.query(
+            `SELECT 1
+             FROM public.school_memberships
+             WHERE user_id = $1 AND school_id = $2 AND status = 'active'`,
+            [userId, schoolId]
+        );
+
+        return rows.length > 0;
+    },
+
+    async isClassLecturer(classId, lecturerId, schoolId) {
+        const { rows } = await pool.query(
+            `SELECT 1
+             FROM classes
+             WHERE id = $1 AND lecturer_id = $2 AND school_id = $3 AND is_active = true`,
+            [classId, lecturerId, schoolId]
+        );
+
+        return rows.length > 0;
+    },
+
+    async invite({ projectId, classId, userId, invitedBy, schoolId }) {
+        // Cho phép mời lại người từng reject hoặc leave, đảm bảo đúng trường
         const { rows } = await pool.query(
             `INSERT INTO project_members
-         (project_id, class_id, user_id, role,
-          status, invited_by)
-       VALUES ($1, $2, $3, 'member', 'pending', $4)
-       ON CONFLICT (project_id, user_id)
-       DO UPDATE SET
-         status = 'pending',
-         invited_by = EXCLUDED.invited_by,
-         joined_at = NULL,
-         updated_at = NOW()
-       WHERE project_members.status IN ('rejected', 'left')
-         AND project_members.role = 'member'
-       RETURNING *`,
-            [projectId, classId, userId, invitedBy]
+               (project_id, class_id, user_id, role,
+                status, invited_by, school_id)
+             SELECT $1, $2, $3, 'member', 'pending', $4, $5
+             FROM projects p
+             JOIN classes c ON c.id = p.class_id
+             WHERE p.id = $1
+               AND c.id = $2
+               AND c.school_id = $5
+               AND p.school_id = $5
+               AND p.status = 'active'
+             ON CONFLICT (project_id, user_id)
+             DO UPDATE SET
+               status = 'pending',
+               invited_by = EXCLUDED.invited_by,
+               joined_at = NULL,
+               updated_at = NOW()
+             WHERE project_members.status IN ('rejected', 'left')
+               AND project_members.role = 'member'
+               AND project_members.school_id = $5
+             RETURNING *`,
+            [projectId, classId, userId, invitedBy, schoolId]
         );
 
         return rows[0] || null;
     },
 
-    async respondToInvitation(invitationId, userId, accept) {
+    async respondToInvitation(invitationId, userId, accept, schoolId) {
         const client = await pool.connect();
 
         try {
             await client.query('BEGIN');
 
             const { rows } = await client.query(
-                `SELECT pm.*, p.status AS project_status,
-                cm.status AS class_membership_status
-         FROM project_members pm
-         JOIN projects p ON p.id = pm.project_id
-         LEFT JOIN class_members cm
-           ON cm.class_id = pm.class_id
-          AND cm.student_id = pm.user_id
-         WHERE pm.id = $1
-           AND pm.user_id = $2
-         FOR UPDATE OF pm`,
-                [invitationId, userId]
+                `SELECT pm.*,
+                        p.status AS project_status,
+                        cm.status AS class_membership_status
+                 FROM project_members pm
+                 JOIN projects p ON p.id = pm.project_id
+                 JOIN classes c ON c.id = pm.class_id
+                 LEFT JOIN class_members cm
+                   ON cm.class_id = pm.class_id
+                  AND cm.student_id = pm.user_id
+                 WHERE pm.id = $1
+                   AND pm.user_id = $2
+                   AND pm.school_id = $3
+                   AND p.school_id = $3
+                   AND c.school_id = $3
+                 FOR UPDATE OF pm`,
+                [invitationId, userId, schoolId]
             );
 
             const invitation = rows[0];
@@ -222,22 +292,34 @@ const ProjectsRepository = {
                 throw new Error('INVITATION_NOT_AVAILABLE');
             }
 
-            const nextStatus = accept ? 'active' : 'rejected';
-
-
-            const updated = await client.query(
-                `UPDATE project_members
-   SET status = $1,
-       joined_at = CASE
-         WHEN $3 THEN NOW()
-         ELSE NULL
-       END,
-       updated_at = NOW()
-   WHERE id = $2
-   RETURNING *`,
-                [nextStatus, invitationId, accept]
+            // Kiểm tra membership trường vẫn còn active
+            const smRes = await client.query(
+                `SELECT 1 FROM public.school_memberships
+                 WHERE user_id = $1 AND school_id = $2 AND status = 'active'`,
+                [userId, schoolId]
             );
 
+            if (!smRes.rowCount) {
+                throw new Error('INVITATION_NOT_AVAILABLE');
+            }
+
+            const nextStatus = accept ? 'active' : 'rejected';
+
+            // Defense-in-Depth: Bổ sung Tenant Scope và user_id trực tiếp vào câu UPDATE
+            const updated = await client.query(
+                `UPDATE project_members
+                 SET status = $1,
+                     joined_at = CASE
+                       WHEN $3 THEN NOW()
+                       ELSE NULL
+                     END,
+                     updated_at = NOW()
+                 WHERE id = $2
+                   AND user_id = $4
+                   AND school_id = $5
+                 RETURNING *`,
+                [nextStatus, invitationId, accept, userId, schoolId]
+            );
 
             await client.query('COMMIT');
             return updated.rows[0];
@@ -249,81 +331,85 @@ const ProjectsRepository = {
         }
     },
 
-
-    async findPendingInvitations(userId) {
+    async findPendingInvitations(userId, schoolId) {
         const { rows } = await pool.query(
             `SELECT
-       pm.id AS invitation_id,
-       pm.project_id,
-       pm.class_id,
-       p.name AS project_name,
-       c.class_code,
-       s.name AS subject_name,
-       up.full_name AS inviter_name,
-       pm.created_at
-     FROM project_members pm
-     JOIN projects p ON p.id = pm.project_id
-     JOIN classes c ON c.id = pm.class_id
-     JOIN subjects s ON s.id = c.subject_id
-     LEFT JOIN user_profiles up
-       ON up.user_id = pm.invited_by
-     WHERE pm.user_id = $1
-       AND pm.status = 'pending'
-       AND p.status = 'active'
-       AND c.is_active = true
-       AND EXISTS (
-         SELECT 1
-         FROM class_members cm
-         WHERE cm.class_id = pm.class_id
-           AND cm.student_id = pm.user_id
-           AND cm.status = 'active'
-       )
-     ORDER BY pm.created_at DESC`,
-            [userId]
+               pm.id AS invitation_id,
+               pm.project_id,
+               pm.class_id,
+               p.name AS project_name,
+               c.class_code,
+               s.name AS subject_name,
+               up.full_name AS inviter_name,
+               pm.created_at
+             FROM project_members pm
+             JOIN projects p ON p.id = pm.project_id
+             JOIN classes c ON c.id = pm.class_id
+             JOIN subjects s ON s.id = c.subject_id
+             LEFT JOIN user_profiles up
+               ON up.user_id = pm.invited_by
+             WHERE pm.user_id = $1
+               AND pm.status = 'pending'
+               AND p.status = 'active'
+               AND c.is_active = true
+               AND pm.school_id = $2
+               AND p.school_id = $2
+               AND c.school_id = $2
+               AND EXISTS (
+                 SELECT 1
+                 FROM class_members cm
+                 WHERE cm.class_id = pm.class_id
+                   AND cm.student_id = pm.user_id
+                   AND cm.status = 'active'
+               )
+             ORDER BY pm.created_at DESC`,
+            [userId, schoolId]
         );
 
         return rows;
     },
 
-
-    async findProjectInvitations(projectId) {
+    async findProjectInvitations(projectId, schoolId) {
         const query = `
-    SELECT
-      pm.id AS invitation_id,
-      pm.project_id,
-      pm.user_id,
-      pm.role,
-      pm.status,
-      pm.invited_by,
-      pm.created_at,
-      pm.updated_at,
-      pm.joined_at,
-      up.full_name,
-      up.student_code,
-      u.email
-    FROM project_members pm
-    JOIN users u
-      ON u.id = pm.user_id
-    LEFT JOIN user_profiles up
-      ON up.user_id = pm.user_id
-    WHERE pm.project_id = $1
-      AND pm.role = 'member'
-    ORDER BY
-      CASE pm.status
-        WHEN 'pending' THEN 1
-        WHEN 'active' THEN 2
-        WHEN 'rejected' THEN 3
-        ELSE 4
-      END,
-      pm.created_at DESC
-  `;
+          SELECT
+            pm.id AS invitation_id,
+            pm.project_id,
+            pm.user_id,
+            pm.role,
+            pm.status,
+            pm.invited_by,
+            pm.created_at,
+            pm.updated_at,
+            pm.joined_at,
+            up.full_name,
+            up.student_code,
+            u.email
+          FROM project_members pm
+          JOIN projects p ON p.id = pm.project_id
+          JOIN classes c ON c.id = p.class_id
+          JOIN users u
+            ON u.id = pm.user_id
+          LEFT JOIN user_profiles up
+            ON up.user_id = pm.user_id
+          WHERE pm.project_id = $1
+            AND pm.role = 'member'
+            AND pm.school_id = $2
+            AND p.school_id = $2
+            AND c.school_id = $2
+          ORDER BY
+            CASE pm.status
+              WHEN 'pending' THEN 1
+              WHEN 'active' THEN 2
+              WHEN 'rejected' THEN 3
+              ELSE 4
+            END,
+            pm.created_at DESC
+        `;
 
-        const { rows } = await pool.query(query, [projectId]);
+        const { rows } = await pool.query(query, [projectId, schoolId]);
 
         return rows;
     },
-
-
 };
 
 module.exports = ProjectsRepository;

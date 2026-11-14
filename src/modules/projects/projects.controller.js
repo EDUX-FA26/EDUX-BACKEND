@@ -1,4 +1,6 @@
 
+"use strict";
+
 const ProjectsService = require('./projects.service');
 
 function handleError(error, res, next) {
@@ -23,8 +25,7 @@ function handleError(error, res, next) {
         });
     }
 
-    // Unique active membership: không tham gia hai nhóm
-    // trong cùng lớp.
+    // Unique active membership: không tham gia hai nhóm trong cùng lớp
     if (
         error.code === '23505' &&
         error.constraint === 'uq_project_active_member_per_class'
@@ -50,7 +51,7 @@ const ProjectsController = {
         try {
             const result = await ProjectsService.createProject(
                 req.body,
-                req.user
+                req.tenant
             );
 
             return res.status(201).json({
@@ -64,7 +65,7 @@ const ProjectsController = {
 
     async getMine(req, res, next) {
         try {
-            const data = await ProjectsService.getMyProjects(req.user);
+            const data = await ProjectsService.getMyProjects(req.tenant);
             return res.json({ success: true, data });
         } catch (error) {
             return handleError(error, res, next);
@@ -75,7 +76,7 @@ const ProjectsController = {
         try {
             const data = await ProjectsService.getClassProjects(
                 req.params.classId,
-                req.user
+                req.tenant
             );
 
             return res.json({ success: true, data });
@@ -88,7 +89,7 @@ const ProjectsController = {
         try {
             const data = await ProjectsService.getProject(
                 req.params.projectId,
-                req.user
+                req.tenant
             );
 
             return res.json({ success: true, data });
@@ -102,7 +103,7 @@ const ProjectsController = {
             const data = await ProjectsService.inviteMember(
                 req.params.projectId,
                 req.body?.studentId,
-                req.user
+                req.tenant
             );
 
             return res.status(201).json({
@@ -119,7 +120,7 @@ const ProjectsController = {
             const data = await ProjectsService.respondToInvitation(
                 req.params.id,
                 true,
-                req.user
+                req.tenant
             );
 
             return res.json({ success: true, data });
@@ -133,7 +134,7 @@ const ProjectsController = {
             const data = await ProjectsService.respondToInvitation(
                 req.params.id,
                 false,
-                req.user
+                req.tenant
             );
 
             return res.json({ success: true, data });
@@ -145,7 +146,7 @@ const ProjectsController = {
     async getInvitations(req, res, next) {
         try {
             const data = await ProjectsService.getMyInvitations(
-                req.user
+                req.tenant
             );
 
             return res.json({ success: true, data });
@@ -154,14 +155,12 @@ const ProjectsController = {
         }
     },
 
-
     async getProjectInvitations(req, res, next) {
         try {
-            const data =
-                await ProjectsService.getProjectInvitations(
-                    req.params.projectId,
-                    req.user
-                );
+            const data = await ProjectsService.getProjectInvitations(
+                req.params.projectId,
+                req.tenant
+            );
 
             return res.status(200).json({
                 success: true,
@@ -171,7 +170,6 @@ const ProjectsController = {
             return handleError(error, res, next);
         }
     },
-
 };
 
 module.exports = ProjectsController;
