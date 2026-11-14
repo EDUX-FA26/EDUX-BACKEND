@@ -285,6 +285,14 @@ const NotificationsRepository = {
 
     return rows;
   },
+
+  async findActiveUserIdsExcept(userId) {
+    const { rows } = await pool.query(
+      `SELECT id FROM users WHERE is_active = true AND id <> $1`,
+      [userId]
+    );
+    return rows.map((row) => row.id);
+  }
 };
 
 module.exports = NotificationsRepository;

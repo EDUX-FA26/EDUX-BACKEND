@@ -35,6 +35,8 @@ const {
 const {
   createPlatformRouter,
 } = require("./modules/platform/platform.routes");
+const forumRoutes = require("./modules/forum/forum.routes");
+
 
 // =========================
 // Middleware
@@ -47,7 +49,9 @@ app.use(
   })
 );
 
-app.use(express.json());
+// Forum attachments are sent as small data URLs together with the post/comment.
+// Keep a bounded request size while allowing multiple images or documents.
+app.use(express.json({ limit: '20mb' }));
 
 app.use(express.urlencoded({ extended: true }));
 
@@ -120,6 +124,7 @@ app.use("/api/communications", communicationsRoutes);
 app.use("/api/focus", focusRoutes);
 app.use("/api/todos", todosRoutes);
 app.use("/api/ai-chat", aiChatRoutes);
+app.use("/api/forum", forumRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
