@@ -2,7 +2,7 @@ const { pool } = require('../../config/db.config');
 
 const ClassMaterialRepository = {
   /**
-   * Lấy danh sách tài liệu của lớp (có phân trang) - Đã tối ưu song song
+   * Lấy danh sách tài liệu của lớp (có phân trang) theo school_id - Đã tối ưu song song
    */
   async findByClassId(classId, schoolId, { page = 1, limit = 20 } = {}) {
     page = Number(page);
@@ -11,20 +11,14 @@ const ClassMaterialRepository = {
 
     const countQuery = `
       SELECT COUNT(*) FROM class_materials
-      WHERE class_id = $1
-        AND EXISTS (
-          SELECT 1 FROM classes c
-          WHERE c.id = class_materials.class_id
-            AND c.school_id = $2
-        )
+      WHERE class_id = $1 AND school_id = $2
     `;
 
     const query = `
       SELECT cm.*, up.full_name AS uploaded_by_name
       FROM class_materials cm
-      JOIN user_profiles up ON cm.uploaded_by = up.user_id
-      JOIN classes c ON c.id = cm.class_id AND c.school_id = $2
-      WHERE cm.class_id = $1
+      LEFT JOIN user_profiles up ON cm.uploaded_by = up.user_id
+      WHERE cm.class_id = $1 AND cm.school_id = $2
       ORDER BY cm.created_at DESC
       LIMIT $3 OFFSET $4
     `;
@@ -40,15 +34,14 @@ const ClassMaterialRepository = {
   },
 
   /**
-   * Lấy chi tiết 1 tài liệu lớp theo id
+   * Lấy chi tiết 1 tài liệu lớp theo id và school_id
    */
   async findById(id, schoolId) {
     const query = `
       SELECT cm.*, up.full_name AS uploaded_by_name
       FROM class_materials cm
-      JOIN user_profiles up ON cm.uploaded_by = up.user_id
-      JOIN classes c ON c.id = cm.class_id AND c.school_id = $2
-      WHERE cm.id = $1
+      LEFT JOIN user_profiles up ON cm.uploaded_by = up.user_id
+      WHERE cm.id = $1 AND cm.school_id = $2
     `;
     const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
@@ -57,15 +50,15 @@ const ClassMaterialRepository = {
   /**
    * Tạo mới tài liệu lớp
    */
-  async create({ class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by }) {
+  async create({ school_id, class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by }) {
     const query = `
       INSERT INTO class_materials
-        (class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        (school_id, class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `;
     const { rows } = await pool.query(query, [
-      class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by
+      school_id, class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by
     ]);
     return rows[0];
   },
@@ -73,7 +66,7 @@ const ClassMaterialRepository = {
   /**
    * Cập nhật tài liệu lớp
    */
-  async update(id, data, schoolId) {
+  async update(id, schoolId, data) {
     const allowedFields = ['title', 'description', 'is_private'];
     const fields = [];
     const values = [];
@@ -95,13 +88,7 @@ const ClassMaterialRepository = {
     const query = `
       UPDATE class_materials
       SET ${fields.join(', ')}
-      WHERE id = $${idx}
-        AND EXISTS (
-          SELECT 1
-          FROM classes c
-          WHERE c.id = class_materials.class_id
-            AND c.school_id = $${idx + 1}
-        )
+      WHERE id = $${idx} AND school_id = $${idx + 1}
       RETURNING *
     `;
     const { rows } = await pool.query(query, values);
@@ -112,17 +99,7 @@ const ClassMaterialRepository = {
    * Xóa tài liệu lớp
    */
   async delete(id, schoolId) {
-    const query = `
-      DELETE FROM class_materials
-      WHERE id = $1
-        AND EXISTS (
-          SELECT 1
-          FROM classes c
-          WHERE c.id = class_materials.class_id
-            AND c.school_id = $2
-        )
-      RETURNING *
-    `;
+    const query = `DELETE FROM class_materials WHERE id = $1 AND school_id = $2 RETURNING *`;
     const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
   },

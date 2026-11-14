@@ -5,6 +5,8 @@ const AssignmentController = {
   ...require('./assignment.controller')
 };
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
   createAssignmentSchema,
@@ -16,20 +18,13 @@ const assignmentMaterialRoutes = require('../assignment-materials/assignmentMate
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-const authorize = (...roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions' });
-  }
-  next();
-};
-
 const router = express.Router();
-router.use(authenticate);
+router.use(authenticate, requireSchoolContext);
 
 // CRUD cho assignments
 router.post(
   '/', 
-  authorize('admin', 'lecturer'), 
+  authorizeSchoolRoles('school_admin', 'lecturer'), 
   upload.array('materials'), 
   validate(createAssignmentSchema), 
   AssignmentController.createAssignment
@@ -37,18 +32,20 @@ router.post(
 
 router.get(
   '/', 
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   validate(queryAssignmentsSchema, 'query'), 
   AssignmentController.getAssignments
 );
 
 router.get(
   '/:id', 
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   AssignmentController.getAssignmentById
 );
 
 router.patch(
   '/:id', 
-  authorize('admin', 'lecturer'), 
+  authorizeSchoolRoles('school_admin', 'lecturer'), 
   upload.array('materials'),
   validate(updateAssignmentSchema), 
   AssignmentController.updateAssignment
@@ -56,14 +53,14 @@ router.patch(
 
 router.patch(
   '/:id/publish-status', 
-  authorize('admin', 'lecturer'), 
+  authorizeSchoolRoles('school_admin', 'lecturer'), 
   validate(updateStatusSchema), 
   AssignmentController.updatePublishStatus
 );
 
 router.delete(
   '/:id', 
-  authorize('admin', 'lecturer'), 
+  authorizeSchoolRoles('school_admin', 'lecturer'), 
   AssignmentController.deleteAssignment
 );
 

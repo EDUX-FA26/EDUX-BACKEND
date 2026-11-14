@@ -4,6 +4,8 @@ const multer = require('multer');
 const SubmissionController = require('./submission.controller');
 const gradingController = require('../grading/grading.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
   submitSubmissionSchema,
@@ -14,30 +16,27 @@ const {
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-const authorize = (...roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions' });
-  }
-  next();
-};
-
 const router = express.Router();
-router.use(authenticate);
+router.use(authenticate, requireSchoolContext);
 
 // Các routes cá nhân (của student)
-router.get('/my-submissions', SubmissionController.getMySubmissions);
+router.get(
+  '/my-submissions',
+  authorizeSchoolRoles('student'),
+  SubmissionController.getMySubmissions
+);
 
 // Lấy bài nộp của chính mình theo assignmentId
 router.get(
   '/assignments/:assignmentId/my-submission',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   SubmissionController.getMySubmissionByAssignment
 );
 
-// Danh sách bài nộp của 1 assignment (cho lecturer/admin, hoặc student xem bài của chính mình)
+// Danh sách bài nộp của 1 assignment (cho lecturer/school_admin, hoặc student xem bài của chính mình)
 router.get(
   '/assignments/:assignmentId',
-  authorize('admin', 'lecturer', 'student'),
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   validate(queryAssignmentSubmissionsSchema, 'query'),
   SubmissionController.getAssignmentSubmissions
 );
@@ -45,7 +44,7 @@ router.get(
 // 1. Lưu bản nháp bài nộp (Save Draft - chỉ cho student)
 router.post(
   '/:assignmentId/draft',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   upload.array('files'),
   validate(submitSubmissionSchema),
   SubmissionController.saveDraft
@@ -54,7 +53,7 @@ router.post(
 // 1a. Silent Auto-Save Draft File (chỉ cho student)
 router.post(
   '/:assignmentId/draft-file',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   upload.any(),
   SubmissionController.saveDraftFile
 );
@@ -62,20 +61,20 @@ router.post(
 // 1b. Xóa file bản nháp (chỉ cho student)
 router.delete(
   '/:assignmentId/draft-file',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   SubmissionController.removeDraftFile
 );
 
 // 1c. Silent Auto-Save Draft Declarations (Debounced text/JSON - chỉ cho student)
 router.patch(
   '/:assignmentId/draft-declarations',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   validate(saveDraftDeclarationsSchema),
   SubmissionController.saveDraftDeclarations
 );
 router.post(
   '/:assignmentId/draft-declarations',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   validate(saveDraftDeclarationsSchema),
   SubmissionController.saveDraftDeclarations
 );
@@ -83,14 +82,14 @@ router.post(
 // 1d. Pre-submission AI Sanity Check (chỉ cho student, on-demand)
 router.post(
   '/:assignmentId/sanity-check',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   SubmissionController.sanityCheck
 );
 
 // 2. Nộp bài chính thức (Submit Final - chỉ cho student)
 router.post(
   '/:assignmentId/submit-final',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   upload.array('files'),
   validate(submitSubmissionSchema),
   SubmissionController.submitFinal
@@ -99,7 +98,7 @@ router.post(
 // 2b. Chốt nộp bài chính thức từ bản nháp theo submission ID
 router.patch(
   '/:id/submit',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   upload.array('files'),
   validate(submitSubmissionSchema),
   SubmissionController.submitFinalById
@@ -108,7 +107,7 @@ router.patch(
 // Nộp bài / Nộp lại bài / Draft qua endpoint files (cho student)
 router.post(
   '/:assignmentId/files',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   upload.array('files'),
   validate(submitSubmissionSchema),
   SubmissionController.submitAssignment
@@ -117,26 +116,28 @@ router.post(
 // Xem chi tiết 1 bài nộp (có query ?include_history=true)
 router.get(
   '/:id',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   SubmissionController.getSubmissionById
 );
 
 // Xóa 1 file trong version hiện tại của bài nộp (cho student)
 router.delete(
   '/:id/files/:fileId',
-  authorize('student'),
+  authorizeSchoolRoles('student'),
   SubmissionController.deleteSubmissionFile
 );
 
 // Lấy (tải) file cụ thể trong bài nộp
 router.get(
   '/:id/files/:fileId',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   SubmissionController.getSubmissionFile
 );
 
-// Đánh giá bài nộp (cho lecturer/admin)
+// Đánh giá bài nộp (cho lecturer/school_admin)
 router.patch(
   '/:id/review',
-  authorize('admin', 'lecturer'),
+  authorizeSchoolRoles('school_admin', 'lecturer'),
   validate(reviewSubmissionSchema),
   SubmissionController.reviewSubmission
 );
@@ -144,19 +145,19 @@ router.patch(
 // AI Audit Rubric: POST /api/submissions/:submissionId/ai-rubric or /api/submissions/:submissionId/evaluate
 router.post(
   '/:submissionId/ai-rubric',
-  authorize('admin', 'lecturer'),
+  authorizeSchoolRoles('school_admin', 'lecturer'),
   gradingController.handleAuditRubric
 );
 
 router.post(
   '/:submissionId/evaluate',
-  authorize('admin', 'lecturer'),
+  authorizeSchoolRoles('school_admin', 'lecturer'),
   gradingController.handleAuditRubric
 );
 
 router.get(
   '/:submissionId/ai-rubric',
-  authorize('admin', 'lecturer'),
+  authorizeSchoolRoles('school_admin', 'lecturer'),
   gradingController.handleAuditRubric
 );
 

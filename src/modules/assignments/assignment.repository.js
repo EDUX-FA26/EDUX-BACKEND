@@ -8,16 +8,17 @@ const AssignmentRepository = {
   async create(data, client = pool) {
     const query = `
       INSERT INTO assignments (
-        id, uuid, class_id, session_id, title, description, instructions, deadline,
+        id, uuid, school_id, class_id, session_id, title, description, instructions, deadline,
         max_score, weight, ai_declaration_required, min_ai_interactions,
         max_ai_interactions, allow_late_submission, publish_status, published_at, created_by
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
       ) RETURNING *;
     `;
     const values = [
       data.id,
       data.uuid,
+      data.school_id,
       data.class_id,
       data.session_id,
       data.title,
@@ -42,7 +43,7 @@ const AssignmentRepository = {
   /**
    * Cập nhật thông tin assignment
    */
-  async update(id, data) {
+  async update(id, schoolId, data) {
     const allowedFields = [
       'title', 'description', 'instructions', 'deadline', 'max_score', 'weight',
       'ai_declaration_required', 'min_ai_interactions', 'max_ai_interactions',
@@ -64,12 +65,12 @@ const AssignmentRepository = {
     if (fields.length === 0) return null;
 
     fields.push(`updated_at = NOW()`);
-    values.push(id);
+    values.push(id, schoolId);
 
     const query = `
       UPDATE assignments
       SET ${fields.join(', ')}
-      WHERE id = $${idx}
+      WHERE id = $${idx} AND school_id = $${idx + 1}
       RETURNING *;
     `;
 
@@ -80,22 +81,22 @@ const AssignmentRepository = {
   /**
    * Thay đổi trạng thái xuất bản
    */
-  async updatePublishStatus(id, publishStatus) {
+  async updatePublishStatus(id, schoolId, publishStatus) {
     let query;
-    const values = [publishStatus, id];
+    const values = [publishStatus, id, schoolId];
 
     if (publishStatus === 'published') {
       query = `
         UPDATE assignments
         SET publish_status = $1, published_at = COALESCE(published_at, NOW()), updated_at = NOW()
-        WHERE id = $2
+        WHERE id = $2 AND school_id = $3
         RETURNING *;
       `;
     } else {
       query = `
         UPDATE assignments
         SET publish_status = $1, updated_at = NOW()
-        WHERE id = $2
+        WHERE id = $2 AND school_id = $3
         RETURNING *;
       `;
     }
@@ -107,7 +108,7 @@ const AssignmentRepository = {
   /**
    * Lấy chi tiết assignment
    */
-  async findById(id) {
+  async findById(id, schoolId) {
     const query = `
       SELECT 
         a.*, 
@@ -120,24 +121,24 @@ const AssignmentRepository = {
         sem.name as semester_name,
         u.full_name as creator_name
       FROM assignments a
-      JOIN classes c ON a.class_id = c.id
-      JOIN subjects s ON c.subject_id = s.id
-      LEFT JOIN semesters sem ON c.semester_id = sem.id
+      JOIN classes c ON a.class_id = c.id AND c.school_id = a.school_id
+      JOIN subjects s ON c.subject_id = s.id AND s.school_id = a.school_id
+      LEFT JOIN semesters sem ON c.semester_id = sem.id AND sem.school_id = a.school_id
       LEFT JOIN user_profiles u ON a.created_by = u.user_id
-      WHERE a.id = $1
+      WHERE a.id = $1 AND a.school_id = $2
     `;
-    const { rows } = await pool.query(query, [id]);
+    const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
   },
 
   /**
-   * Lấy danh sách phân trang (có filter theo class, role, trạng thái)
+   * Lấy danh sách phân trang (có filter theo school, class, role, trạng thái)
    */
-  async findMany({ page = 1, limit = 10, search, class_id, publish_status }, user) {
+  async findMany({ page = 1, limit = 10, search, class_id, publish_status }, tenant) {
     const offset = (page - 1) * limit;
-    let whereClauses = [];
-    let values = [];
-    let idx = 1;
+    let whereClauses = [`a.school_id = $1`];
+    let values = [tenant.schoolId];
+    let idx = 2;
 
     // Filter by class_id if provided
     if (class_id) {
@@ -157,29 +158,24 @@ const AssignmentRepository = {
       values.push(`%${search}%`);
     }
 
-    // Row-Level Isolation (Role-based filtering)
-    if (user.role === 'student') {
-      // Student chỉ thấy bài đã publish hoặc closed của lớp đang học (active)
+    // Row-Level Isolation (School Role-based filtering)
+    if (tenant.role === 'student') {
+      // Student chỉ thấy bài đã publish hoặc closed của lớp đang học (active) trong cùng trường
       whereClauses.push(`a.publish_status IN ('published', 'closed')`);
       whereClauses.push(`
         EXISTS (
           SELECT 1 FROM class_members cm 
           WHERE cm.class_id = a.class_id 
           AND cm.student_id = $${idx++}
+          AND cm.school_id = a.school_id
           AND cm.status = 'active'
         )
       `);
-      values.push(user.id);
-    } else if (user.role === 'lecturer') {
-      // Lecturer thấy tất cả bài trong lớp họ giảng dạy
-      whereClauses.push(`
-        EXISTS (
-          SELECT 1 FROM classes c 
-          WHERE c.id = a.class_id 
-          AND c.lecturer_id = $${idx++}
-        )
-      `);
-      values.push(user.id);
+      values.push(tenant.userId);
+    } else if (tenant.role === 'lecturer') {
+      // Lecturer thấy tất cả bài trong lớp họ giảng dạy tại trường hiện tại
+      whereClauses.push(`c.lecturer_id = $${idx++}`);
+      values.push(tenant.userId);
     }
 
     const whereString = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -187,6 +183,8 @@ const AssignmentRepository = {
     const countQuery = `
       SELECT COUNT(*) 
       FROM assignments a
+      JOIN classes c ON a.class_id = c.id AND c.school_id = a.school_id
+      JOIN subjects s ON c.subject_id = s.id AND s.school_id = a.school_id
       ${whereString}
     `;
     const { rows: countRows } = await pool.query(countQuery, values);
@@ -201,8 +199,8 @@ const AssignmentRepository = {
         s.name as subject_name,
         s.code as subject_code
       FROM assignments a
-      JOIN classes c ON a.class_id = c.id
-      JOIN subjects s ON c.subject_id = s.id
+      JOIN classes c ON a.class_id = c.id AND c.school_id = a.school_id
+      JOIN subjects s ON c.subject_id = s.id AND s.school_id = a.school_id
       ${whereString}
       ORDER BY a.created_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
@@ -216,9 +214,9 @@ const AssignmentRepository = {
   /**
    * Xóa assignment
    */
-  async delete(id) {
-    const query = `DELETE FROM assignments WHERE id = $1 RETURNING *`;
-    const { rows } = await pool.query(query, [id]);
+  async delete(id, schoolId) {
+    const query = `DELETE FROM assignments WHERE id = $1 AND school_id = $2 RETURNING *`;
+    const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
   }
 };

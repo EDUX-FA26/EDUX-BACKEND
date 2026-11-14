@@ -10,10 +10,10 @@ const ClassMaterialRepository = require('./classMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
 
 /**
- * Kiểm tra quyền truy cập vào lớp học.
- * - school_admin: được phép trong trường đã chọn
- * - lecturer: phải là giảng viên của lớp
- * - student: phải là thành viên active của lớp
+ * Kiểm tra quyền truy cập vào lớp học theo trường hiện tại.
+ * - school_admin: được phép trong phạm vi trường hiện tại
+ * - lecturer: phải là giảng viên của lớp trong trường hiện tại
+ * - student: phải là thành viên active của lớp trong trường hiện tại
  */
 async function verifyClassAccess(classId, tenant) {
   const { rows: classRows } = await pool.query(
@@ -32,18 +32,9 @@ async function verifyClassAccess(classId, tenant) {
 
   if (tenant.role === 'student') {
     const { rows: memberRows } = await pool.query(
-      `SELECT 1
-       FROM class_members cm
-       JOIN school_memberships sm
-         ON sm.school_id = cm.school_id
-        AND sm.user_id = cm.student_id
-        AND sm.role = 'student'
-        AND sm.status = 'active'
-       WHERE cm.class_id = $1
-         AND cm.school_id = $2
-         AND cm.student_id = $3
-         AND cm.status = 'active'`,
-      [classId, tenant.schoolId, tenant.userId]
+      `SELECT 1 FROM class_members
+       WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [classId, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('FORBIDDEN');
     return classData;
@@ -67,7 +58,7 @@ const ClassMaterialService = {
   },
 
   /**
-   * UC19 — Upload tài liệu lên lớp học (chỉ lecturer)
+   * UC19 — Upload tài liệu lên lớp học (chỉ lecturer / school_admin)
    */
   async uploadMaterial(classId, body, file, tenant) {
     await verifyClassAccess(classId, tenant);
@@ -88,6 +79,7 @@ const ClassMaterialService = {
     );
 
     const material = await ClassMaterialRepository.create({
+      school_id: tenant.schoolId,
       class_id: classId,
       title: body.title,
       description: body.description || '',
@@ -106,27 +98,19 @@ const ClassMaterialService = {
    * UC17 — Lấy chi tiết 1 tài liệu lớp
    */
   async getMaterialById(materialId, tenant) {
-    const material = await ClassMaterialRepository.findById(
-      materialId,
-      tenant.schoolId
-    );
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     await verifyClassAccess(material.class_id, tenant);
 
-    // Nếu tài liệu là private, chỉ lecturer/admin của lớp hoặc student enrolled mới xem được
-    // (verifyClassAccess đã xử lý điều này)
     return material;
   },
 
   /**
-   * UC20 — Cập nhật metadata tài liệu lớp (chỉ lecturer)
+   * UC20 — Cập nhật metadata tài liệu lớp (chỉ lecturer / school_admin)
    */
   async updateMaterial(materialId, body, tenant) {
-    const material = await ClassMaterialRepository.findById(
-      materialId,
-      tenant.schoolId
-    );
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     await verifyClassAccess(material.class_id, tenant);
@@ -135,22 +119,15 @@ const ClassMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const updated = await ClassMaterialRepository.update(
-      materialId,
-      body,
-      tenant.schoolId
-    );
+    const updated = await ClassMaterialRepository.update(materialId, tenant.schoolId, body);
     return updated;
   },
 
   /**
-   * UC21 — Xóa tài liệu lớp (chỉ lecturer)
+   * UC21 — Xóa tài liệu lớp (chỉ lecturer / school_admin)
    */
   async deleteMaterial(materialId, tenant) {
-    const material = await ClassMaterialRepository.findById(
-      materialId,
-      tenant.schoolId
-    );
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     await verifyClassAccess(material.class_id, tenant);
@@ -167,10 +144,7 @@ const ClassMaterialService = {
       })
     );
 
-    const deleted = await ClassMaterialRepository.delete(
-      materialId,
-      tenant.schoolId
-    );
+    const deleted = await ClassMaterialRepository.delete(materialId, tenant.schoolId);
     return deleted;
   },
 
@@ -178,10 +152,7 @@ const ClassMaterialService = {
    * UC18 — Tải xuống tài liệu lớp (presigned URL)
    */
   async downloadMaterial(materialId, tenant) {
-    const material = await ClassMaterialRepository.findById(
-      materialId,
-      tenant.schoolId
-    );
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
     await verifyClassAccess(material.class_id, tenant);
@@ -197,6 +168,7 @@ const ClassMaterialService = {
 
     return {
       url: presignedUrl,
+      download_url: presignedUrl,
       file_name: material.file_name,
       file_type: material.file_type,
       file_size: material.file_size,
