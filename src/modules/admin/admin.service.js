@@ -7,123 +7,178 @@ const { getIO } = require("../../config/socket.config");
 const {
   emitCreatedNotifications,
 } = require('../notifications/notifications.realtime');
+const schoolUsersRepository = require(
+  "./admin.school-users.repository"
+);
+const schoolDepartmentsRepository = require(
+  "./admin.school-departments.repository"
+);
+const schoolAcademicReadRepository = require(
+  "./admin.school-academic-read.repository"
+);
+const schoolClassesRepository = require(
+  "./admin.school-classes.repository"
+);
 const AdminService = {
-  /**
-   * UC 86 — Tạo user mới với role tùy chọn (admin, lecturer, student)
-   */
-  async createUser(data) {
-    // 1. Kiểm tra trùng lặp email, username, student_code
-    const duplicates = await authRepository.checkDuplication(
-      data.email,
-      data.username || null,
-      data.student_code || null
-    );
-    if (duplicates && duplicates.length > 0) {
-      const error = new Error(`Conflict: ${duplicates.join(", ")} đã tồn tại`);
-      error.status = 409;
-      throw error;
-    }
 
-    // 2. Hash password
-    const password_hash = await bcrypt.hash(data.password, 10);
+  // 007D-3B — Create user / enroll existing identity
+  async createUser(data, tenant) {
+    const passwordHash = data.password
+      ? await bcrypt.hash(data.password, 12)
+      : null;
 
-    const userData = {
-      ...data,
-      password_hash,
-    };
+    try {
+      const result =
+        await schoolUsersRepository.createSchoolUser({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          data,
+          passwordHash,
+        });
 
-    // 3. Tạo user (transaction: insert users + user_profiles)
-    const newUser = await adminRepository.createUser(userData);
+      const user =
+        await schoolUsersRepository.findSchoolMemberById({
+          schoolId: tenant.schoolId,
+          userId: result.userId,
+        });
 
-    // 4. Fetch lại full profile để trả về
-    return await adminRepository.findUserByIdWithProfile(newUser.id);
-  },
-
-  /**
-   * UC 87 — Cập nhật thông tin user
-   */
-  async updateUser(userId, data) {
-    // Kiểm tra user tồn tại
-    const existingUser = await adminRepository.findUserByIdWithProfile(userId);
-    if (!existingUser) {
-      const error = new Error("Không tìm thấy người dùng");
-      error.status = 404;
-      throw error;
-    }
-
-    // Nếu đổi email, kiểm tra trùng lặp
-    if (data.email && data.email !== existingUser.email) {
-      const duplicates = await authRepository.checkDuplication(data.email, null, null);
-      if (duplicates && duplicates.includes("email")) {
-        const error = new Error("Email đã được sử dụng");
-        error.status = 409;
-        throw error;
+      return {
+        ...user,
+        linked_existing_user: result.linkedExistingUser,
+      };
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(
+          new Error(
+            "Email, username hoặc mã thành viên đã tồn tại"
+          ),
+          { status: 409 }
+        );
       }
-    }
 
-    // Nếu đổi student_code, kiểm tra trùng lặp
-    if (data.student_code && data.student_code !== existingUser.student_code) {
-      const duplicates = await authRepository.checkDuplication(null, null, data.student_code);
-      if (duplicates && duplicates.includes("student_code")) {
-        const error = new Error("Mã số sinh viên đã được sử dụng");
-        error.status = 409;
-        throw error;
+      if (error.code === "23503") {
+        throw Object.assign(
+          new Error("Dữ liệu liên kết không hợp lệ"),
+          { status: 400 }
+        );
       }
-    }
 
-    await adminRepository.updateUser(userId, data);
-
-    // Trả về profile đã cập nhật
-    return await adminRepository.findUserByIdWithProfile(userId);
-  },
-
-  /**
-   * UC 88 — Tạm khóa tài khoản người dùng
-   */
-  async suspendUser(userId) {
-    const existingUser = await adminRepository.findUserByIdWithProfile(userId);
-    if (!existingUser) {
-      const error = new Error("Không tìm thấy người dùng");
-      error.status = 404;
       throw error;
     }
-
-    await adminRepository.updateUserStatus(userId, false);
-    return { success: true };
   },
 
-  /**
-   * UC 89 — Kích hoạt lại tài khoản người dùng
-   */
-  async activateUser(userId) {
-    const existingUser = await adminRepository.findUserByIdWithProfile(userId);
-    if (!existingUser) {
-      const error = new Error("Không tìm thấy người dùng");
-      error.status = 404;
+  // 007D-3B — Update membership and school profile
+  async updateUser(userId, data, tenant) {
+    try {
+      await schoolUsersRepository.updateSchoolUser({
+        schoolId: tenant.schoolId,
+        actorUserId: tenant.userId,
+        targetUserId: userId,
+        data,
+      });
+
+      return schoolUsersRepository.findSchoolMemberById({
+        schoolId: tenant.schoolId,
+        userId,
+      });
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(
+          new Error("Mã thành viên đã tồn tại trong trường"),
+          { status: 409 }
+        );
+      }
+
+      if (error.code === "23503") {
+        throw Object.assign(
+          new Error("Khoa hoặc dữ liệu liên kết không hợp lệ"),
+          { status: 400 }
+        );
+      }
+
       throw error;
     }
-
-    await adminRepository.updateUserStatus(userId, true);
-    return { success: true };
   },
 
-  /**
-   * Lấy danh sách tất cả users (phục vụ giao diện quản lý)
-   */
-  async getAllUsers() {
-    return await adminRepository.getAllUsers();
+  // ============================================
+  // SCHOOL-SCOPED USER LIST
+  // ============================================
+
+  async getAllUsers(schoolId) {
+    return adminRepository.getAllUsers(schoolId);
   },
+
+  // ============================================
+  // SCHOOL MEMBERSHIP SUSPENSION
+  // ============================================
+
+  async suspendUser({
+    schoolId,
+    actorUserId,
+    targetUserId,
+  }) {
+    return adminRepository.setSchoolMemberStatus({
+      schoolId,
+      actorUserId,
+      targetUserId,
+      status: "suspended",
+    });
+  },
+
+  // ============================================
+  // SCHOOL MEMBERSHIP ACTIVATION
+  // ============================================
+
+  async activateUser({
+    schoolId,
+    actorUserId,
+    targetUserId,
+  }) {
+    return adminRepository.setSchoolMemberStatus({
+      schoolId,
+      actorUserId,
+      targetUserId,
+      status: "active",
+    });
+  },
+
 
   /**
    * UC 90 — Broadcast Notification
    */
 
-  async broadcastNotification(data) {
+  async broadcastNotification(data, tenant) {
+    if (
+      tenant?.role !== "school_admin" ||
+      !tenant.schoolId ||
+      !tenant.userId
+    ) {
+      throw Object.assign(
+        new Error("Chỉ School Admin có thể gửi thông báo trong trường"),
+        { status: 403 }
+      );
+    }
+
     const { title, message, target } = data;
 
-    // 1. Lấy danh sách người nhận
+    const allowedTargets = [
+      "all",
+      "student",
+      "lecturer",
+    ];
+
+    if (!allowedTargets.includes(target)) {
+      const error = new Error("INVALID_BROADCAST_TARGET");
+      error.status = 400;
+      throw error;
+    }
+
+    // Recipients are derived from active memberships, never global roles.
     const userIds =
-      await adminRepository.findUserIdsByTarget(target);
+      await adminRepository.findUserIdsBySchoolTarget(
+        tenant.schoolId,
+        target
+      );
 
     if (userIds.length === 0) {
       return {
@@ -138,8 +193,10 @@ const AdminService = {
       title,
       message,
       type: "system_announcement",
-      related_entity_type: "admin_broadcast",
+      related_entity_type: "school_broadcast",
       related_entity_id: null,
+      notification_scope: "school",
+      school_id: tenant.schoolId,
     }));
 
     // 3. Lưu notification vào PostgreSQL
@@ -168,8 +225,8 @@ const AdminService = {
   /**
    * Lấy danh sách các thông báo hệ thống đã gửi
    */
-  async getSystemNotifications() {
-    return await adminRepository.getSystemNotifications();
+  async getSystemNotifications(schoolId) {
+    return await adminRepository.getSystemNotifications(schoolId);
   },
 
   /**
@@ -364,114 +421,245 @@ const AdminService = {
     return await adminRepository.processAutoAssignExcelImport(students, lecturers);
   },
 
-  /**
-   * Quản lý Khoa / Bộ môn (Departments)
-   */
-  async getAllDepartments() {
-    return await adminRepository.getAllDepartments();
+
+  // =============================================
+  // 007D-3C: SCHOOL DEPARTMENTS
+  // =============================================
+
+  async getAllDepartments(schoolId) {
+    return schoolDepartmentsRepository
+      .getAllDepartments(schoolId);
   },
 
-  async createDepartment(data) {
+  async createDepartment(data, tenant) {
     try {
-      return await adminRepository.createDepartment(data);
+      return await schoolDepartmentsRepository
+        .createDepartment({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          data,
+        });
     } catch (error) {
       if (error.code === "23505") {
-        throw Object.assign(new Error("Mã khoa đã tồn tại"), { status: 409 });
+        throw Object.assign(
+          new Error("Mã khoa đã tồn tại"),
+          { status: 409 }
+        );
       }
+
       throw error;
     }
   },
 
-  async updateDepartment(id, data) {
+  async updateDepartment(id, data, tenant) {
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (!uuidRegex.test(id)) {
+      throw Object.assign(
+        new Error("ID khoa không hợp lệ"),
+        { status: 400 }
+      );
+    }
+
     try {
-      const updated = await adminRepository.updateDepartment(id, data);
+      const updated =
+        await schoolDepartmentsRepository
+          .updateDepartment({
+            schoolId: tenant.schoolId,
+            actorUserId: tenant.userId,
+            departmentId: id,
+            data,
+          });
+
       if (!updated) {
-        throw Object.assign(new Error("Không tìm thấy khoa"), { status: 404 });
+        throw Object.assign(
+          new Error("Không tìm thấy khoa trong trường"),
+          { status: 404 }
+        );
       }
+
       return updated;
     } catch (error) {
       if (error.code === "23505") {
-        throw Object.assign(new Error("Mã khoa đã tồn tại"), { status: 409 });
+        throw Object.assign(
+          new Error("Mã khoa đã tồn tại"),
+          { status: 409 }
+        );
       }
+
       throw error;
     }
   },
 
-  async deleteDepartment(id) {
-    const result = await adminRepository.deleteDepartment(id);
-    if (!result) {
-      throw Object.assign(new Error("Không tìm thấy khoa"), { status: 404 });
+  async deleteDepartment(id, tenant) {
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (!uuidRegex.test(id)) {
+      throw Object.assign(
+        new Error("ID khoa không hợp lệ"),
+        { status: 400 }
+      );
     }
+
+    const result =
+      await schoolDepartmentsRepository
+        .deleteDepartment({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          departmentId: id,
+        });
+
+    if (!result) {
+      throw Object.assign(
+        new Error("Không tìm thấy khoa trong trường"),
+        { status: 404 }
+      );
+    }
+
     return result;
   },
 
-  async createClass(data) {
+
+
+  async createClass(data, tenant) {
     try {
-      return await adminRepository.createClass(data);
+      return await schoolClassesRepository
+        .createSchoolClass({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          data,
+        });
     } catch (error) {
       if (error.code === "23505") {
-        throw Object.assign(new Error("Mã lớp đã tồn tại trong học kỳ và môn học này"), { status: 409 });
+        throw Object.assign(
+          new Error("Mã lớp đã tồn tại hoặc vi phạm ràng buộc duy nhất"),
+          { status: 409 }
+        );
       }
+
       if (error.code === "23503") {
-        throw Object.assign(new Error("Học kỳ, môn học hoặc giảng viên không tồn tại"), { status: 400 });
+        throw Object.assign(
+          new Error("Dữ liệu học kỳ, môn học, giảng viên hoặc buổi học không hợp lệ"),
+          { status: 400 }
+        );
       }
+
       throw error;
     }
   },
 
-  async updateClass(id, data) {
+
+
+  async updateClass(id, data, tenant) {
     try {
-      return await adminRepository.updateClass(id, data);
+      return await schoolClassesRepository
+        .updateSchoolClass({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          classId: id,
+          data,
+        });
     } catch (error) {
       if (error.code === "23505") {
-        throw Object.assign(new Error("Mã lớp đã tồn tại trong học kỳ và môn học này"), { status: 409 });
+        throw Object.assign(
+          new Error("Mã lớp đã tồn tại"),
+          { status: 409 }
+        );
       }
+
       if (error.code === "23503") {
-        throw Object.assign(new Error("Học kỳ, môn học hoặc giảng viên không hợp lệ"), { status: 400 });
+        throw Object.assign(
+          new Error("Dữ liệu liên kết không hợp lệ"),
+          { status: 400 }
+        );
       }
+
       throw error;
     }
   },
 
-  async deleteClass(id) {
-    return await adminRepository.deleteClass(id);
+  async deleteClass(id, tenant) {
+    return schoolClassesRepository
+      .deleteSchoolClass({
+        schoolId: tenant.schoolId,
+        actorUserId: tenant.userId,
+        classId: id,
+      });
   },
+
 
   /**
    * Lấy danh sách lớp học
    */
-  async getAllClasses() {
-    return await adminRepository.getAllClasses();
+
+  async getLecturers(schoolId) {
+    return schoolAcademicReadRepository
+      .getLecturers(schoolId);
   },
 
-  async getClassStudents(classId) {
-    return await adminRepository.getClassStudents(classId);
+  async getAllClasses(schoolId) {
+    return schoolAcademicReadRepository
+      .getAllClasses(schoolId);
   },
 
-  async getClassSlots(classId) {
-    return await adminRepository.getClassSlots(classId);
+  async getClassStudents(classId, schoolId) {
+    return schoolAcademicReadRepository
+      .getClassStudents(schoolId, classId);
   },
 
-  async updateClassSlots(classId, payload) {
-    return await adminRepository.updateClassSlots(classId, payload);
+  async getClassSlots(classId, schoolId) {
+    return schoolAcademicReadRepository
+      .getClassSlots(schoolId, classId);
   },
 
-  async addClassStudent(classId, payload) {
-    return await adminRepository.addClassStudent(classId, payload);
+
+  async updateClassSlots(classId, payload, tenant) {
+    return await schoolClassesRepository.updateSchoolClassSlots({
+      schoolId: tenant.schoolId,
+      actorUserId: tenant.userId,
+      classId,
+      payload,
+    });
   },
 
-  async getLecturers() {
-    return await adminRepository.getLecturers();
-  },
 
-  async removeClassStudent(classId, studentId) {
-    const removed = await adminRepository.removeClassStudent(classId, studentId);
-    if (!removed) {
-      const error = new Error("Không tìm thấy sinh viên trong lớp");
-      error.status = 404;
+  async addClassStudent(classId, payload, tenant) {
+    try {
+      return await schoolClassesRepository
+        .addSchoolClassStudent({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          classId,
+          payload,
+        });
+    } catch (error) {
+      if (error.code === "23505") {
+        throw Object.assign(
+          new Error("Sinh viên đã có trong lớp"),
+          { status: 409 }
+        );
+      }
+
+      if (error.code === "23503") {
+        throw Object.assign(
+          new Error("Dữ liệu thành viên không hợp lệ"),
+          { status: 400 }
+        );
+      }
+
       throw error;
     }
-    return { success: true };
+  },
+
+  async removeClassStudent(classId, studentId, tenant) {
+    return schoolClassesRepository.removeSchoolClassStudent({
+      schoolId: tenant.schoolId,
+      actorUserId: tenant.userId,
+      classId,
+      studentId,
+    });
   },
 
   async importUsersData(fileBuffer, filename) {

@@ -4,7 +4,7 @@ const GradingController = {
   // ── UC 37 – Create Grade ─────────────────────────────────────────────────
   async createGrade(req, res, next) {
     try {
-      const grade = await GradingService.createGrade(req.body, req.user);
+      const grade = await GradingService.createGrade(req.body, req.tenant);
       res.status(201).json({ success: true, data: grade });
     } catch (error) {
       if (error.message === 'SUBMISSION_NOT_FOUND')
@@ -22,7 +22,7 @@ const GradingController = {
   // ── UC 38 – Update Grade ─────────────────────────────────────────────────
   async updateGrade(req, res, next) {
     try {
-      const grade = await GradingService.updateGrade(req.params.id, req.body, req.user);
+      const grade = await GradingService.updateGrade(req.params.id, req.body, req.tenant);
       if (!grade) {
         return res.status(400).json({ success: false, message: 'No valid fields provided for update' });
       }
@@ -41,7 +41,7 @@ const GradingController = {
   // ── UC 39 – View Grade ───────────────────────────────────────────────────
   async getGrade(req, res, next) {
     try {
-      const grade = await GradingService.getGrade(req.params.id, req.user);
+      const grade = await GradingService.getGrade(req.params.id, req.tenant);
       res.status(200).json({ success: true, data: grade });
     } catch (error) {
       if (error.message === 'GRADE_NOT_FOUND')
@@ -55,7 +55,7 @@ const GradingController = {
   // ── UC 41 – View Gradebook ───────────────────────────────────────────────
   async getGradebook(req, res, next) {
     try {
-      const gradebook = await GradingService.getGradebook(req.params.classId, req.user);
+      const gradebook = await GradingService.getGradebook(req.params.classId, req.tenant);
       res.status(200).json({ success: true, data: gradebook });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND')
@@ -76,7 +76,7 @@ const GradingController = {
         return res.status(400).json({ success: false, message: 'format phải là xlsx hoặc csv' });
       }
 
-      const result = await GradingService.exportGradebook(classId, format, req.user);
+      const result = await GradingService.exportGradebook(classId, format, req.tenant);
 
       if (format === 'csv') {
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -112,12 +112,15 @@ const GradingController = {
     try {
       const submissionId = req.params.submissionId || req.params.id;
       const force = req.query.force === 'true' || req.body?.force === true;
-      const result = await GradingService.auditRubricForSubmission(submissionId, { ...req.body, force });
+      const result = await GradingService.auditRubricForSubmission(submissionId, { ...req.body, force }, req.tenant);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
       if (error.message === 'SUBMISSION_NOT_FOUND') {
         return res.status(404).json({ success: false, message: 'Submission not found' });
+      }
+      if (error.message === 'FORBIDDEN') {
+        return res.status(403).json({ success: false, message: 'Access denied' });
       }
       next(error);
     }

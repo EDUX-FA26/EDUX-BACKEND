@@ -3,6 +3,8 @@ const multer = require('multer');
 
 const assignmentMaterialController = require('./assignmentMaterial.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
   createAssignmentMaterial,
@@ -13,34 +15,25 @@ const {
 const upload = multer({ storage: multer.memoryStorage() });
 
 // -----------------------------------------------------------------------
-// authorize helper
-// -----------------------------------------------------------------------
-const authorize = (...roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions' });
-  }
-  next();
-};
-
-// -----------------------------------------------------------------------
 // Router: gắn vào /api/assignments/:assignmentId/materials
 // mergeParams: true để kế thừa :assignmentId từ parent router
 // -----------------------------------------------------------------------
 const router = express.Router({ mergeParams: true });
-router.use(authenticate);
+router.use(authenticate, requireSchoolContext);
 
 // GET  /api/assignments/:assignmentId/materials
-// (lecturer + student enrolled đều có thể xem)
+// (lecturer + student enrolled + school_admin đều có thể xem)
 router.get(
   '/',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   validate(listAssignmentMaterialsQuery, 'query'),
   assignmentMaterialController.listMaterials
 );
 
-// POST /api/assignments/:assignmentId/materials  (chỉ lecturer)
+// POST /api/assignments/:assignmentId/materials  (chỉ lecturer / school_admin)
 router.post(
   '/',
-  authorize('lecturer', 'admin'),
+  authorizeSchoolRoles('lecturer', 'school_admin'),
   upload.single('file'),
   validate(createAssignmentMaterial),
   assignmentMaterialController.uploadMaterial
@@ -49,27 +42,29 @@ router.post(
 // GET  /api/assignments/:assignmentId/materials/:materialId
 router.get(
   '/:materialId',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   assignmentMaterialController.getMaterialById
 );
 
 // GET  /api/assignments/:assignmentId/materials/:materialId/download
 router.get(
   '/:materialId/download',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   assignmentMaterialController.downloadMaterial
 );
 
-// PATCH /api/assignments/:assignmentId/materials/:materialId  (chỉ lecturer)
+// PATCH /api/assignments/:assignmentId/materials/:materialId  (chỉ lecturer / school_admin)
 router.patch(
   '/:materialId',
-  authorize('lecturer', 'admin'),
+  authorizeSchoolRoles('lecturer', 'school_admin'),
   validate(updateAssignmentMaterial),
   assignmentMaterialController.updateMaterial
 );
 
-// DELETE /api/assignments/:assignmentId/materials/:materialId  (chỉ lecturer)
+// DELETE /api/assignments/:assignmentId/materials/:materialId  (chỉ lecturer / school_admin)
 router.delete(
   '/:materialId',
-  authorize('lecturer', 'admin'),
+  authorizeSchoolRoles('lecturer', 'school_admin'),
   assignmentMaterialController.deleteMaterial
 );
 

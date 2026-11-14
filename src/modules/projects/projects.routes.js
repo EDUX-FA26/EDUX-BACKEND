@@ -5,10 +5,20 @@ const router = express.Router();
 const { authenticate } = require(
   '../../middlewares/auth.middleware'
 );
+const { requireSchoolContext } = require(
+  '../../middlewares/requireSchoolContext'
+);
+const { authorizeSchoolRoles } = require(
+  '../../middlewares/authorizeSchoolRoles'
+);
 
 const controller = require('./projects.controller');
 
-router.use(authenticate);
+router.use(
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student')
+);
 
 // Sinh viên xem Project của mình
 router.get('/my', controller.getMine);

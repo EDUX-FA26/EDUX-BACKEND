@@ -135,54 +135,235 @@ class AuthService {
     return { email: profile.email };
   }
 
+
   async _createSession(user) {
-    authRepository.updateLastLogin(user.id).catch((err) => {
-      console.error("Failed to update last login:", err);
-    });
-
-    const payload = { userId: user.id, role: user.role };
-    const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-    const refreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRES_IN });
-    const ttlSeconds = this._parseExpireString(JWT_REFRESH_EXPIRES_IN);
-    await redis.set(`refresh_token:${user.id}`, refreshToken, { EX: ttlSeconds });
-
-    const { password_hash, ...userInfo } = user;
-    return { accessToken, refreshToken, user: userInfo };
-  }
-
-  async refreshToken(token) {
-    try {
-      // 1. Verify token signature
-      const decoded = jwt.verify(token, JWT_REFRESH_SECRET);
-      const userId = decoded.userId;
-
-      // 2. Lấy token đang lưu trong Redis
-      const storedToken = await redis.get(`refresh_token:${userId}`);
-      if (!storedToken || storedToken !== token) {
-        throw new Error("Refresh token expired or revoked");
-      }
-
-      // 3. Sinh Access Token mới
-      const payload = { userId, role: decoded.role };
-      const newAccessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-
-      // Xoay vòng Refresh Token
-      const newRefreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, { expiresIn: JWT_REFRESH_EXPIRES_IN });
-      const ttlSeconds = this._parseExpireString(JWT_REFRESH_EXPIRES_IN);
-      await redis.set(`refresh_token:${userId}`, newRefreshToken, {
-        EX: ttlSeconds,
-      });
-
-      return {
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
-      };
-    } catch (err) {
-      const error = new Error("Refresh token expired or revoked");
-      error.status = 401;
+    if (!user?.id || !user.is_active) {
+      const error = new Error("ACCOUNT_INACTIVE");
+      error.status = 403;
       throw error;
     }
+
+    // =========================================
+    // 1. GLOBAL IDENTITY
+    // =========================================
+
+    // Keep legacy role temporarily for old APIs.
+    // School authorization uses school_memberships.
+    const accessPayload = {
+      userId: user.id,
+      role: user.role,
+      tokenType: "access",
+    };
+
+    // =========================================
+    // 2. ACCESS TOKEN
+    // =========================================
+
+    const accessToken = jwt.sign(
+      accessPayload,
+      JWT_SECRET,
+      {
+        algorithm: "HS256",
+        expiresIn: JWT_EXPIRES_IN,
+      }
+    );
+
+    // =========================================
+    // 3. REFRESH TOKEN
+    // =========================================
+
+    // Each refresh token gets a unique ID.
+    // This prevents identical tokens being
+    // regenerated within the same second.
+    const refreshPayload = {
+      userId: user.id,
+      tokenType: "refresh",
+      jti: crypto.randomUUID(),
+    };
+
+    const refreshToken = jwt.sign(
+      refreshPayload,
+      JWT_REFRESH_SECRET,
+      {
+        algorithm: "HS256",
+        expiresIn: JWT_REFRESH_EXPIRES_IN,
+      }
+    );
+
+    // =========================================
+    // 4. STORE REFRESH TOKEN IN REDIS
+    // =========================================
+
+    const ttlSeconds = this._parseExpireString(
+      JWT_REFRESH_EXPIRES_IN
+    );
+
+    await redis.set(
+      `refresh_token:${user.id}`,
+      refreshToken,
+      { EX: ttlSeconds }
+    );
+
+    // =========================================
+    // 5. UPDATE LAST LOGIN
+    // =========================================
+
+    authRepository
+      .updateLastLogin(user.id)
+      .catch((error) => {
+        console.error(
+          "[Auth] Update last login failed:",
+          error
+        );
+      });
+
+    // =========================================
+    // 6. RESPONSE
+    // =========================================
+
+    const { password_hash, ...userInfo } = user;
+
+    return {
+      accessToken,
+      refreshToken,
+      user: userInfo,
+    };
   }
+
+
+
+  async refreshToken(token) {
+    const unauthorized = () => {
+      const error = new Error(
+        "Refresh token expired or revoked"
+      );
+
+      error.status = 401;
+      return error;
+    };
+
+    const uuidRegex =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    // =========================================
+    // 1. VERIFY REFRESH JWT
+    // =========================================
+
+    let decoded;
+
+    try {
+      decoded = jwt.verify(
+        token,
+        JWT_REFRESH_SECRET,
+        {
+          algorithms: ["HS256"],
+        }
+      );
+    } catch {
+      throw unauthorized();
+    }
+
+    // Accept existing legacy refresh tokens
+    // during migration (no tokenType).
+    // New tokens must be type "refresh".
+    if (
+      decoded.tokenType !== undefined &&
+      decoded.tokenType !== "refresh"
+    ) {
+      throw unauthorized();
+    }
+
+    const userId = decoded.userId;
+
+    if (
+      typeof userId !== "string" ||
+      !uuidRegex.test(userId)
+    ) {
+      throw unauthorized();
+    }
+
+    // =========================================
+    // 2. CHECK REDIS REVOCATION
+    // =========================================
+
+    const redisKey = `refresh_token:${userId}`;
+
+    const storedToken = await redis.get(redisKey);
+
+    if (!storedToken || storedToken !== token) {
+      throw unauthorized();
+    }
+
+    // =========================================
+    // 3. RELOAD GLOBAL USER FROM DATABASE
+    // =========================================
+
+    const user =
+      await authRepository.findUserForTokenRefresh(
+        userId
+      );
+
+    if (!user || !user.is_active) {
+      throw unauthorized();
+    }
+
+    // =========================================
+    // 4. ISSUE NEW ACCESS TOKEN
+    // =========================================
+
+    const accessToken = jwt.sign(
+      {
+        userId: user.id,
+
+        // Legacy compatibility only.
+        role: user.role,
+
+        tokenType: "access",
+      },
+      JWT_SECRET,
+      {
+        algorithm: "HS256",
+        expiresIn: JWT_EXPIRES_IN,
+      }
+    );
+
+    // =========================================
+    // 5. ROTATE REFRESH TOKEN
+    // =========================================
+
+    const newRefreshToken = jwt.sign(
+      {
+        userId: user.id,
+        tokenType: "refresh",
+        jti: crypto.randomUUID(),
+      },
+      JWT_REFRESH_SECRET,
+      {
+        algorithm: "HS256",
+        expiresIn: JWT_REFRESH_EXPIRES_IN,
+      }
+    );
+
+    const ttlSeconds = this._parseExpireString(
+      JWT_REFRESH_EXPIRES_IN
+    );
+
+    await redis.set(
+      redisKey,
+      newRefreshToken,
+      { EX: ttlSeconds }
+    );
+
+    // =========================================
+    // 6. RESPONSE
+    // =========================================
+
+    return {
+      accessToken,
+      refreshToken: newRefreshToken,
+    };
+  }
+
 
   async logout(userId) {
     await redis.del(`refresh_token:${userId}`);

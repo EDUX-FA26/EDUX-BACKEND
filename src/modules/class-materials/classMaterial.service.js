@@ -10,31 +10,31 @@ const ClassMaterialRepository = require('./classMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
 
 /**
- * Kiểm tra quyền truy cập vào lớp học.
- * - admin: luôn được phép
- * - lecturer: phải là giảng viên của lớp
- * - student: phải là thành viên active của lớp
+ * Kiểm tra quyền truy cập vào lớp học theo trường hiện tại.
+ * - school_admin: được phép trong phạm vi trường hiện tại
+ * - lecturer: phải là giảng viên của lớp trong trường hiện tại
+ * - student: phải là thành viên active của lớp trong trường hiện tại
  */
-async function verifyClassAccess(classId, user) {
+async function verifyClassAccess(classId, tenant) {
   const { rows: classRows } = await pool.query(
-    'SELECT * FROM classes WHERE id = $1',
-    [classId]
+    'SELECT * FROM classes WHERE id = $1 AND school_id = $2',
+    [classId, tenant.schoolId]
   );
   const classData = classRows[0];
   if (!classData) throw new Error('CLASS_NOT_FOUND');
 
-  if (user.role === 'admin') return classData;
+  if (tenant.role === 'school_admin') return classData;
 
-  if (user.role === 'lecturer') {
-    if (classData.lecturer_id !== user.id) throw new Error('FORBIDDEN');
+  if (tenant.role === 'lecturer') {
+    if (classData.lecturer_id !== tenant.userId) throw new Error('FORBIDDEN');
     return classData;
   }
 
-  if (user.role === 'student') {
+  if (tenant.role === 'student') {
     const { rows: memberRows } = await pool.query(
       `SELECT 1 FROM class_members
-       WHERE class_id = $1 AND student_id = $2 AND status = 'active'`,
-      [classId, user.id]
+       WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [classId, tenant.userId, tenant.schoolId]
     );
     if (!memberRows.length) throw new Error('FORBIDDEN');
     return classData;
@@ -47,10 +47,10 @@ const ClassMaterialService = {
   /**
    * UC17 — Lấy danh sách tài liệu lớp học
    */
-  async listMaterials(classId, query, user) {
-    await verifyClassAccess(classId, user);
+  async listMaterials(classId, query, tenant) {
+    await verifyClassAccess(classId, tenant);
 
-    const result = await ClassMaterialRepository.findByClassId(classId, {
+    const result = await ClassMaterialRepository.findByClassId(classId, tenant.schoolId, {
       page: query.page,
       limit: query.limit,
     });
@@ -58,12 +58,12 @@ const ClassMaterialService = {
   },
 
   /**
-   * UC19 — Upload tài liệu lên lớp học (chỉ lecturer)
+   * UC19 — Upload tài liệu lên lớp học (chỉ lecturer / school_admin)
    */
-  async uploadMaterial(classId, body, file, user) {
-    const classData = await verifyClassAccess(classId, user);
+  async uploadMaterial(classId, body, file, tenant) {
+    await verifyClassAccess(classId, tenant);
 
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
@@ -79,6 +79,7 @@ const ClassMaterialService = {
     );
 
     const material = await ClassMaterialRepository.create({
+      school_id: tenant.schoolId,
       class_id: classId,
       title: body.title,
       description: body.description || '',
@@ -87,7 +88,7 @@ const ClassMaterialService = {
       file_type: file.mimetype,
       file_size: file.size,
       is_private: body.is_private !== undefined ? body.is_private : true,
-      uploaded_by: user.id,
+      uploaded_by: tenant.userId,
     });
 
     return material;
@@ -96,44 +97,42 @@ const ClassMaterialService = {
   /**
    * UC17 — Lấy chi tiết 1 tài liệu lớp
    */
-  async getMaterialById(materialId, user) {
-    const material = await ClassMaterialRepository.findById(materialId);
+  async getMaterialById(materialId, tenant) {
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    await verifyClassAccess(material.class_id, user);
+    await verifyClassAccess(material.class_id, tenant);
 
-    // Nếu tài liệu là private, chỉ lecturer/admin của lớp hoặc student enrolled mới xem được
-    // (verifyClassAccess đã xử lý điều này)
     return material;
   },
 
   /**
-   * UC20 — Cập nhật metadata tài liệu lớp (chỉ lecturer)
+   * UC20 — Cập nhật metadata tài liệu lớp (chỉ lecturer / school_admin)
    */
-  async updateMaterial(materialId, body, user) {
-    const material = await ClassMaterialRepository.findById(materialId);
+  async updateMaterial(materialId, body, tenant) {
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    await verifyClassAccess(material.class_id, user);
+    await verifyClassAccess(material.class_id, tenant);
 
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
-    const updated = await ClassMaterialRepository.update(materialId, body);
+    const updated = await ClassMaterialRepository.update(materialId, tenant.schoolId, body);
     return updated;
   },
 
   /**
-   * UC21 — Xóa tài liệu lớp (chỉ lecturer)
+   * UC21 — Xóa tài liệu lớp (chỉ lecturer / school_admin)
    */
-  async deleteMaterial(materialId, user) {
-    const material = await ClassMaterialRepository.findById(materialId);
+  async deleteMaterial(materialId, tenant) {
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    await verifyClassAccess(material.class_id, user);
+    await verifyClassAccess(material.class_id, tenant);
 
-    if (user.role !== 'lecturer' && user.role !== 'admin') {
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
       throw new Error('FORBIDDEN');
     }
 
@@ -145,18 +144,18 @@ const ClassMaterialService = {
       })
     );
 
-    const deleted = await ClassMaterialRepository.delete(materialId);
+    const deleted = await ClassMaterialRepository.delete(materialId, tenant.schoolId);
     return deleted;
   },
 
   /**
    * UC18 — Tải xuống tài liệu lớp (presigned URL)
    */
-  async downloadMaterial(materialId, user) {
-    const material = await ClassMaterialRepository.findById(materialId);
+  async downloadMaterial(materialId, tenant) {
+    const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    await verifyClassAccess(material.class_id, user);
+    await verifyClassAccess(material.class_id, tenant);
 
     const command = new GetObjectCommand({
       Bucket: S3_BUCKET,
@@ -169,6 +168,7 @@ const ClassMaterialService = {
 
     return {
       url: presignedUrl,
+      download_url: presignedUrl,
       file_name: material.file_name,
       file_type: material.file_type,
       file_size: material.file_size,

@@ -2,7 +2,8 @@
 const router = require('express').Router();
 
 const { authenticate } = require('../../middlewares/auth.middleware');
-const { authorizeRoles } = require('../../middlewares/rbac.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 
 const {
@@ -23,12 +24,15 @@ const controller = require('./semesters.controller');
 // Admin, Lecturer, Student
 // ==========================================
 
-router.use(authenticate);
+router.use(
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student')
+);
 
 // Get all semesters
 router.get(
   '/',
-  authorizeRoles('admin', 'lecturer', 'student'),
   validateQuery(listSemesters),
   controller.list
 );
@@ -36,7 +40,6 @@ router.get(
 // Get semester details
 router.get(
   '/:id',
-  authorizeRoles('admin', 'lecturer', 'student'),
   validateUuidParam,
   controller.get
 );
@@ -45,7 +48,7 @@ router.get(
 // 2. ADMIN ONLY
 // ==========================================
 
-router.use(authorizeRoles('admin'));
+router.use(authorizeSchoolRoles('school_admin'));
 
 // Create semester
 router.post(

@@ -8,7 +8,7 @@ const AssignmentMaterialController = {
   async listMaterials(req, res, next) {
     try {
       const { assignmentId } = req.params;
-      const result = await AssignmentMaterialService.listMaterials(assignmentId, req.query, req.user);
+      const result = await AssignmentMaterialService.listMaterials(assignmentId, req.query, req.tenant);
 
       const { page = 1, limit = 20 } = req.query;
       res.status(200).json({
@@ -45,7 +45,7 @@ const AssignmentMaterialController = {
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'No file uploaded' });
       }
-      const material = await AssignmentMaterialService.uploadMaterial(assignmentId, req.body, req.file, req.user);
+      const material = await AssignmentMaterialService.uploadMaterial(assignmentId, req.body, req.file, req.tenant);
       res.status(201).json({ success: true, data: material });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') {
@@ -65,7 +65,7 @@ const AssignmentMaterialController = {
   async getMaterialById(req, res, next) {
     try {
       const { assignmentId, materialId } = req.params;
-      const material = await AssignmentMaterialService.getMaterialById(assignmentId, materialId, req.user);
+      const material = await AssignmentMaterialService.getMaterialById(assignmentId, materialId, req.tenant);
       res.status(200).json({ success: true, data: material });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') {
@@ -91,7 +91,7 @@ const AssignmentMaterialController = {
   async updateMaterial(req, res, next) {
     try {
       const { assignmentId, materialId } = req.params;
-      const updated = await AssignmentMaterialService.updateMaterial(assignmentId, materialId, req.body, req.user);
+      const updated = await AssignmentMaterialService.updateMaterial(assignmentId, materialId, req.body, req.tenant);
       res.status(200).json({ success: true, data: updated });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') {
@@ -114,7 +114,7 @@ const AssignmentMaterialController = {
   async deleteMaterial(req, res, next) {
     try {
       const { assignmentId, materialId } = req.params;
-      const deleted = await AssignmentMaterialService.deleteMaterial(assignmentId, materialId, req.user);
+      const deleted = await AssignmentMaterialService.deleteMaterial(assignmentId, materialId, req.tenant);
       res.status(200).json({ success: true, message: 'Material deleted successfully', data: deleted });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') {
@@ -137,7 +137,7 @@ const AssignmentMaterialController = {
   async downloadMaterial(req, res, next) {
     try {
       const { assignmentId, materialId } = req.params;
-      const result = await AssignmentMaterialService.downloadMaterial(assignmentId, materialId, req.user);
+      const result = await AssignmentMaterialService.downloadMaterial(assignmentId, materialId, req.tenant);
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') {

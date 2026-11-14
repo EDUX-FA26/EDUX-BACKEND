@@ -22,7 +22,7 @@ const ClassesController = {
           semester,
           semester_id
         },
-        req.user
+        req.tenant
       );
 
       const totalPages = Math.ceil(result.total / Number(limit));
@@ -46,7 +46,10 @@ const ClassesController = {
   async getClassById(req, res, next) {
     try {
       const classId = req.params.id;
-      const classData = await ClassesService.getClassById(classId, req.user);
+      const classData = await ClassesService.getClassById(
+        classId,
+        req.tenant
+      );
       res.status(200).json({ success: true, data: classData });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
@@ -56,9 +59,24 @@ const ClassesController = {
   },
   async getSlots(req, res, next) {
     try {
-      const slots = await ClassesService.getSlots(req.params.id, req.user);
+      const slots = await ClassesService.getSlots(
+        req.params.id,
+        req.tenant
+      );
       res.json({ success: true, data: slots });
     } catch (error) {
+      if (error.message === 'CLASS_NOT_FOUND') {
+        return res.status(404).json({
+          success: false,
+          message: 'Class not found',
+        });
+      }
+      if (error.message === 'FORBIDDEN') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied',
+        });
+      }
       next(error);
     }
   },
@@ -77,7 +95,10 @@ const ClassesController = {
   async createClass(req, res, next) {
     try {
       // Admin only, should be enforced by middleware
-      const data = await ClassesService.createClass(req.body);
+      const data = await ClassesService.createClass(
+        req.body,
+        req.tenant
+      );
       res.status(201).json({ success: true, data });
     } catch (error) {
       if (error.code === '23505') { // Postgres unique violation
@@ -90,7 +111,11 @@ const ClassesController = {
   async updateClass(req, res, next) {
     try {
       const classId = req.params.id;
-      const data = await ClassesService.updateClass(classId, req.body);
+      const data = await ClassesService.updateClass(
+        classId,
+        req.body,
+        req.tenant
+      );
       res.status(200).json({ success: true, data });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
@@ -102,7 +127,10 @@ const ClassesController = {
   async deleteClass(req, res, next) {
     try {
       const classId = req.params.id;
-      const data = await ClassesService.deleteClass(classId);
+      const data = await ClassesService.deleteClass(
+        classId,
+        req.tenant
+      );
       res.status(200).json({ success: true, message: 'Class deleted successfully', data });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
@@ -113,7 +141,10 @@ const ClassesController = {
   async getMembers(req, res, next) {
     try {
       const classId = req.params.id;
-      const members = await ClassesService.getMembers(classId, req.user);
+      const members = await ClassesService.getMembers(
+        classId,
+        req.tenant
+      );
       res.status(200).json({ success: true, data: members });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
@@ -125,7 +156,11 @@ const ClassesController = {
   async removeMember(req, res, next) {
     try {
       const { id: classId, userId: studentId } = req.params;
-      await ClassesService.removeMember(classId, studentId, req.user);
+      await ClassesService.removeMember(
+        classId,
+        studentId,
+        req.tenant
+      );
       res.status(200).json({ success: true, message: 'Member removed/dropped successfully' });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
@@ -142,7 +177,11 @@ const ClassesController = {
         return res.status(400).json({ success: false, message: 'No file uploaded' });
       }
 
-      const result = await ClassesService.importMembers(classId, req.file.buffer, req.user);
+      const result = await ClassesService.importMembers(
+        classId,
+        req.file.buffer,
+        req.tenant
+      );
       res.status(200).json({ success: true, ...result });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found' });
@@ -156,7 +195,10 @@ const ClassesController = {
   async exportMembers(req, res, next) {
     try {
       const classId = req.params.id;
-      const { workbook, classData } = await ClassesService.exportMembers(classId, req.user);
+      const { workbook, classData } = await ClassesService.exportMembers(
+        classId,
+        req.tenant
+      );
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename="Class_${classData.class_code}_Members.xlsx"`);

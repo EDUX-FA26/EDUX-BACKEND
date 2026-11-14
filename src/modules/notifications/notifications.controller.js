@@ -7,8 +7,13 @@ const NotificationsController = {
    */
   async getNotifications(req, res, next) {
     try {
-      const { page = 1, limit = 20 } = req.query;
-      const result = await NotificationsService.getNotifications({ page, limit }, req.user.id);
+      const { page = 1, limit = 20 } =
+        req.validatedQuery ?? req.query;
+      const result = await NotificationsService.getNotifications(
+        { page, limit },
+        req.user.id,
+        req.tenant.schoolId
+      );
 
       res.status(200).json({
         success: true,
@@ -31,8 +36,13 @@ const NotificationsController = {
    */
   async getUnreadNotifications(req, res, next) {
     try {
-      const { page = 1, limit = 20 } = req.query;
-      const result = await NotificationsService.getUnreadNotifications({ page, limit }, req.user.id);
+      const { page = 1, limit = 20 } =
+        req.validatedQuery ?? req.query;
+      const result = await NotificationsService.getUnreadNotifications(
+        { page, limit },
+        req.user.id,
+        req.tenant.schoolId
+      );
 
       res.status(200).json({
         success: true,
@@ -56,7 +66,11 @@ const NotificationsController = {
    */
   async getNotificationById(req, res, next) {
     try {
-      const notification = await NotificationsService.getNotificationById(req.params.id, req.user.id);
+      const notification = await NotificationsService.getNotificationById(
+        req.params.id,
+        req.user.id,
+        req.tenant.schoolId
+      );
       res.status(200).json({ success: true, data: notification });
     } catch (error) {
       if (error.message === 'NOTIFICATION_NOT_FOUND') {
@@ -75,7 +89,11 @@ const NotificationsController = {
    */
   async markAsRead(req, res, next) {
     try {
-      const notification = await NotificationsService.markAsRead(req.params.id, req.user.id);
+      const notification = await NotificationsService.markAsRead(
+        req.params.id,
+        req.user.id,
+        req.tenant.schoolId
+      );
       res.status(200).json({ success: true, data: notification });
     } catch (error) {
       if (error.message === 'NOTIFICATION_NOT_FOUND') {
@@ -94,7 +112,10 @@ const NotificationsController = {
    */
   async markAllAsRead(req, res, next) {
     try {
-      const result = await NotificationsService.markAllAsRead(req.user.id);
+      const result = await NotificationsService.markAllAsRead(
+        req.user.id,
+        req.tenant.schoolId
+      );
       res.status(200).json({
         success: true,
         message: `Marked ${result.updated} notification(s) as read`,

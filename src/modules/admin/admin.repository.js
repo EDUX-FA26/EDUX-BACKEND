@@ -159,20 +159,72 @@ const AdminRepository = {
   /**
    * Lấy danh sách tất cả users kèm thông tin profile và department
    */
-  async getAllUsers() {
-    const query = `
-      SELECT 
-        u.id, u.email, u.username, u.role, u.is_active, u.last_login_at, u.created_at,
-        p.avatar_url, p.full_name, p.student_code,
-        d.id AS department_id, d.code AS department_code, d.name AS department_name
-      FROM users u
-      LEFT JOIN user_profiles p ON u.id = p.user_id
-      LEFT JOIN departments d ON p.department_id = d.id
-      ORDER BY u.created_at DESC
-    `;
-    const result = await pool.query(query);
-    return result.rows;
+
+  async getAllUsers(schoolId) {
+    const { rows } = await pool.query(
+      `
+    SELECT
+      u.id,
+      u.email,
+      u.username,
+      u.created_at,
+      u.last_login_at,
+
+      p.full_name,
+      p.avatar_url,
+
+      mp.student_code,
+      mp.staff_code,
+      mp.department_id,
+
+      d.code AS department_code,
+      d.name AS department_name,
+
+      sm.school_id,
+      sm.status AS membership_status,
+      sm.role AS school_role,
+
+      CASE
+        WHEN sm.role = 'school_admin'
+        THEN 'admin'
+        ELSE sm.role
+      END AS role,
+
+      (
+        COALESCE(u.is_active, FALSE)
+        AND sm.status = 'active'
+      ) AS is_active,
+
+      u.is_active AS account_is_active
+
+    FROM public.school_memberships sm
+
+    JOIN public.users u
+      ON u.id = sm.user_id
+
+    LEFT JOIN public.user_profiles p
+      ON p.user_id = u.id
+
+    LEFT JOIN public.school_member_profiles mp
+      ON mp.school_id = sm.school_id
+     AND mp.user_id = sm.user_id
+
+    LEFT JOIN public.departments d
+      ON d.id = mp.department_id
+     AND d.school_id = sm.school_id
+
+    WHERE sm.school_id = $1
+
+    ORDER BY
+      p.full_name ASC NULLS LAST,
+      u.email ASC
+    `,
+      [schoolId]
+    );
+
+    return rows;
   },
+
 
   /**
    * Lấy danh sách ID user theo target (phục vụ broadcast notification)
@@ -190,18 +242,79 @@ const AdminRepository = {
     return result.rows.map(row => row.id);
   },
 
+  async findUserIdsBySchoolTarget(schoolId, target) {
+    const values = [schoolId];
+    const roleFilter = target === "student" || target === "lecturer"
+      ? "AND sm.role = $2"
+      : "";
+
+    if (roleFilter) values.push(target);
+
+    const { rows } = await pool.query(
+      `
+      SELECT DISTINCT sm.user_id AS id
+      FROM public.school_memberships sm
+      JOIN public.schools s
+        ON s.id = sm.school_id
+      JOIN public.users u
+        ON u.id = sm.user_id
+      WHERE sm.school_id = $1
+        AND sm.status = 'active'
+        AND s.status = 'active'
+        AND u.is_active = TRUE
+        ${roleFilter}
+      ORDER BY sm.user_id
+      `,
+      values
+    );
+
+    return rows.map((row) => row.id);
+  },
+
+  async findUserIdsByPlatformTarget(target) {
+    let query = `
+      SELECT DISTINCT u.id
+      FROM public.users u
+      WHERE u.is_active = TRUE
+    `;
+
+    if (target === "student" || target === "lecturer") {
+      query = `
+        SELECT DISTINCT sm.user_id AS id
+        FROM public.school_memberships sm
+        JOIN public.schools s
+          ON s.id = sm.school_id
+        JOIN public.users u
+          ON u.id = sm.user_id
+        WHERE sm.role = $1
+          AND sm.status = 'active'
+          AND s.status = 'active'
+          AND u.is_active = TRUE
+        ORDER BY sm.user_id
+      `;
+      const { rows } = await pool.query(query, [target]);
+      return rows.map((row) => row.id);
+    }
+
+    const { rows } = await pool.query(query);
+    return rows.map((row) => row.id);
+  },
+
   /**
    * Lấy danh sách các thông báo hệ thống đã gửi
    */
-  async getSystemNotifications() {
+  async getSystemNotifications(schoolId) {
     const query = `
-      SELECT title, message, type, MAX(created_at) as created_at
-      FROM notifications
+      SELECT title, message, type, notification_scope,
+             school_id, MAX(created_at) as created_at
+      FROM public.notifications
       WHERE type = 'system_announcement'
-      GROUP BY title, message, type
+        AND notification_scope = 'school'
+        AND school_id = $1
+      GROUP BY title, message, type, notification_scope, school_id
       ORDER BY MAX(created_at) DESC
     `;
-    const result = await pool.query(query);
+    const result = await pool.query(query, [schoolId]);
     return result.rows;
   },
 
@@ -621,7 +734,7 @@ const AdminRepository = {
       let importedUsers = 0;
       let importedClasses = 0;
       let importedMembers = 0;
-      
+
       const defaultPasswordHash = await bcrypt.hash('Edux@123', 10);
 
       // Caches
@@ -630,7 +743,7 @@ const AdminRepository = {
       const subjectCache = {};
       const userCache = {}; // email -> id
       const classCache = {}; // classCode -> id
-      
+
       // Theo dõi thông tin lớp học tạo ra để báo cáo frontend
       const createdClassesMap = {}; // classCode -> { subjectCode, lecturerName, studentsCount }
 
@@ -669,7 +782,7 @@ const AdminRepository = {
 
       const upsertUser = async (email, role, code, fullName, deptId) => {
         if (userCache[email]) return userCache[email];
-        
+
         let res = await client.query('SELECT id FROM users WHERE email = $1', [email]);
         if (res.rows.length > 0) {
           userCache[email] = res.rows[0].id;
@@ -732,8 +845,8 @@ const AdminRepository = {
             cRes = await client.query('INSERT INTO classes (class_code, semester_id, subject_id, lecturer_id, max_students) VALUES ($1, $2, $3, $4, $5) RETURNING id', [record.classCode, semesterId, subjectId, lecturerId, 30]);
             importedClasses++;
           } else {
-             // Cập nhật lại GV và Subject nếu cần
-             await client.query('UPDATE classes SET subject_id = $1, lecturer_id = $2 WHERE id = $3', [subjectId, lecturerId, cRes.rows[0].id]);
+            // Cập nhật lại GV và Subject nếu cần
+            await client.query('UPDATE classes SET subject_id = $1, lecturer_id = $2 WHERE id = $3', [subjectId, lecturerId, cRes.rows[0].id]);
           }
           classCache[record.classCode] = cRes.rows[0].id;
 
@@ -793,7 +906,7 @@ const AdminRepository = {
       let importedClasses = 0;
       let importedMembers = 0;
       const createdClassesInfo = [];
-      
+
       const defaultPasswordHash = await bcrypt.hash('Edux@123', 10);
 
       const deptCache = {};
@@ -814,7 +927,7 @@ const AdminRepository = {
 
       const upsertUser = async (email, role, code, fullName, deptId) => {
         if (userCache[email]) return userCache[email];
-        
+
         let res = await client.query('SELECT id FROM users WHERE email = $1', [email]);
         if (res.rows.length > 0) {
           userCache[email] = res.rows[0].id;
@@ -829,7 +942,7 @@ const AdminRepository = {
             return userCache[email];
           }
         }
-        
+
         const uRes = await client.query(
           'INSERT INTO users (email, username, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id',
           [email, email.split('@')[0], defaultPasswordHash, role]
@@ -865,7 +978,7 @@ const AdminRepository = {
         const deptId = await upsertDept(lec.departmentCode);
         const email = `${lec.lecturerCode.toLowerCase()}@fe.edu.vn`;
         const id = await upsertUser(email, 'lecturer', lec.lecturerCode, lec.fullName || lec.lecturerCode, deptId);
-        
+
         if (deptId) {
           if (!deptLecturers[deptId]) deptLecturers[deptId] = [];
           if (!deptLecturers[deptId].includes(id)) deptLecturers[deptId].push(id);
@@ -874,15 +987,15 @@ const AdminRepository = {
 
       // Lấy thêm danh sách GV hiện có trong DB (để fallback)
       if (lecturers.length === 0 || true) {
-         const existingLecs = await client.query(`
+        const existingLecs = await client.query(`
             SELECT u.id, p.department_id 
             FROM users u JOIN user_profiles p ON u.id = p.user_id 
             WHERE u.role = 'lecturer' AND p.department_id IS NOT NULL
          `);
-         existingLecs.rows.forEach(r => {
-            if (!deptLecturers[r.department_id]) deptLecturers[r.department_id] = [];
-            if (!deptLecturers[r.department_id].includes(r.id)) deptLecturers[r.department_id].push(r.id);
-         });
+        existingLecs.rows.forEach(r => {
+          if (!deptLecturers[r.department_id]) deptLecturers[r.department_id] = [];
+          if (!deptLecturers[r.department_id].includes(r.id)) deptLecturers[r.department_id].push(r.id);
+        });
       }
 
       // 2. Lưu Sinh viên & Gom nhóm
@@ -917,7 +1030,7 @@ const AdminRepository = {
         const [deptCode, semesterCode, subjectCode] = groupKey.split('_');
         const deptId = await upsertDept(deptCode);
         const stus = studentGroups[groupKey];
-        
+
         // Semester
         if (!semesterCache[semesterCode]) {
           let sRes = await client.query('SELECT id FROM semesters WHERE code = $1', [semesterCode]);
@@ -1246,7 +1359,173 @@ const AdminRepository = {
 
       return { importedUsers, skippedUsers: results.length - importedUsers, results, credentials };
     });
-  }
+  },
+
+
+  async setSchoolMemberStatus({
+    schoolId,
+    actorUserId,
+    targetUserId,
+    status,
+  }) {
+    if (!["active", "suspended"].includes(status)) {
+      throw Object.assign(
+        new Error("Trạng thái không hợp lệ"),
+        { status: 400 }
+      );
+    }
+
+    if (
+      actorUserId === targetUserId &&
+      status === "suspended"
+    ) {
+      throw Object.assign(
+        new Error("Không thể tự tạm ngưng chính mình"),
+        { status: 403 }
+      );
+    }
+
+    return withTransaction(async (client) => {
+      // Serialize membership status changes
+      // within the same school.
+      const schoolResult = await client.query(
+        `
+      SELECT id
+      FROM public.schools
+      WHERE id = $1
+      FOR UPDATE
+      `,
+        [schoolId]
+      );
+
+      if (schoolResult.rowCount === 0) {
+        throw Object.assign(
+          new Error("Không tìm thấy trường"),
+          { status: 404 }
+        );
+      }
+
+      // Recheck actor permission inside transaction.
+      const actorResult = await client.query(
+        `
+      SELECT sm.user_id
+      FROM public.school_memberships sm
+      JOIN public.users u
+        ON u.id = sm.user_id
+      JOIN public.schools s
+        ON s.id = sm.school_id
+      WHERE sm.school_id = $1
+        AND sm.user_id = $2
+        AND sm.role = 'school_admin'
+        AND sm.status = 'active'
+        AND u.is_active = TRUE
+        AND s.status = 'active'
+      LIMIT 1
+      `,
+        [schoolId, actorUserId]
+      );
+
+      if (actorResult.rowCount === 0) {
+        throw Object.assign(
+          new Error("Không đủ quyền quản trị trường"),
+          { status: 403 }
+        );
+      }
+
+      const targetResult = await client.query(
+        `
+      SELECT
+        sm.user_id,
+        sm.role,
+        sm.status,
+        u.is_active AS account_is_active
+
+      FROM public.school_memberships sm
+
+      JOIN public.users u
+        ON u.id = sm.user_id
+
+      WHERE sm.school_id = $1
+        AND sm.user_id = $2
+
+      FOR UPDATE OF sm
+      `,
+        [schoolId, targetUserId]
+      );
+
+      if (targetResult.rowCount === 0) {
+        throw Object.assign(
+          new Error("Thành viên không thuộc trường"),
+          { status: 404 }
+        );
+      }
+
+      const target = targetResult.rows[0];
+
+      // School Admin cannot globally unlock an account.
+      if (
+        status === "active" &&
+        !target.account_is_active
+      ) {
+        throw Object.assign(
+          new Error(
+            "Tài khoản toàn hệ thống đang bị khóa"
+          ),
+          { status: 409 }
+        );
+      }
+
+      // Protect the last active School Admin.
+      if (
+        status === "suspended" &&
+        target.role === "school_admin" &&
+        target.status === "active"
+      ) {
+        const adminCount = await client.query(
+          `
+        SELECT COUNT(*)::int AS total
+        FROM public.school_memberships sm
+        JOIN public.users u
+          ON u.id = sm.user_id
+        WHERE sm.school_id = $1
+          AND sm.user_id <> $2
+          AND sm.role = 'school_admin'
+          AND sm.status = 'active'
+          AND u.is_active = TRUE
+        `,
+          [schoolId, targetUserId]
+        );
+
+        if (adminCount.rows[0].total === 0) {
+          throw Object.assign(
+            new Error(
+              "Không thể tạm ngưng quản trị viên cuối cùng"
+            ),
+            { status: 409 }
+          );
+        }
+      }
+
+      const { rows } = await client.query(
+        `
+      UPDATE public.school_memberships
+      SET status = $3,
+          updated_at = NOW()
+      WHERE school_id = $1
+        AND user_id = $2
+      RETURNING
+        school_id,
+        user_id,
+        role,
+        status
+      `,
+        [schoolId, targetUserId, status]
+      );
+
+      return rows[0];
+    });
+  },
+
 };
 
 module.exports = AdminRepository;

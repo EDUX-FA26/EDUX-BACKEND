@@ -9,25 +9,28 @@ function validDates(start, end) {
 }
 
 const SemestersService = {
-  list: filters => repository.list(filters),
-  async get(id) {
-    const row = await repository.findById(id);
+  list: (filters, tenant) => repository.list({
+    ...filters,
+    schoolId: tenant.schoolId,
+  }),
+  async get(id, tenant) {
+    const row = await repository.findById(id, tenant.schoolId);
     if (!row) throw problem(404, 'Semester not found');
     return row;
   },
-  async create(data) {
-    try { return await repository.create(data); }
+  async create(data, tenant) {
+    try { return await repository.create(data, tenant.schoolId); }
     catch (error) {
       if (error.code === '23505') throw problem(409, 'Semester code already exists');
       throw error;
     }
   },
-  async update(id, data) {
-    const current = await this.get(id);
+  async update(id, data, tenant) {
+    const current = await this.get(id, tenant);
     if (current.is_locked) throw problem(409, 'Semester is locked');
     validDates(data.start_date ?? current.start_date, data.end_date ?? current.end_date);
     try {
-      const row = await repository.update(id, data);
+      const row = await repository.update(id, data, tenant.schoolId);
       if (!row) throw problem(409, 'Semester is locked');
       return row;
     } catch (error) {
@@ -35,8 +38,12 @@ const SemestersService = {
       throw error;
     }
   },
-  async transition(id, action) {
-    const result = await repository.transition(id, action);
+  async transition(id, action, tenant) {
+    const result = await repository.transition(
+      id,
+      action,
+      tenant.schoolId
+    );
     const errors = {
       SEMESTER_NOT_FOUND: [404, 'Semester not found'],
       SEMESTER_LOCKED: [409, 'Semester is locked'],

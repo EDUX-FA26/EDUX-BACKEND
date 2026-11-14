@@ -2,7 +2,7 @@
 const { pool } = require('../../config/db.config');
 
 const ProjectsRepository = {
-    async create({ classId, ownerId, name, description }) {
+    async create({ classId, ownerId, schoolId, name, description }) {
         const client = await pool.connect();
 
         try {
@@ -10,8 +10,10 @@ const ProjectsRepository = {
 
             const classResult = await client.query(
                 `SELECT id FROM classes
-         WHERE id = $1 AND is_active = true`,
-                [classId]
+         WHERE id = $1
+           AND school_id = $2
+           AND is_active = true`,
+                [classId, schoolId]
             );
 
             if (!classResult.rowCount) {
@@ -19,11 +21,21 @@ const ProjectsRepository = {
             }
 
             const memberResult = await client.query(
-                `SELECT 1 FROM class_members
-         WHERE class_id = $1
-           AND student_id = $2
-           AND status = 'active'`,
-                [classId, ownerId]
+                `SELECT 1
+         FROM class_members cm
+         JOIN classes c
+           ON c.id = cm.class_id
+          AND c.school_id = cm.school_id
+         JOIN school_memberships sm
+           ON sm.school_id = c.school_id
+          AND sm.user_id = cm.student_id
+          AND sm.role = 'student'
+          AND sm.status = 'active'
+         WHERE cm.class_id = $1
+           AND cm.school_id = $2
+           AND cm.student_id = $3
+           AND cm.status = 'active'`,
+                [classId, schoolId, ownerId]
             );
 
             if (!memberResult.rowCount) {
@@ -66,7 +78,9 @@ const ProjectsRepository = {
               up.full_name AS owner_name
        FROM projects p
        JOIN classes c ON c.id = p.class_id
-       JOIN subjects s ON s.id = c.subject_id
+       JOIN subjects s
+         ON s.id = c.subject_id
+        AND s.school_id = c.school_id
        LEFT JOIN user_profiles up
          ON up.user_id = p.owner_id
        WHERE p.id = $1`,
@@ -76,7 +90,7 @@ const ProjectsRepository = {
         return rows[0];
     },
 
-    async findMyProjects(userId) {
+    async findMyProjects(userId, schoolId) {
         const { rows } = await pool.query(
             `SELECT p.id, p.name, p.description,
               p.class_id, p.status,
@@ -87,18 +101,21 @@ const ProjectsRepository = {
        FROM project_members pm
        JOIN projects p ON p.id = pm.project_id
        JOIN classes c ON c.id = p.class_id
-       JOIN subjects s ON s.id = c.subject_id
+       JOIN subjects s
+         ON s.id = c.subject_id
+        AND s.school_id = c.school_id
        WHERE pm.user_id = $1
          AND pm.status = 'active'
          AND p.status = 'active'
+         AND c.school_id = $2
        ORDER BY p.created_at DESC`,
-            [userId]
+            [userId, schoolId]
         );
 
         return rows;
     },
 
-    async findByClass(classId) {
+    async findByClass(classId, schoolId) {
         const { rows } = await pool.query(
             `SELECT p.*,
               up.full_name AS owner_name,
@@ -106,6 +123,9 @@ const ProjectsRepository = {
                 WHERE pm.status = 'active'
               )::int AS member_count
        FROM projects p
+       JOIN classes c
+         ON c.id = p.class_id
+        AND c.school_id = $2
        LEFT JOIN user_profiles up
          ON up.user_id = p.owner_id
        LEFT JOIN project_members pm
@@ -113,7 +133,7 @@ const ProjectsRepository = {
        WHERE p.class_id = $1
        GROUP BY p.id, up.full_name
        ORDER BY p.created_at DESC`,
-            [classId]
+            [classId, schoolId]
         );
 
         return rows;
@@ -196,9 +216,11 @@ const ProjectsRepository = {
                 cm.status AS class_membership_status
          FROM project_members pm
          JOIN projects p ON p.id = pm.project_id
+                JOIN classes c ON c.id = pm.class_id
          LEFT JOIN class_members cm
            ON cm.class_id = pm.class_id
           AND cm.student_id = pm.user_id
+                 AND cm.school_id = c.school_id
          WHERE pm.id = $1
            AND pm.user_id = $2
          FOR UPDATE OF pm`,
@@ -250,7 +272,7 @@ const ProjectsRepository = {
     },
 
 
-    async findPendingInvitations(userId) {
+    async findPendingInvitations(userId, schoolId) {
         const { rows } = await pool.query(
             `SELECT
        pm.id AS invitation_id,
@@ -264,29 +286,33 @@ const ProjectsRepository = {
      FROM project_members pm
      JOIN projects p ON p.id = pm.project_id
      JOIN classes c ON c.id = pm.class_id
-     JOIN subjects s ON s.id = c.subject_id
+     JOIN subjects s
+       ON s.id = c.subject_id
+      AND s.school_id = c.school_id
      LEFT JOIN user_profiles up
        ON up.user_id = pm.invited_by
      WHERE pm.user_id = $1
        AND pm.status = 'pending'
        AND p.status = 'active'
        AND c.is_active = true
+       AND c.school_id = $2
        AND EXISTS (
          SELECT 1
          FROM class_members cm
          WHERE cm.class_id = pm.class_id
            AND cm.student_id = pm.user_id
+           AND cm.school_id = c.school_id
            AND cm.status = 'active'
        )
      ORDER BY pm.created_at DESC`,
-            [userId]
+            [userId, schoolId]
         );
 
         return rows;
     },
 
 
-    async findProjectInvitations(projectId) {
+    async findProjectInvitations(projectId, schoolId) {
         const query = `
     SELECT
       pm.id AS invitation_id,
@@ -304,6 +330,11 @@ const ProjectsRepository = {
     FROM project_members pm
     JOIN users u
       ON u.id = pm.user_id
+    JOIN projects p
+      ON p.id = pm.project_id
+    JOIN classes c
+      ON c.id = p.class_id
+     AND c.school_id = $2
     LEFT JOIN user_profiles up
       ON up.user_id = pm.user_id
     WHERE pm.project_id = $1
@@ -318,9 +349,24 @@ const ProjectsRepository = {
       pm.created_at DESC
   `;
 
-        const { rows } = await pool.query(query, [projectId]);
+        const { rows } = await pool.query(query, [projectId, schoolId]);
 
         return rows;
+    },
+
+    async findInvitationForUser(invitationId, userId) {
+        const { rows } = await pool.query(
+            `SELECT pm.id, pm.class_id
+       FROM project_members pm
+       JOIN projects p ON p.id = pm.project_id
+       WHERE pm.id = $1
+         AND pm.user_id = $2
+         AND pm.status = 'pending'
+         AND p.status = 'active'`,
+            [invitationId, userId]
+        );
+
+        return rows[0];
     },
 
 

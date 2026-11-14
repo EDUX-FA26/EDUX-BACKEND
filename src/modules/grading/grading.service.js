@@ -8,12 +8,12 @@ const { DEFAULT_RUBRIC_CONFIGS } = require('../assignments/assignment.constants'
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Kiểm tra lecturer có phải là giảng viên của class_id đó không.
+ * Kiểm tra lecturer có phải là giảng viên của class_id đó trong trường hiện tại không.
  */
-function assertLecturer(user, lecturerId) {
-  if (user.role === 'admin') return; // admin được phép tất cả
-  if (user.role !== 'lecturer') throw new Error('FORBIDDEN');
-  if (user.id !== lecturerId) throw new Error('FORBIDDEN');
+function assertLecturer(tenant, lecturerId) {
+  if (tenant.role === 'school_admin') return; // school_admin được phép trong phạm vi trường đã kiểm tra
+  if (tenant.role !== 'lecturer') throw new Error('FORBIDDEN');
+  if (tenant.userId !== lecturerId) throw new Error('FORBIDDEN');
 }
 
 /**
@@ -141,20 +141,20 @@ const GradingService = {
   /**
    * Chỉ nhận submissionId từ frontend.
    * Backend tự lấy assignment_id, student_id, class_id, lecturer_id
-   * từ DB thông qua submission JOIN.
+   * từ DB thông qua submission JOIN theo school_id.
    */
-  async createGrade({ submissionId, score, maxScore, feedback, rubrics }, user) {
-    // 1. Lấy submission + context
-    const submission = await GradingRepository.findSubmissionById(submissionId);
+  async createGrade({ submissionId, score, maxScore, feedback, rubrics }, tenant) {
+    // 1. Lấy submission + context trong trường hiện tại
+    const submission = await GradingRepository.findSubmissionById(submissionId, tenant.schoolId);
     if (!submission || submission.submission_status === 'draft') throw new Error('SUBMISSION_NOT_FOUND');
 
-    // 2. Kiểm tra quyền (lecturer của class đó)
-    assertLecturer(user, submission.lecturer_id);
+    // 2. Kiểm tra quyền (lecturer của class đó hoặc school_admin của trường)
+    assertLecturer(tenant, submission.lecturer_id);
 
     // 3. Kiểm tra chưa có grade -> nếu đã có thì tự động update thay vì báo lỗi
-    const existing = await GradingRepository.findBySubmissionId(submissionId);
+    const existing = await GradingRepository.findBySubmissionId(submissionId, tenant.schoolId);
     if (existing) {
-      return this.updateGrade(existing.id, { score, maxScore, feedback, rubrics }, user);
+      return this.updateGrade(existing.id, { score, maxScore, feedback, rubrics }, tenant);
     }
 
     // 4. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
@@ -165,6 +165,7 @@ const GradingService = {
 
     // 6. Tạo grade
     const grade = await GradingRepository.create({
+      school_id: tenant.schoolId,
       submission_id: submissionId,
       assignment_id: submission.assignment_id,
       student_id: submission.student_id,
@@ -172,12 +173,12 @@ const GradingService = {
       score,
       max_score: resolvedMaxScore,
       feedback: feedback ?? '',
-      graded_by: user.id,
+      graded_by: tenant.userId,
       rubrics: rubrics ?? null,
     });
 
     // 7. Cập nhật submission status → 'graded'
-    await GradingRepository.markSubmissionGraded(submissionId);
+    await GradingRepository.markSubmissionGraded(submissionId, tenant.schoolId);
 
     // 8. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
     try {
@@ -192,13 +193,13 @@ const GradingService = {
   },
 
   // ── UC 38 – Update Grade ───────────────────────────────────────────────────
-  async updateGrade(gradeId, { score, maxScore, feedback, rubrics }, user) {
-    // 1. Lấy grade
-    const grade = await GradingRepository.findById(gradeId);
+  async updateGrade(gradeId, { score, maxScore, feedback, rubrics }, tenant) {
+    // 1. Lấy grade trong trường hiện tại
+    const grade = await GradingRepository.findById(gradeId, tenant.schoolId);
     if (!grade) throw new Error('GRADE_NOT_FOUND');
 
     // 2. Kiểm tra quyền
-    assertLecturer(user, grade.lecturer_id ?? grade.graded_by);
+    assertLecturer(tenant, grade.lecturer_id);
 
     // 3. Nếu đổi score, validate không vượt max_score
     const effectiveMax = maxScore ?? grade.max_score;
@@ -206,7 +207,7 @@ const GradingService = {
     if (effectiveScore > effectiveMax) throw new Error('SCORE_EXCEEDS_MAX');
 
     // 4. Update
-    const updated = await GradingRepository.update(gradeId, {
+    const updated = await GradingRepository.update(gradeId, tenant.schoolId, {
       score: score,
       max_score: maxScore,
       feedback: feedback,
@@ -214,7 +215,7 @@ const GradingService = {
     });
 
     if (grade.submission_id) {
-      await GradingRepository.markSubmissionGraded(grade.submission_id);
+      await GradingRepository.markSubmissionGraded(grade.submission_id, tenant.schoolId);
     }
 
     // Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
@@ -230,38 +231,38 @@ const GradingService = {
   },
 
   // ── UC 39 – View Grade ────────────────────────────────────────────────────
-  async getGrade(gradeId, user) {
-    const grade = await GradingRepository.findById(gradeId);
+  async getGrade(gradeId, tenant) {
+    const grade = await GradingRepository.findById(gradeId, tenant.schoolId);
     if (!grade) throw new Error('GRADE_NOT_FOUND');
 
-    if (user.role === 'student') {
+    if (tenant.role === 'student') {
       // Student chỉ xem grade của mình
-      if (grade.student_id !== user.id) throw new Error('FORBIDDEN');
-    } else if (user.role === 'lecturer') {
+      if (grade.student_id !== tenant.userId) throw new Error('FORBIDDEN');
+    } else if (tenant.role === 'lecturer') {
       // Lecturer chỉ xem grade thuộc class mình quản lý
-      const classData = await GradingRepository.findClassById(grade.class_id);
-      if (!classData || classData.lecturer_id !== user.id) throw new Error('FORBIDDEN');
+      if (grade.lecturer_id !== tenant.userId) throw new Error('FORBIDDEN');
+    } else if (tenant.role !== 'school_admin') {
+      throw new Error('FORBIDDEN');
     }
-    // admin: không hạn chế
 
     return grade;
   },
 
   // ── UC 41 – View Gradebook ────────────────────────────────────────────────
-  async getGradebook(classId, user) {
-    // Kiểm tra class tồn tại
-    const classData = await GradingRepository.findClassById(classId);
+  async getGradebook(classId, tenant) {
+    // Kiểm tra class tồn tại trong trường hiện tại
+    const classData = await GradingRepository.findClassById(classId, tenant.schoolId);
     if (!classData) throw new Error('CLASS_NOT_FOUND');
 
-    // Chỉ lecturer của class hoặc admin mới xem gradebook
-    if (user.role === 'student') throw new Error('FORBIDDEN');
-    assertLecturer(user, classData.lecturer_id);
+    // Chỉ lecturer của class hoặc school_admin mới xem gradebook
+    if (tenant.role === 'student') throw new Error('FORBIDDEN');
+    assertLecturer(tenant, classData.lecturer_id);
 
-    // Lấy dữ liệu song song
+    // Lấy dữ liệu song song trong phạm vi trường hiện tại
     const [assignments, students, grades] = await Promise.all([
-      GradingRepository.findAssignmentsByClass(classId),
-      GradingRepository.findStudentsByClass(classId),
-      GradingRepository.findGradesByClass(classId),
+      GradingRepository.findAssignmentsByClass(classId, tenant.schoolId),
+      GradingRepository.findStudentsByClass(classId, tenant.schoolId),
+      GradingRepository.findGradesByClass(classId, tenant.schoolId),
     ]);
 
     // Map grades → { student_id → { assignment_id → grade } }
@@ -325,8 +326,8 @@ const GradingService = {
   },
 
   // ── UC 42 – Export Gradebook ──────────────────────────────────────────────
-  async exportGradebook(classId, format = 'xlsx', user) {
-    const gradebook = await this.getGradebook(classId, user);
+  async exportGradebook(classId, format = 'xlsx', tenant) {
+    const gradebook = await this.getGradebook(classId, tenant);
 
     if (format === 'csv') {
       return _buildCsv(gradebook);
@@ -340,14 +341,24 @@ const GradingService = {
    * Thẩm định và gợi ý điểm 5 tiêu chí Rubric qua Gemini AI (đối soát chéo AI audit + Q&A vấn đáp)
    * @param {string} submissionId
    * @param {Object} clientContext
+   * @param {Object} tenant
    */
-  async auditRubricForSubmission(submissionId, clientContext = {}) {
+  async auditRubricForSubmission(submissionId, clientContext = {}, tenant) {
     const force = Boolean(clientContext.force);
 
-    // 0. Nếu không force, kiểm tra Database xem đã có bản ghi snapshot evaluation chưa
+    // 1. Lấy toàn bộ thông tin bài nộp, đề bài, version từ Database thực tế theo school_id
+    const auditData = await GradingRepository.getSubmissionAuditData(submissionId, tenant.schoolId);
+    if (!auditData || !auditData.submission || auditData.submission.submission_status === 'draft') {
+      throw new Error('SUBMISSION_NOT_FOUND');
+    }
+
+    // 2. Kiểm tra quyền truy cập của giảng viên / school_admin trước khi đọc cache hoặc gọi AI
+    assertLecturer(tenant, auditData.submission.lecturer_id);
+
+    // 3. Nếu không force, kiểm tra Database xem đã có bản ghi snapshot evaluation chưa
     if (!force) {
       try {
-        const existingEval = await GradingRepository.findAiEvaluationBySubmissionId(submissionId);
+        const existingEval = await GradingRepository.findAiEvaluationBySubmissionId(submissionId, tenant.schoolId);
         if (existingEval && existingEval.evaluation_data) {
           const cachedData = typeof existingEval.evaluation_data === 'string'
             ? JSON.parse(existingEval.evaluation_data)
@@ -365,12 +376,6 @@ const GradingService = {
       } catch (err) {
         console.warn('[ART-AI] Failed to read cached evaluation snapshot:', err.message);
       }
-    }
-
-    // 1. Lấy toàn bộ thông tin bài nộp, đề bài, version từ Database thực tế
-    const auditData = await GradingRepository.getSubmissionAuditData(submissionId);
-    if (!auditData || auditData.submission_status === 'draft') {
-      throw new Error('SUBMISSION_NOT_FOUND');
     }
 
     // 2. Chuẩn bị thông tin bài tập (assignmentInfo)
@@ -626,6 +631,7 @@ const GradingService = {
         const safeTransparencyScore = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 95.0;
 
         await GradingRepository.saveAiEvaluation({
+          school_id: tenant.schoolId,
           submission_id: submissionId,
           submission_version_id: auditData.latestVersion.id,
           assignment_id: auditData.submission.assignment_id,
