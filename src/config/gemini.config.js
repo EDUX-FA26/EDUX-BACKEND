@@ -122,17 +122,120 @@ const CANONICAL_RUBRIC_MAP = {
 };
 
 /**
+ * Kiểm tra xem một tiêu chí Rubric có phải là tiêu chí thuần về AI Audit / AI Interaction hay không
+ * @param {Object} criterion
+ * @returns {boolean}
+ */
+function isAiSpecificCriterion(criterion) {
+  if (!criterion) return false;
+  const key = String(criterion.criterion_key || criterion.key || '').toUpperCase();
+  const name = String(criterion.criterion_name || criterion.criteria_name || criterion.criteria || criterion.name || '').toLowerCase();
+
+  const aiKeys = [
+    'AI_INTERACTION',
+    'AI_USAGE',
+    'AI_AUDIT',
+    'AI_AUDIT_LOG',
+    'METACOGNITIVE_REFLECTION',
+    'PROMPT_ENGINEERING',
+    'CRITICAL_EVALUATION_OF_AI',
+    'AI_COMPLIANCE'
+  ];
+  if (aiKeys.includes(key)) return true;
+  if (key.includes('AI_') || key.includes('_AI') || key === 'AI') return true;
+
+  if (name.includes('ai interaction') ||
+      name.includes('prompt engineering') ||
+      name.includes('critical evaluation of ai') ||
+      name.includes('khai báo ai') ||
+      name.includes('sử dụng ai') ||
+      name.includes('ai audit') ||
+      name.includes('ai transparency') ||
+      name.includes('metacognitive reflection')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Loại bỏ các tiêu chí thuần về AI Audit và quy đổi lại trọng số / trần điểm cho các tiêu chí chuyên môn còn lại về đúng tổng 10.0 điểm
+ * @param {Array} rubrics
+ * @returns {Array}
+ */
+function filterAndRescaleRubricsForNonAi(rubrics) {
+  if (!Array.isArray(rubrics) || rubrics.length === 0) {
+    return [
+      { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 30, max_score: 3.0, is_enabled: true },
+      { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 40, max_score: 4.0, is_enabled: true },
+      { criterion_key: 'CRITICAL_EVALUATION', criterion_name: 'Critical Evaluation & Verification', weight_percent: 30, max_score: 3.0, is_enabled: true },
+    ];
+  }
+
+  const nonAi = rubrics.filter((c) => !isAiSpecificCriterion(c) && c.is_enabled !== false);
+  if (nonAi.length === 0) {
+    return [
+      { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 30, max_score: 3.0, is_enabled: true },
+      { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 40, max_score: 4.0, is_enabled: true },
+      { criterion_key: 'CRITICAL_EVALUATION', criterion_name: 'Critical Evaluation & Verification', weight_percent: 30, max_score: 3.0, is_enabled: true },
+    ];
+  }
+
+  const sumWeight = nonAi.reduce((acc, c) => acc + (Number(c.weight_percent) || (c.max_score ? Number(c.max_score * 10) : 20)), 0);
+  let runningWeight = 0;
+
+  return nonAi.map((c, idx) => {
+    const rawWeight = Number(c.weight_percent) || (c.max_score ? Number(c.max_score * 10) : 20);
+    let rescaledWeight;
+    if (idx === nonAi.length - 1) {
+      rescaledWeight = Number((100 - runningWeight).toFixed(1));
+    } else {
+      rescaledWeight = sumWeight > 0 ? Number(((rawWeight / sumWeight) * 100).toFixed(1)) : Number((100 / nonAi.length).toFixed(1));
+      runningWeight += rescaledWeight;
+    }
+    const rescaledMax = Number(((rescaledWeight / 100) * 10).toFixed(2));
+    return {
+      ...c,
+      weight_percent: rescaledWeight,
+      max_score: rescaledMax,
+    };
+  });
+}
+
+/**
  * BƯỚC 2: Xây dựng System Instruction động theo đúng danh sách tiêu chí Rubric Active của Assignment.
  * @param {Array<{ index: number, criterion_key: string, criteria_name?: string, criterion_name?: string, weight_percent: number, max_score: number }>} activeRubrics
+ * @param {boolean} aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  * @returns {string}
  */
-function buildDynamicGradingSystemInstruction(activeRubrics) {
+function buildDynamicGradingSystemInstruction(activeRubrics, aiDeclarationRequired = true) {
   const criteriaLines = activeRubrics
     .map(
       (r) =>
         `${r.index}. ${r.criteria_name || r.criterion_name || r.criterion_key} (key: "${r.criterion_key}"): Trọng số ${r.weight_percent}% (Tối đa ${r.max_score.toFixed(1)} điểm)`
     )
     .join('\n');
+
+  if (!aiDeclarationRequired) {
+    return `Bạn là Trợ lý AI chấm điểm chuyên môn cho bài tập lập trình SE/IT.
+
+BỐI CẢNH & NGUYÊN TẮC BẮT BUỘC (QUAN TRỌNG NHẤT):
+- BÀI TẬP NÀY KHÔNG YÊU CẦU KHAI BÁO AI AUDIT LOG (ai_declaration_required = false).
+- BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC NHẮC ĐẾN, KHÔNG ĐƯỢC TRỪ ĐIỂM, VÀ KHÔNG ĐƯỢC ĐÁNH GIÁ THIẾU SÓT VÌ SINH VIÊN KHÔNG CÓ NHẬT KÝ AI AUDIT LOG HOẶC KHÔNG PHẢN TƯ VỀ AI.
+- Bạn CHỈ ĐƯỢC PHÉP chấm điểm và nhận xét dựa trên:
+  1. Đặc tả và yêu cầu đề bài của Giảng viên.
+  2. Nội dung tập tin mã nguồn, cấu trúc thư mục và chất lượng code thực tế mà sinh viên đã nộp.
+- Bạn CHỈ ĐƯỢC PHÉP chấm điểm cho ${activeRubrics.length} tiêu chí chuyên môn đang kích hoạt dưới đây.
+- Điểm chấm cho từng tiêu chí ("awarded_score") BẮT BUỘC nằm trong khoảng từ 0.0 đến đúng trần điểm tối đa ("max_score") quy định của tiêu chí đó.
+- Nhận xét ("comment") phải tập trung 100% vào kỹ thuật lập trình: thuật toán, cấu trúc dữ liệu, kiến trúc phần mềm, xử lý lỗi/ngoại lệ, kiểm thử biên và tuân thủ yêu cầu đề bài. TUYỆT ĐỐI KHÔNG chứa từ khóa AI Audit Log, nhật ký AI hay liêm chính AI.
+- Chấm sát thực tế yêu cầu đề bài: Nếu code chạy đúng khung sườn logic chính nhưng còn thiếu tối ưu nhỏ, trừ điểm hợp lý (0.3 - 0.8đ trên tiêu chí liên quan), không đánh trượt vô lý.
+
+DANH SÁCH TIÊU CHÍ VÀ TRỌNG SỐ CHUYÊN MÔN HIỆN HÀNH (Tổng thang điểm: 10.0):
+${criteriaLines}
+
+NHIỆM VỤ:
+Đọc kỹ yêu cầu đề bài và toàn bộ mã nguồn bài nộp của sinh viên, sau đó chấm điểm từng tiêu chí chuyên môn trên đúng trần điểm trọng số quy định, đảm bảo tổng điểm quy đổi chính xác trên thang 10.0.`;
+  }
 
   return `Bạn là Trợ lý AI chấm điểm thông minh và công tâm cho bài tập lập trình.
 
@@ -154,9 +257,10 @@ NHIỆM VỤ:
  * Chặn mọi sai lệch điểm số từ AI, ép trần theo max_score của từng tiêu chí và tính tổng chính xác trên thang 10.0
  * @param {any} aiRawResult
  * @param {Array<{ criterion_key: string, criteria_name?: string, criterion_name?: string, weight_percent: number, max_score: number, altKey?: string, legacyKey?: string }>} activeRubrics
+ * @param {boolean} aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  * @returns {any}
  */
-function applyScoringGuardrails(aiRawResult, activeRubrics) {
+function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequired = true) {
   const aiBreakdown = Array.isArray(aiRawResult?.grading_breakdown)
     ? aiRawResult.grading_breakdown
     : (Array.isArray(aiRawResult?.rubric_evaluations)
@@ -236,28 +340,40 @@ function applyScoringGuardrails(aiRawResult, activeRubrics) {
     else normalizedRisk = 'low';
   }
 
-  const audit_integrity = aiRawResult?.audit_integrity
+  const audit_integrity = !aiDeclarationRequired
     ? {
-        ...aiRawResult.audit_integrity,
-        risk_level: normalizedRisk.toUpperCase() + '_RISK',
-        riskLevel: normalizedRisk,
-        penalty_applied: false,
-        penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
-      }
-    : {
-        match_percentage: 95.0,
-        risk_level: normalizedRisk.toUpperCase() + '_RISK',
-        riskLevel: normalizedRisk,
+        match_percentage: 100.0,
+        risk_level: 'LOW_RISK',
+        riskLevel: 'low',
         ai_transparency_index: 'A',
-        reflection_depth: 'High',
+        reflection_depth: 'Not Required',
         penalty_applied: false,
-        penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
-      };
+        penalty_reason: 'Bài tập không yêu cầu khai báo AI Audit Log; chấm điểm chuyên môn thuần túy.',
+      }
+    : (aiRawResult?.audit_integrity
+      ? {
+          ...aiRawResult.audit_integrity,
+          risk_level: normalizedRisk.toUpperCase() + '_RISK',
+          riskLevel: normalizedRisk,
+          penalty_applied: false,
+          penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
+        }
+      : {
+          match_percentage: 95.0,
+          risk_level: normalizedRisk.toUpperCase() + '_RISK',
+          riskLevel: normalizedRisk,
+          ai_transparency_index: 'A',
+          reflection_depth: 'High',
+          penalty_applied: false,
+          penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
+        });
 
   const verdict =
     aiRawResult?.overall_verdict ||
     aiRawResult?.ai_verdict ||
-    `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric được kích hoạt. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm.`;
+    (!aiDeclarationRequired
+      ? `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric chuyên môn. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm kỹ năng lập trình.`
+      : `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric được kích hoạt. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm.`);
 
   return {
     ...aiRawResult,
@@ -286,8 +402,9 @@ function applyScoringGuardrails(aiRawResult, activeRubrics) {
  * @param {string} data.oralExamLogs Bản ghi câu hỏi - câu trả lời trong phiên vấn đáp Viva (nếu có)
  * @param {Array} data.rubricConfigs Cấu hình rubric và trọng số động từ Giảng viên
  * @param {Array} data.activeRubrics Danh sách rubric active đã được lọc và chuẩn hóa
+ * @param {boolean} data.aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  */
-async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs, activeRubrics }) {
+async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs, activeRubrics, aiDeclarationRequired = true }) {
   // Ưu tiên key audit riêng để tránh quá tải key chính
   const auditKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
   if (!auditKey) {
@@ -308,8 +425,17 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
     ? activeRubrics
     : ((Array.isArray(rubricConfigs) && rubricConfigs.length > 0) ? rubricConfigs : DEFAULT_CONFIGS);
 
+  // Nếu bài tập KHÔNG yêu cầu khai báo AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
+  if (!aiDeclarationRequired) {
+    rawConfigs = filterAndRescaleRubricsForNonAi(rawConfigs);
+  }
+
   let enabledConfigs = rawConfigs.filter((c) => c.is_enabled !== false && Number(c.weight_percent) > 0);
-  if (enabledConfigs.length === 0) enabledConfigs = DEFAULT_CONFIGS;
+  if (enabledConfigs.length === 0) {
+    enabledConfigs = !aiDeclarationRequired
+      ? filterAndRescaleRubricsForNonAi(DEFAULT_CONFIGS)
+      : DEFAULT_CONFIGS;
+  }
 
   const finalActiveRubrics = enabledConfigs.map((c, idx) => {
     const mapInfo = CANONICAL_RUBRIC_MAP[c.criterion_key] || {
@@ -331,9 +457,40 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
   });
 
   // BƯỚC 2: Xây dựng System Instruction động theo danh sách tiêu chí Active
-  const systemInstruction = buildDynamicGradingSystemInstruction(finalActiveRubrics);
+  const systemInstruction = buildDynamicGradingSystemInstruction(finalActiveRubrics, aiDeclarationRequired);
 
-  const prompt = `
+  const prompt = !aiDeclarationRequired
+    ? `
+Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu mã nguồn thực tế với yêu cầu đề bài và chấm điểm chuẩn xác theo các tiêu chí Rubric chuyên môn được kích hoạt (Tổng 10.0 điểm) cùng Bộ câu hỏi vấn đáp Viva:
+
+--- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
+${finalActiveRubrics.map(c => `• ${c.criterion_key} (${c.criteria_name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
+
+--- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
+[1. YÊU CẦU ĐỀ BÀI SE/IT]:
+${assignmentInfo || "Xây dựng ứng dụng phần mềm theo đặc tả yêu cầu."}
+
+[2. DANH SÁCH TẬP TIN, CẤU TRÚC AST VÀ MÃ NGUỒN BÀI NỘP]:
+${sourceCode || "Không tìm thấy mã nguồn trong bài nộp."}
+
+[3. LỊCH SỬ GIT COMMIT THỰC TẾ]:
+${gitHistory || "Không tìm thấy lịch sử Git commit."}
+
+[4. LƯU Ý ĐẶC BIỆT VỀ KHAI BÁO AI]:
+Bài tập này KHÔNG yêu cầu sinh viên khai báo AI Audit Log (ai_declaration_required = false). Chấm điểm 100% dựa trên chất lượng chuyên môn của mã nguồn và đối chiếu với yêu cầu đề bài. TUYỆT ĐỐI KHÔNG trừ điểm hay nhắc đến việc thiếu AI Audit Log.
+
+[5. BẢN GHI PHIÊN VẤN ĐÁP VIVA (NẾU ĐÃ CÓ)]:
+${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
+
+--- HƯỚNG DẪN QUY CHUẨN ĐIỂM SỐ & PHẢN HỒI ---
+- Bạn CHỈ chấm điểm cho đúng ${finalActiveRubrics.length} tiêu chí active trên trong mảng "grading_breakdown".
+- TUYỆT ĐỐI KHÔNG đánh giá, không trừ điểm hay đề cập đến bất kỳ tiêu chí nào khác nằm ngoài danh sách này.
+- Điểm awarded_score của mỗi tiêu chí KHÔNG ĐƯỢC vượt quá max_score quy định của tiêu chí đó (nằm trong khoảng từ 0.0 đến max_score).
+- Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0).
+- Nhận xét ("comment") và câu hỏi Viva ("viva_questions") tập trung hoàn toàn vào kỹ thuật lập trình, thuật toán, kiến trúc và kiểm thử biên của code.
+- Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
+`
+    : `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm chuẩn xác theo các tiêu chí Rubric được kích hoạt (Tổng 10.0 điểm) cùng Bộ câu hỏi vấn đáp Viva:
 
 --- DANH SÁCH TIÊU CHÍ RUBRIC ĐƯỢC THIẾT LẬP (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
@@ -499,7 +656,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
   // Nếu toàn bộ pool model đều bị 503 hoặc quá tải, kích hoạt khung thẩm định sư phạm dự phòng
   if (!response || !response.text) {
     console.error(`[Gemini Audit] Toàn bộ các model (${candidateModels.join(', ')}) đều quá tải/503. Kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng.`);
-    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics });
+    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired });
   }
 
   let parsed;
@@ -507,11 +664,11 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     parsed = JSON.parse(response.text);
   } catch (parseErr) {
     console.warn(`[Gemini Audit] Lỗi parse JSON từ Gemini response: ${parseErr.message}. Kích hoạt fallback.`);
-    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics });
+    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired });
   }
 
   // Áp dụng Guardrails để kiểm tra, ép trần max_score và tính tổng thang 10.0
-  const guardrailed = applyScoringGuardrails(parsed, finalActiveRubrics);
+  const guardrailed = applyScoringGuardrails(parsed, finalActiveRubrics, aiDeclarationRequired);
 
   // Chuẩn hóa viva_questions nếu có
   if (Array.isArray(guardrailed.viva_questions)) {
@@ -865,7 +1022,7 @@ Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_R
  * Kích hoạt khi toàn bộ cụm máy chủ Gemini API gặp sự cố quá tải diện rộng (503 High Demand).
  * Đảm bảo hệ thống KHÔNG BAO GIỜ bị crash 500/503 và giảng viên luôn có dữ liệu chấm bài hoàn chỉnh.
  */
-function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null, activeRubrics = null } = {}) {
+function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null, activeRubrics = null, aiDeclarationRequired = true } = {}) {
   const DEFAULT_CONFIGS = [
     { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 20, is_enabled: true },
     { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 30, is_enabled: true },
@@ -878,8 +1035,17 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
     ? activeRubrics
     : ((Array.isArray(rubricConfigs) && rubricConfigs.length > 0) ? rubricConfigs : DEFAULT_CONFIGS);
 
+  // Nếu bài tập KHÔNG yêu cầu AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
+  if (!aiDeclarationRequired) {
+    rawConfigs = filterAndRescaleRubricsForNonAi(rawConfigs);
+  }
+
   let enabledConfigs = rawConfigs.filter((c) => c.is_enabled !== false && Number(c.weight_percent) > 0);
-  if (enabledConfigs.length === 0) enabledConfigs = DEFAULT_CONFIGS;
+  if (enabledConfigs.length === 0) {
+    enabledConfigs = !aiDeclarationRequired
+      ? filterAndRescaleRubricsForNonAi(DEFAULT_CONFIGS)
+      : DEFAULT_CONFIGS;
+  }
 
   const finalActiveRubrics = enabledConfigs.map((c, idx) => {
     const mapInfo = CANONICAL_RUBRIC_MAP[c.criterion_key] || {
@@ -929,15 +1095,25 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
   const fallbackObj = {
     grading_breakdown: rawBreakdown,
     risk_level: 'low',
-    audit_integrity: {
-      match_percentage: 95.0,
-      risk_level: 'LOW_RISK',
-      riskLevel: 'low',
-      ai_transparency_index: 'A',
-      reflection_depth: 'High',
-      penalty_applied: false,
-      penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
-    },
+    audit_integrity: !aiDeclarationRequired
+      ? {
+          match_percentage: 100.0,
+          risk_level: 'LOW_RISK',
+          riskLevel: 'low',
+          ai_transparency_index: 'A',
+          reflection_depth: 'Not Required',
+          penalty_applied: false,
+          penalty_reason: 'Bài tập không yêu cầu khai báo AI Audit Log; chấm điểm chuyên môn thuần túy.',
+        }
+      : {
+          match_percentage: 95.0,
+          risk_level: 'LOW_RISK',
+          riskLevel: 'low',
+          ai_transparency_index: 'A',
+          reflection_depth: 'High',
+          penalty_applied: false,
+          penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
+        },
     viva_questions: [
       {
         id: 1,
@@ -969,7 +1145,7 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
     ],
   };
 
-  const guarded = applyScoringGuardrails(fallbackObj, finalActiveRubrics);
+  const guarded = applyScoringGuardrails(fallbackObj, finalActiveRubrics, aiDeclarationRequired);
   return sanitizeObjectStrings(guarded);
 }
 
@@ -981,4 +1157,6 @@ module.exports = {
   generateClassAiAdvisoryWithGemini,
   buildDynamicGradingSystemInstruction,
   applyScoringGuardrails,
+  isAiSpecificCriterion,
+  filterAndRescaleRubricsForNonAi,
 };

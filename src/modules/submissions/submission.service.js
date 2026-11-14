@@ -1069,6 +1069,100 @@ const SubmissionService = {
     });
 
     return sanityResult;
+  },
+
+  /**
+   * Sinh viên bổ sung khai báo AI sau khi giảng viên bật yêu cầu AI Audit Log
+   * - Giữ nguyên submitted_at ban đầu của sinh viên
+   * - Không phạt tính trễ hạn (late) nếu đã quá hạn nộp code
+   * - Cập nhật trường note của version mới nhất và submissions.updated_at
+   */
+  async supplementAiDeclarations(assignmentId, tenant, body = {}) {
+    if (tenant.role !== 'student') {
+      throw new Error('ONLY_STUDENT_CAN_SUBMIT');
+    }
+
+    // 1. Kiểm tra assignment và enrollment
+    const assignment = await AssignmentRepository.findById(assignmentId, tenant.schoolId);
+    if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
+    if (assignment.publish_status === 'draft') {
+      throw new Error('ASSIGNMENT_NOT_PUBLISHED');
+    }
+
+    const { rows: memberRows } = await pool.query(
+      `SELECT 1 FROM class_members WHERE class_id = $1 AND student_id = $2 AND school_id = $3 AND status = 'active'`,
+      [assignment.class_id, tenant.userId, tenant.schoolId]
+    );
+    if (!memberRows.length) throw new Error('NOT_ENROLLED_IN_CLASS');
+
+    // 2. Tìm bài nộp của sinh viên
+    const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(
+      assignmentId,
+      tenant.userId,
+      tenant.schoolId
+    );
+    if (!existingSubmission) {
+      throw new Error('SUBMISSION_NOT_FOUND');
+    }
+
+    if (existingSubmission.status === 'draft') {
+      throw new Error('SUBMISSION_IS_DRAFT');
+    }
+
+    // 3. Format payload note
+    let formattedNote = body.note;
+    if (!formattedNote) {
+      const scopes = body.scopes || (body.ai_declarations ? [{
+        id: 'scope-default',
+        scopeId: 'scope-default',
+        title: 'Khai báo chung',
+        scope_title: 'Khai báo chung',
+        declarations: body.ai_declarations
+      }] : null);
+
+      if (scopes || body.ai_declarations) {
+        formattedNote = JSON.stringify({
+          version: '2.0',
+          scopes: scopes,
+          declarations: body.ai_declarations || scopes?.[0]?.declarations || {},
+          supplementedAt: new Date().toISOString()
+        });
+      } else {
+        formattedNote = '';
+      }
+    }
+
+    // 4. Cập nhật version hiện tại mà KHÔNG thay đổi submitted_at hay status
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const latestVer = await SubmissionRepository.findLatestVersion(existingSubmission.id, tenant.schoolId, client);
+      if (!latestVer) {
+        throw new Error('VERSION_NOT_FOUND');
+      }
+
+      const result = await SubmissionRepository.updateDraftNote(
+        existingSubmission.id,
+        latestVer.id,
+        tenant.schoolId,
+        formattedNote,
+        client
+      );
+
+      await client.query('COMMIT');
+      return {
+        submission_id: result.submission.id,
+        status: result.submission.status,
+        note: formattedNote,
+        version: result.version
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 };
 
