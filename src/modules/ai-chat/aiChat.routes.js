@@ -1,14 +1,16 @@
 const express = require('express');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const controller = require('./aiChat.controller');
 
 const router = express.Router();
+
+// Bắt buộc đăng nhập, có School Context và vai trò Student trong trường hiện tại
 router.use(authenticate);
-router.post('/', (req, res, next) => {
-  if (req.user?.role !== 'student') {
-    return res.status(403).json({ success: false, message: 'AI chat hiện chỉ dành cho sinh viên.' });
-  }
-  next();
-}, controller.chat);
+router.use(requireSchoolContext);
+router.use(authorizeSchoolRoles('student'));
+
+router.post('/', controller.chat);
 
 module.exports = router;
