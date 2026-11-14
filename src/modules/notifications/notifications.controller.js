@@ -3,12 +3,12 @@ const NotificationsService = require('./notifications.service');
 const NotificationsController = {
   /**
    * GET /api/notifications
-   * Lấy tất cả thông báo của user hiện tại (có phân trang)
+   * Lấy tất cả thông báo của user hiện tại theo Tenant Context (có phân trang)
    */
   async getNotifications(req, res, next) {
     try {
       const { page = 1, limit = 20 } = req.query;
-      const result = await NotificationsService.getNotifications({ page, limit }, req.user.id);
+      const result = await NotificationsService.getNotifications({ page, limit }, req.tenant);
 
       res.status(200).json({
         success: true,
@@ -27,12 +27,12 @@ const NotificationsController = {
 
   /**
    * GET /api/notifications/unread
-   * Lấy thông báo chưa đọc (có phân trang + trả về unread_count)
+   * Lấy thông báo chưa đọc theo Tenant Context (có phân trang + trả về unread_count)
    */
   async getUnreadNotifications(req, res, next) {
     try {
       const { page = 1, limit = 20 } = req.query;
-      const result = await NotificationsService.getUnreadNotifications({ page, limit }, req.user.id);
+      const result = await NotificationsService.getUnreadNotifications({ page, limit }, req.tenant);
 
       res.status(200).json({
         success: true,
@@ -52,11 +52,11 @@ const NotificationsController = {
 
   /**
    * GET /api/notifications/:id
-   * Lấy chi tiết một thông báo
+   * Lấy chi tiết một thông báo thuộc Tenant Context
    */
   async getNotificationById(req, res, next) {
     try {
-      const notification = await NotificationsService.getNotificationById(req.params.id, req.user.id);
+      const notification = await NotificationsService.getNotificationById(req.params.id, req.tenant);
       res.status(200).json({ success: true, data: notification });
     } catch (error) {
       if (error.message === 'NOTIFICATION_NOT_FOUND') {
@@ -71,11 +71,11 @@ const NotificationsController = {
 
   /**
    * PATCH /api/notifications/:id/read
-   * Đánh dấu một thông báo là đã đọc
+   * Đánh dấu một thông báo là đã đọc trong Tenant Context
    */
   async markAsRead(req, res, next) {
     try {
-      const notification = await NotificationsService.markAsRead(req.params.id, req.user.id);
+      const notification = await NotificationsService.markAsRead(req.params.id, req.tenant);
       res.status(200).json({ success: true, data: notification });
     } catch (error) {
       if (error.message === 'NOTIFICATION_NOT_FOUND') {
@@ -90,11 +90,11 @@ const NotificationsController = {
 
   /**
    * PATCH /api/notifications/read-all
-   * Đánh dấu tất cả thông báo chưa đọc là đã đọc
+   * Đánh dấu tất cả thông báo chưa đọc là đã đọc trong Tenant Context
    */
   async markAllAsRead(req, res, next) {
     try {
-      const result = await NotificationsService.markAllAsRead(req.user.id);
+      const result = await NotificationsService.markAllAsRead(req.tenant);
       res.status(200).json({
         success: true,
         message: `Marked ${result.updated} notification(s) as read`,
