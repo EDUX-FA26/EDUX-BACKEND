@@ -22,6 +22,7 @@ const LearningController = {
         subjectId: req.query.subjectId,
         historyLimit: req.query.historyLimit,
         wrongAnswersLimit: req.query.wrongAnswersLimit,
+        schoolId: req.tenant?.schoolId || null,
       });
 
       return res.status(200).json({ success: true, data });
@@ -41,7 +42,11 @@ const LearningController = {
       if (req.user.role !== 'student') {
         return res.status(403).json({ success: false, message: 'Student access is required' });
       }
-      const data = await LearningTopicAnalyticsService.getStudentTopicPerformance(req.user.id, req.query.subjectId);
+      const data = await LearningTopicAnalyticsService.getStudentTopicPerformance(
+        req.user.id,
+        req.query.subjectId,
+        req.tenant?.schoolId || null
+      );
       return res.status(200).json({ success: true, data });
     } catch (error) {
       if (error.message === 'SUBJECT_NOT_FOUND') {
@@ -61,7 +66,8 @@ const LearningController = {
   async getAllSubjectStreaks(req, res, next) {
     try {
       const userId = req.user.userId || req.user.id;
-      const data = await LearningStreakService.getAllSubjectStreaks(userId);
+      const schoolId = req.tenant?.schoolId || null;
+      const data = await LearningStreakService.getAllSubjectStreaks(userId, schoolId);
       res.status(200).json({ data });
     } catch (error) {
       next(error);
@@ -76,7 +82,8 @@ const LearningController = {
     try {
       const userId = req.user.userId || req.user.id;
       const { subjectId } = req.params;
-      const data = await LearningStreakService.getSubjectStreak(userId, subjectId);
+      const schoolId = req.tenant?.schoolId || null;
+      const data = await LearningStreakService.getSubjectStreak(userId, subjectId, schoolId);
       res.status(200).json({ data });
     } catch (error) {
       if (error.message === 'SUBJECT_NOT_FOUND') {
@@ -94,7 +101,8 @@ const LearningController = {
     try {
       const userId = req.user.userId || req.user.id;
       const { subjectId } = req.params;
-      const result = await LearningStreakService.recoverSubjectStreak(userId, subjectId);
+      const schoolId = req.tenant?.schoolId || null;
+      const result = await LearningStreakService.recoverSubjectStreak(userId, subjectId, schoolId);
       res.status(200).json(result);
     } catch (error) {
       if (error.message === 'SUBJECT_NOT_FOUND') {
@@ -136,11 +144,13 @@ const LearningController = {
     try {
       const userId = req.user.userId || req.user.id;
       const { page = 1, limit = 20, subjectId } = req.query;
+      const schoolId = req.tenant?.schoolId || null;
 
       const result = await LearningStreakService.getLearningActivityHistory(userId, {
         page: Number(page),
         limit: Number(limit),
         subjectId,
+        schoolId,
       });
 
       res.status(200).json({
@@ -166,12 +176,14 @@ const LearningController = {
     try {
       const userId = req.user.userId || req.user.id;
       const { subjectId, startDate, endDate, year } = req.query;
+      const schoolId = req.tenant?.schoolId || null;
 
       const data = await LearningStreakService.getHeatmap(userId, {
         subjectId,
         startDate,
         endDate,
         year,
+        schoolId,
       });
 
       res.status(200).json({ data });
@@ -199,6 +211,7 @@ const LearningController = {
       const data = await LearningStreakService.recordFlashcardDeckCompletion({
         userId,
         deckId,
+        schoolId: req.tenant?.schoolId || null,
       });
 
       res.status(200).json({
@@ -248,7 +261,8 @@ const LearningController = {
         await LearningTopicAnalyticsService
           .getStudentTopicPerformance(
             req.user.id,
-            subjectId
+            subjectId,
+            req.tenant?.schoolId || null
           );
 
       // Tạo lịch học 7 ngày từ kết quả Analytics.
@@ -304,13 +318,15 @@ const LearningController = {
         await LearningTopicAnalyticsService
           .getStudentTopicPerformance(
             req.user.id,
-            req.query.subjectId
+            req.query.subjectId,
+            req.tenant?.schoolId || null
           );
 
       const data =
         await StudyPlannerService.getMistakesPreview(
           analytics,
-          req.user.id
+          req.user.id,
+          req.tenant?.schoolId || null
         );
 
       return res.status(200).json({
@@ -359,7 +375,8 @@ const LearningController = {
       const data =
         await StudyPlannerSubmissionService.getDay(
           req.params.planDayId,
-          req.user.id
+          req.user.id,
+          req.tenant?.schoolId || null
         );
 
       return res.status(200).json({
@@ -398,7 +415,8 @@ const LearningController = {
         await StudyPlannerSubmissionService.submitDay(
           req.params.planDayId,
           req.user.id,
-          req.body.answers
+          req.body.answers,
+          req.tenant?.schoolId || null
         );
 
       return res.status(201).json({
@@ -445,7 +463,8 @@ const LearningController = {
       const data =
         await StudyPlannerSubmissionService.getResult(
           req.params.planDayId,
-          req.user.id
+          req.user.id,
+          req.tenant?.schoolId || null
         );
 
       return res.status(200).json({
@@ -499,7 +518,8 @@ const LearningController = {
       const data =
         await StudyPlannerContentService.generateDay(
           planDayId,
-          req.user.id
+          req.user.id,
+          req.tenant?.schoolId || null
         );
 
       return res.status(data.created ? 201 : 200).json({
@@ -563,7 +583,8 @@ const LearningController = {
         await LearningTopicAnalyticsService
           .getStudentTopicPerformance(
             req.user.id,
-            req.query.subjectId
+            req.query.subjectId,
+            req.tenant?.schoolId || null
           );
 
       const force = req.query.force === 'true' || req.body?.force === true;
@@ -572,7 +593,8 @@ const LearningController = {
         await StudyPlannerService.generateForStudent(
           analytics,
           req.user.id,
-          force
+          force,
+          req.tenant?.schoolId || null
         );
 
       return res.status(data.created ? 201 : 200).json({
@@ -625,7 +647,8 @@ const LearningController = {
       }
       const data = await StudyPlannerService.getActivePlan(
         req.user.id,
-        req.query.subjectId || null
+        req.query.subjectId || null,
+        req.tenant?.schoolId || null
       );
       return res.status(200).json({ success: true, data });
     } catch (error) {

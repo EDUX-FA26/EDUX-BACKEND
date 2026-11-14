@@ -11,7 +11,8 @@ const FlashcardsController = {
       const { page = 1, limit = 10, subject_id, class_id, is_public } = req.query;
       const result = await FlashcardsService.getDecks(
         { page, limit, subject_id, class_id, is_public: is_public === 'true' ? true : is_public === 'false' ? false : undefined },
-        req.user
+        req.user,
+        req.tenant
       );
 
       res.status(200).json({
@@ -31,7 +32,7 @@ const FlashcardsController = {
 
   async getDeckById(req, res, next) {
     try {
-      const deck = await FlashcardsService.getDeckById(req.params.deckId, req.user);
+      const deck = await FlashcardsService.getDeckById(req.params.deckId, req.user, req.tenant);
       res.status(200).json({ success: true, data: deck });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -42,16 +43,18 @@ const FlashcardsController = {
 
   async createDeck(req, res, next) {
     try {
-      const deck = await FlashcardsService.createDeck(req.body, req.user);
+      const deck = await FlashcardsService.createDeck(req.body, req.user, req.tenant);
       res.status(201).json({ success: true, data: deck });
     } catch (error) {
+      if (error.message === 'SUBJECT_NOT_FOUND') return res.status(404).json({ success: false, message: 'Subject not found in this school' });
+      if (error.message === 'CLASS_NOT_FOUND') return res.status(404).json({ success: false, message: 'Class not found in this school' });
       next(error);
     }
   },
 
   async updateDeck(req, res, next) {
     try {
-      const deck = await FlashcardsService.updateDeck(req.params.deckId, req.body, req.user);
+      const deck = await FlashcardsService.updateDeck(req.params.deckId, req.body, req.user, req.tenant);
       res.status(200).json({ success: true, data: deck });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -62,7 +65,7 @@ const FlashcardsController = {
 
   async deleteDeck(req, res, next) {
     try {
-      await FlashcardsService.deleteDeck(req.params.deckId, req.user);
+      await FlashcardsService.deleteDeck(req.params.deckId, req.user, req.tenant);
       res.status(200).json({ success: true, message: 'Deck deleted successfully' });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -73,7 +76,7 @@ const FlashcardsController = {
 
   async publishDeck(req, res, next) {
     try {
-      const deck = await FlashcardsService.publishDeck(req.params.deckId, req.user);
+      const deck = await FlashcardsService.publishDeck(req.params.deckId, req.user, req.tenant);
       res.status(200).json({ success: true, message: 'Deck published successfully', data: deck });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND')   return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -87,7 +90,7 @@ const FlashcardsController = {
   // GET  /api/flashcards/decks/:deckId/class-access
   async getClassAccess(req, res, next) {
     try {
-      const access = await FlashcardsService.getClassAccess(req.params.deckId, req.user);
+      const access = await FlashcardsService.getClassAccess(req.params.deckId, req.user, req.tenant);
       res.status(200).json({ success: true, data: access });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -103,7 +106,7 @@ const FlashcardsController = {
       if (!Array.isArray(class_ids)) {
         return res.status(400).json({ success: false, message: 'class_ids phải là mảng UUID' });
       }
-      const result = await FlashcardsService.setClassAccess(req.params.deckId, class_ids, req.user);
+      const result = await FlashcardsService.setClassAccess(req.params.deckId, class_ids, req.user, req.tenant);
       res.status(200).json({ success: true, message: 'Cập nhật quyền truy cập thành công', data: result });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -115,7 +118,7 @@ const FlashcardsController = {
 
   async completeDeck(req, res, next) {
     try {
-      const result = await FlashcardsService.completeDeck(req.params.deckId, req.user);
+      const result = await FlashcardsService.completeDeck(req.params.deckId, req.user, req.tenant);
       res.status(200).json({ success: true, message: 'Deck completed', data: result });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -130,7 +133,7 @@ const FlashcardsController = {
 
   async createCard(req, res, next) {
     try {
-      const card = await FlashcardsService.createCard(req.params.deckId, req.body, req.user);
+      const card = await FlashcardsService.createCard(req.params.deckId, req.body, req.user, req.tenant);
       res.status(201).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
@@ -141,7 +144,7 @@ const FlashcardsController = {
 
   async getCardById(req, res, next) {
     try {
-      const card = await FlashcardsService.getCardById(req.params.cardId, req.user);
+      const card = await FlashcardsService.getCardById(req.params.cardId, req.user, req.tenant);
       res.status(200).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
@@ -152,7 +155,7 @@ const FlashcardsController = {
 
   async updateCard(req, res, next) {
     try {
-      const card = await FlashcardsService.updateCard(req.params.cardId, req.body, req.user);
+      const card = await FlashcardsService.updateCard(req.params.cardId, req.body, req.user, req.tenant);
       res.status(200).json({ success: true, data: card });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
@@ -163,7 +166,7 @@ const FlashcardsController = {
 
   async deleteCard(req, res, next) {
     try {
-      await FlashcardsService.deleteCard(req.params.cardId, req.user);
+      await FlashcardsService.deleteCard(req.params.cardId, req.user, req.tenant);
       res.status(200).json({ success: true, message: 'Card deleted successfully' });
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
@@ -181,7 +184,8 @@ const FlashcardsController = {
       const review = await FlashcardsService.submitReview(
         req.params.cardId,
         req.body.result,
-        req.user
+        req.user,
+        req.tenant
       );
       res.status(201).json({ success: true, data: review });
     } catch (error) {
@@ -196,7 +200,8 @@ const FlashcardsController = {
     try {
       const stats = await FlashcardsService.getDeckReviewStats(
         req.params.deckId,
-        req.user
+        req.user,
+        req.tenant
       );
       res.status(200).json({ success: true, data: stats });
     } catch (error) {
@@ -210,7 +215,8 @@ const FlashcardsController = {
     try {
       const result = await FlashcardsService.getStudyQueue(
         req.params.deckId,
-        req.user
+        req.user,
+        req.tenant
       );
       res.status(200).json({ success: true, data: result });
     } catch (error) {
@@ -252,6 +258,7 @@ const FlashcardsController = {
         req.params.deckId,
         req.file.buffer,
         req.user,
+        req.tenant,
         { defaultTopicName }
       );
 

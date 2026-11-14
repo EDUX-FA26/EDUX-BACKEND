@@ -16,7 +16,7 @@ const StudyPlannerService = {
         };
     },
 
-    async getMistakesPreview(analytics, studentId) {
+    async getMistakesPreview(analytics, studentId, schoolId = null) {
         const plan = makeStudyPlan7Days(analytics);
 
         // Chỉ lấy các Topic được xếp lịch ôn tập.
@@ -49,7 +49,8 @@ const StudyPlannerService = {
                 .findLatestIncorrectFlashcardsByTopic(
                     studentId,
                     analytics.subjectId,
-                    topicIds
+                    topicIds,
+                    schoolId
                 );
 
         for (const mistake of mistakes) {
@@ -77,7 +78,7 @@ const StudyPlannerService = {
     },
 
 
-    async generateForStudent(analytics, studentId, force = false) {
+    async generateForStudent(analytics, studentId, force = false, schoolId = null) {
         // Ngày bắt đầu theo múi giờ Việt Nam.
         const parts = new Intl.DateTimeFormat('en-US', {
             timeZone: 'Asia/Ho_Chi_Minh',
@@ -104,7 +105,8 @@ const StudyPlannerService = {
                 startsOn,
                 analytics,
                 days: preview.days,
-                force
+                force,
+                schoolId,
             });
 
         const startDate = new Date(
@@ -140,8 +142,8 @@ const StudyPlannerService = {
         };
     },
 
-    async getActivePlan(studentId, subjectId) {
-        return await StudyPlannerRepository.getActivePlan(studentId, subjectId);
+    async getActivePlan(studentId, subjectId, schoolId = null) {
+        return await StudyPlannerRepository.getActivePlan(studentId, subjectId, schoolId);
     },
 };
 

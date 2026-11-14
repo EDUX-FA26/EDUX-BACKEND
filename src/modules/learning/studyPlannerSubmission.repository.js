@@ -95,7 +95,7 @@ const StudyPlannerSubmissionRepository = {
 
 
     // Chấm và lưu bài trong cùng một transaction.
-    async submitDay(planDayId, studentId, answers) {
+    async submitDay(planDayId, studentId, answers, schoolId = null) {
         const client = await pool.connect();
 
         try {
@@ -222,43 +222,37 @@ const StudyPlannerSubmissionRepository = {
             ) / 100;
 
             // Lưu tổng kết.
+            const subInsertCols = schoolId
+                ? `plan_day_id, student_id, total_questions, correct_answers, score_percent, school_id`
+                : `plan_day_id, student_id, total_questions, correct_answers, score_percent`;
+            const subInsertVals = schoolId ? `$1, $2, $3, $4, $5, $6` : `$1, $2, $3, $4, $5`;
+            const subParams = schoolId
+                ? [planDayId, studentId, totalQuestions, correctAnswers, scorePercent, schoolId]
+                : [planDayId, studentId, totalQuestions, correctAnswers, scorePercent];
+
             const submissionResult = await client.query(
-                `INSERT INTO study_plan_day_submissions (
-           plan_day_id,
-           student_id,
-           total_questions,
-           correct_answers,
-           score_percent
-         )
-         VALUES ($1, $2, $3, $4, $5)
+                `INSERT INTO study_plan_day_submissions (${subInsertCols})
+         VALUES (${subInsertVals})
          RETURNING id, submitted_at`,
-                [
-                    planDayId,
-                    studentId,
-                    totalQuestions,
-                    correctAnswers,
-                    scorePercent
-                ]
+                subParams
             );
 
             const submission = submissionResult.rows[0];
 
             // Lưu chi tiết từng đáp án.
             for (const result of results) {
+                const ansInsertCols = schoolId
+                    ? `submission_id, question_id, selected_answer, is_correct, school_id`
+                    : `submission_id, question_id, selected_answer, is_correct`;
+                const ansInsertVals = schoolId ? `$1, $2, $3, $4, $5` : `$1, $2, $3, $4`;
+                const ansParams = schoolId
+                    ? [submission.id, result.questionId, result.selectedAnswer, result.isCorrect, schoolId]
+                    : [submission.id, result.questionId, result.selectedAnswer, result.isCorrect];
+
                 await client.query(
-                    `INSERT INTO study_plan_day_answers (
-             submission_id,
-             question_id,
-             selected_answer,
-             is_correct
-           )
-           VALUES ($1, $2, $3, $4)`,
-                    [
-                        submission.id,
-                        result.questionId,
-                        result.selectedAnswer,
-                        result.isCorrect
-                    ]
+                    `INSERT INTO study_plan_day_answers (${ansInsertCols})
+           VALUES (${ansInsertVals})`,
+                    ansParams
                 );
             }
 

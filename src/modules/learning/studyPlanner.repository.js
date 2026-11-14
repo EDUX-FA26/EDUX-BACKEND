@@ -7,17 +7,25 @@ const StudyPlannerRepository = {
     startsOn,
     analytics,
     days,
-    force = false
+    force = false,
+    schoolId = null,
   }) {
     const client = await pool.connect();
 
     try {
       await client.query('BEGIN');
 
+      // Force: xóa plan cũ cùng ngày (scoped by school nếu có)
       if (force) {
+        const whereForce = schoolId
+          ? `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3 AND school_id = $4`
+          : `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`;
+        const paramsForce = schoolId
+          ? [studentId, subjectId, startsOn, schoolId]
+          : [studentId, subjectId, startsOn];
         const oldPlans = await client.query(
-          `SELECT id FROM study_plans WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`,
-          [studentId, subjectId, startsOn]
+          `SELECT id FROM study_plans ${whereForce}`,
+          paramsForce
         );
         for (const op of oldPlans.rows) {
           await client.query(`DELETE FROM study_plan_days WHERE plan_id = $1`, [op.id]);
@@ -25,39 +33,56 @@ const StudyPlannerRepository = {
         }
       }
 
-      const inserted = await client.query(
-        `INSERT INTO study_plans (
-           student_id,
-           subject_id,
-           starts_on,
-           status,
-           analytics_snapshot
-         )
-         VALUES ($1, $2, $3, 'draft', $4::jsonb)
-         ON CONFLICT (student_id, subject_id, starts_on)
-         DO NOTHING
-         RETURNING *`,
-        [
-          studentId,
-          subjectId,
-          startsOn,
-          JSON.stringify(analytics)
-        ]
-      );
+      // INSERT study_plan với school_id nếu có
+      let inserted;
+      if (schoolId) {
+        inserted = await client.query(
+          `INSERT INTO study_plans (
+             student_id,
+             subject_id,
+             starts_on,
+             status,
+             analytics_snapshot,
+             school_id
+           )
+           VALUES ($1, $2, $3, 'draft', $4::jsonb, $5)
+           ON CONFLICT (school_id, student_id, subject_id, starts_on)
+           DO NOTHING
+           RETURNING *`,
+          [studentId, subjectId, startsOn, JSON.stringify(analytics), schoolId]
+        );
+      } else {
+        inserted = await client.query(
+          `INSERT INTO study_plans (
+             student_id,
+             subject_id,
+             starts_on,
+             status,
+             analytics_snapshot
+           )
+           VALUES ($1, $2, $3, 'draft', $4::jsonb)
+           ON CONFLICT (student_id, subject_id, starts_on)
+           DO NOTHING
+           RETURNING *`,
+          [studentId, subjectId, startsOn, JSON.stringify(analytics)]
+        );
+      }
 
       const created = inserted.rows.length > 0;
       let plan = inserted.rows[0];
 
+      // Nếu conflict (DO NOTHING), lấy plan hiện có
       if (!plan) {
+        const existingParams = schoolId
+          ? [studentId, subjectId, startsOn, schoolId]
+          : [studentId, subjectId, startsOn];
+        const existingWhere = schoolId
+          ? `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3 AND school_id = $4`
+          : `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`;
         const existing = await client.query(
-          `SELECT *
-           FROM study_plans
-           WHERE student_id = $1
-             AND subject_id = $2
-             AND starts_on = $3`,
-          [studentId, subjectId, startsOn]
+          `SELECT * FROM study_plans ${existingWhere}`,
+          existingParams
         );
-
         plan = existing.rows[0];
       }
 
@@ -65,29 +90,56 @@ const StudyPlannerRepository = {
         throw new Error('STUDY_PLAN_NOT_FOUND');
       }
 
+      // Nếu mới tạo, insert các ngày học
       if (created) {
         for (const day of days) {
-          await client.query(
-            `INSERT INTO study_plan_days (
-               plan_id,
-               day_number,
-               topic_id,
-               activity,
-               duration_minutes,
-               target_questions,
-               reason
-             )
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              plan.id,
-              day.day,
-              day.topicId,
-              day.activity,
-              day.durationMinutes,
-              day.targetQuestions,
-              day.reason
-            ]
-          );
+          if (schoolId) {
+            await client.query(
+              `INSERT INTO study_plan_days (
+                 plan_id,
+                 day_number,
+                 topic_id,
+                 activity,
+                 duration_minutes,
+                 target_questions,
+                 reason,
+                 school_id
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              [
+                plan.id,
+                day.day,
+                day.topicId,
+                day.activity,
+                day.durationMinutes,
+                day.targetQuestions,
+                day.reason,
+                schoolId,
+              ]
+            );
+          } else {
+            await client.query(
+              `INSERT INTO study_plan_days (
+                 plan_id,
+                 day_number,
+                 topic_id,
+                 activity,
+                 duration_minutes,
+                 target_questions,
+                 reason
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                plan.id,
+                day.day,
+                day.topicId,
+                day.activity,
+                day.durationMinutes,
+                day.targetQuestions,
+                day.reason,
+              ]
+            );
+          }
         }
       }
 
@@ -112,27 +164,35 @@ const StudyPlannerRepository = {
       return {
         created,
         plan,
-        days: dayResult.rows
+        days: dayResult.rows,
       };
-
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
-  }, // <- Đưa ngoặc đóng xuống đúng vị trí
+  },
 
   /**
    * Lấy kế hoạch học đang active của student (mới nhất) kèm tiến độ 7 ngày.
    * Nếu không có, trả về null.
    */
-  async getActivePlan(studentId, subjectId) {
-    // Lấy plan mới nhất (ưu tiên draft, rồi active)
-    const whereClause = subjectId
-      ? `WHERE student_id = $1 AND subject_id = $2`
-      : `WHERE student_id = $1`;
-    const params = subjectId ? [studentId, subjectId] : [studentId];
+  async getActivePlan(studentId, subjectId, schoolId = null) {
+    const conditions = ['student_id = $1'];
+    const params = [studentId];
+    let idx = 2;
+
+    if (subjectId) {
+      conditions.push(`subject_id = $${idx++}`);
+      params.push(subjectId);
+    }
+    if (schoolId) {
+      conditions.push(`school_id = $${idx++}`);
+      params.push(schoolId);
+    }
+
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
     const planResult = await pool.query(
       `SELECT
@@ -206,7 +266,7 @@ const StudyPlannerRepository = {
       progressPercent: Math.round((completedCount / 7) * 100),
       days,
     };
-  }
-}; // <- Đóng object StudyPlannerRepository ở đây
+  },
+};
 
 module.exports = StudyPlannerRepository;

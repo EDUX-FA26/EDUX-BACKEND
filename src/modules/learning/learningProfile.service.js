@@ -11,22 +11,22 @@ function parseOptions(value) {
 }
 
 const LearningProfileService = {
-  async getStudentProfile({ studentId, subjectId, historyLimit = 20, wrongAnswersLimit = 50 }) {
-    const subject = await LearningRepository.findSubjectById(subjectId);
+  async getStudentProfile({ studentId, subjectId, historyLimit = 20, wrongAnswersLimit = 50, schoolId = null }) {
+    const subject = await LearningRepository.findSubjectById(subjectId, schoolId);
     if (!subject) throw new Error('SUBJECT_NOT_FOUND');
 
-    const isMember = await LearningRepository.isStudentActiveInSubject(studentId, subjectId);
+    const isMember = await LearningRepository.isStudentActiveInSubject(studentId, subjectId, schoolId);
     if (!isMember) throw new Error('SUBJECT_ACCESS_FORBIDDEN');
 
     const [assignmentRows, testHistory, testSummary, wrongAnswers, reviewSummary, reviewHistory, dueFlashcards, streak] = await Promise.all([
-      LearningRepository.findAssignmentGradesBySubject(studentId, subjectId),
-      LearningRepository.findSubmittedFlashcardTestsBySubject(studentId, subjectId, historyLimit),
-      LearningRepository.getFlashcardTestAnswerSummaryBySubject(studentId, subjectId),
-      LearningRepository.findWrongFlashcardTestAnswersBySubject(studentId, subjectId, wrongAnswersLimit),
-      LearningRepository.getFlashcardReviewSummaryBySubject(studentId, subjectId),
-      LearningRepository.findFlashcardReviewHistoryBySubject(studentId, subjectId, historyLimit),
-      LearningRepository.findDueFlashcardsBySubject(studentId, subjectId),
-      LearningStreakService.getSubjectStreak(studentId, subjectId),
+      LearningRepository.findAssignmentGradesBySubject(studentId, subjectId, schoolId),
+      LearningRepository.findSubmittedFlashcardTestsBySubject(studentId, subjectId, historyLimit, schoolId),
+      LearningRepository.getFlashcardTestAnswerSummaryBySubject(studentId, subjectId, schoolId),
+      LearningRepository.findWrongFlashcardTestAnswersBySubject(studentId, subjectId, wrongAnswersLimit, schoolId),
+      LearningRepository.getFlashcardReviewSummaryBySubject(studentId, subjectId, schoolId),
+      LearningRepository.findFlashcardReviewHistoryBySubject(studentId, subjectId, historyLimit, schoolId),
+      LearningRepository.findDueFlashcardsBySubject(studentId, subjectId, schoolId),
+      LearningStreakService.getSubjectStreak(studentId, subjectId, schoolId),
     ]);
 
     const earnedScore = assignmentRows.reduce((sum, row) => sum + Number(row.score), 0);
