@@ -213,7 +213,8 @@ const ProjectsService = {
         const invitation =
             await ProjectsRepository.findInvitationForUser(
                 invitationId,
-                tenant.userId
+                tenant.userId,
+                tenant.schoolId
             );
 
         if (!invitation) {

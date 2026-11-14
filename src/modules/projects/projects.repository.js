@@ -250,6 +250,53 @@ const ProjectsRepository = {
         return rows[0] || null;
     },
 
+
+    // ==========================================
+    // FIND INVITATION FOR USER
+    // ==========================================
+
+    async findInvitationForUser(
+        invitationId,
+        userId,
+        schoolId
+    ) {
+        const { rows } = await pool.query(
+            `
+            SELECT
+                pm.*,
+                p.name AS project_name,
+                p.status AS project_status,
+                p.class_id,
+                c.class_code
+
+            FROM project_members pm
+
+            INNER JOIN projects p
+                ON p.id = pm.project_id
+               AND p.school_id = pm.school_id
+
+            INNER JOIN classes c
+                ON c.id = p.class_id
+               AND c.school_id = p.school_id
+
+            WHERE pm.id = $1
+              AND pm.user_id = $2
+              AND pm.school_id = $3
+              AND pm.role = 'member'
+
+            LIMIT 1
+            `,
+            [
+                invitationId,
+                userId,
+                schoolId,
+            ]
+        );
+
+        return rows[0] || null;
+    },
+
+
     async respondToInvitation(invitationId, userId, accept, schoolId) {
         const client = await pool.connect();
 
