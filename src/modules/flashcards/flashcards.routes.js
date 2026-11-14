@@ -3,6 +3,8 @@ const router = express.Router();
 
 const ctrl = require('./flashcards.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
   createDeck,
@@ -13,16 +15,11 @@ const {
   submitReview,
 } = require('./flashcards.validation');
 
-// Toàn bộ routes yêu cầu đăng nhập
-router.use(authenticate);
+// Toàn bộ routes yêu cầu đăng nhập và xác thực trường học
+router.use(authenticate, requireSchoolContext);
 
-// Middleware phân quyền
-const authorizeWrite = (req, res, next) => {
-  if (!['admin', 'lecturer'].includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Forbidden: Only admin or lecturer can perform this action' });
-  }
-  next();
-};
+// Middleware phân quyền theo trường (Lecturer hoặc School Admin)
+const authorizeWrite = authorizeSchoolRoles('lecturer', 'school_admin');
 
 const multer = require('multer');
 const upload = multer({

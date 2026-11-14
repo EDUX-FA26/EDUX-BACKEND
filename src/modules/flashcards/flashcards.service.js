@@ -1,6 +1,5 @@
 const ExcelJS = require('exceljs');
 const FlashcardsRepository = require('./flashcards.repository');
-const LearningStreakService = require('../learning/learningStreak.service');
 
 class FlashcardsService {
 
@@ -8,85 +7,108 @@ class FlashcardsService {
   // DECK
   // ─────────────────────────────────────────────
 
-  async getDecks(filters, user) {
+  async getDecks(filters, user, tenant) {
+    const role = tenant?.role || user?.role;
+    const schoolId = tenant?.schoolId;
     return FlashcardsRepository.findDecks({
       ...filters,
-      role: user.role,
+      role,
       userId: user.id,
+      schoolId,
     });
   }
 
-  async getDeckById(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async getDeckById(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    // Kiểm tra quyền xem
-    this._checkViewAccess(deck, user);
+    await this._checkViewAccess(deck, user, tenant);
     return deck;
   }
 
-  async createDeck(data, user) {
+  async createDeck(data, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    // Verify subject belongs to the current school
+    if (data.subject_id) {
+      const subject = await FlashcardsRepository.findSubjectById(data.subject_id, schoolId);
+      if (!subject) throw new Error('SUBJECT_NOT_FOUND');
+    }
+    // Verify class belongs to the current school if provided
+    if (data.class_id) {
+      const cls = await FlashcardsRepository.findClassById(data.class_id, schoolId);
+      if (!cls) throw new Error('CLASS_NOT_FOUND');
+    }
+
     return FlashcardsRepository.createDeck({
       ...data,
       created_by: user.id,
+      school_id: schoolId,
     });
   }
 
-  async updateDeck(deckId, data, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async updateDeck(deckId, data, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    // Chỉ người tạo hoặc admin được sửa
-    if (user.role !== 'admin' && deck.created_by !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
-    const updated = await FlashcardsRepository.updateDeck(deckId, data);
+    if (data.subject_id) {
+      const subject = await FlashcardsRepository.findSubjectById(data.subject_id, schoolId);
+      if (!subject) throw new Error('SUBJECT_NOT_FOUND');
+    }
+    if (data.class_id) {
+      const cls = await FlashcardsRepository.findClassById(data.class_id, schoolId);
+      if (!cls) throw new Error('CLASS_NOT_FOUND');
+    }
+
+    const updated = await FlashcardsRepository.updateDeck(deckId, data, schoolId);
     return updated;
   }
 
-  async deleteDeck(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async deleteDeck(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    if (user.role !== 'admin' && deck.created_by !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
-    return FlashcardsRepository.deleteDeck(deckId);
+    return FlashcardsRepository.deleteDeck(deckId, schoolId);
   }
 
-  async publishDeck(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async publishDeck(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    // Chỉ người tạo hoặc admin mới có quyền publish
-    if (user.role !== 'admin' && deck.created_by !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
-    // Không thể publish deck rỗng (chưa có card nào)
     if (!deck.cards || deck.cards.length === 0) {
       throw new Error('DECK_EMPTY');
     }
 
-    // Deck đã được publish rồi
     if (deck.is_public) {
       throw new Error('ALREADY_PUBLISHED');
     }
 
-    return FlashcardsRepository.publishDeck(deckId);
+    return FlashcardsRepository.publishDeck(deckId, schoolId);
   }
 
-  /**
-   * Ghi nhận user hoàn thành phiên học flashcard.
-   * LƯU Ý: Học flashcard không làm tăng chuỗi streak
-   * (chỉ khi làm bài kiểm tra flashcard test đạt từ 50% câu đúng trở lên mới tăng chuỗi).
-   */
-  async completeDeck(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async completeDeck(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
-    this._checkViewAccess(deck, user);
+    await this._checkViewAccess(deck, user, tenant);
 
     return {
       success: true,
@@ -98,40 +120,41 @@ class FlashcardsService {
   // CLASS ACCESS
   // ───────────────────────────────────────────
 
-  /**
-   * Lấy danh sách lớp đang được phép xem 1 deck.
-   */
-  async getClassAccess(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async getClassAccess(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    // Chỉ chủ deck hoặc admin mới xem được danh sách access
-    if (user.role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
 
-    return FlashcardsRepository.getClassAccess(deckId);
+    return FlashcardsRepository.getClassAccess(deckId, schoolId);
   }
 
-  /**
-   * Cập nhật (replace) danh sách lớp được phép xem deck.
-   * Khi có ít nhất 1 lớp trong danh sách → deck được coi là “published” (is_public = true)
-   * Khi danh sách rỗng → revoke tất cả, is_public = false
-   */
-  async setClassAccess(deckId, classIds, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async setClassAccess(deckId, classIds, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
-    if (user.role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
 
-    // Deck phải có ít nhất 1 thẻ mới có thể chia sẻ
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
+
     if (classIds.length > 0 && (!deck.cards || deck.cards.length === 0)) {
       throw new Error('DECK_EMPTY');
     }
 
-    // Ghi access mới
-    const grantedClassIds = await FlashcardsRepository.setClassAccess(deckId, classIds);
+    // Verify all classIds belong to the same school
+    if (classIds.length > 0) {
+      const validClasses = await FlashcardsRepository.verifyClassesInSchool(classIds, schoolId);
+      if (validClasses.length !== classIds.length) {
+        throw new Error('CLASS_NOT_FOUND');
+      }
+    }
 
-    // Cập nhật is_public trên deck: true nếu có ít nhất 1 lớp, false nếu không có lớp nào
+    const grantedClassIds = await FlashcardsRepository.setClassAccess(deckId, classIds, schoolId);
+
     const shouldBePublic = classIds.length > 0;
-    await FlashcardsRepository.updateDeck(deckId, { is_public: shouldBePublic });
+    await FlashcardsRepository.updateDeck(deckId, { is_public: shouldBePublic }, schoolId);
 
     return { deck_id: deckId, granted_class_ids: grantedClassIds, is_public: shouldBePublic };
   }
@@ -140,16 +163,17 @@ class FlashcardsService {
   // CARD
   // ─────────────────────────────────────────────
 
-  async createCard(deckId, data, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async createCard(deckId, data, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    if (user.role !== 'admin' && deck.created_by !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
-    // Tự động tính position nếu không truyền
-    const position = data.position ?? (await FlashcardsRepository.getNextPosition(deckId));
+    const position = data.position ?? (await FlashcardsRepository.getNextPosition(deckId, schoolId));
 
     const topicName = data.topicName !== undefined ? data.topicName : (data.topic_name || null);
     const topicId = data.topicId !== undefined ? data.topicId : (data.topic_id || null);
@@ -167,26 +191,28 @@ class FlashcardsService {
       topic_id: topicId,
       userId: user.id,
       subject_id: deck.subject_id,
+      school_id: schoolId,
     });
   }
 
-  async getCardById(cardId, user) {
-    const card = await FlashcardsRepository.findCardById(cardId);
+  async getCardById(cardId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const card = await FlashcardsRepository.findCardById(cardId, schoolId);
     if (!card || !card.is_active) throw new Error('CARD_NOT_FOUND');
 
-    // Lấy deck để kiểm tra quyền xem
-    const deck = await FlashcardsRepository.findDeckById(card.deck_id);
-    this._checkViewAccess(deck, user);
+    const deck = await FlashcardsRepository.findDeckById(card.deck_id, schoolId);
+    await this._checkViewAccess(deck, user, tenant);
 
     return card;
   }
 
-  async updateCard(cardId, data, user) {
-    const card = await FlashcardsRepository.findCardById(cardId);
+  async updateCard(cardId, data, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const card = await FlashcardsRepository.findCardById(cardId, schoolId);
     if (!card || !card.is_active) throw new Error('CARD_NOT_FOUND');
 
-    // Chỉ owner deck hoặc admin được sửa card
-    if (user.role !== 'admin' && card.deck_owner_id !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && card.deck_owner_id !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
@@ -201,81 +227,74 @@ class FlashcardsService {
         subject_id: card.subject_id,
         topic_name: topicName,
         topic_id: topicId,
+        school_id: schoolId,
       }
     );
     return updated;
   }
 
-  async deleteCard(cardId, user) {
-    const card = await FlashcardsRepository.findCardById(cardId);
+  async deleteCard(cardId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const card = await FlashcardsRepository.findCardById(cardId, schoolId);
     if (!card || !card.is_active) throw new Error('CARD_NOT_FOUND');
 
-    if (user.role !== 'admin' && card.deck_owner_id !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && card.deck_owner_id !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
-    return FlashcardsRepository.deleteCard(cardId);
+    return FlashcardsRepository.deleteCard(cardId, schoolId);
   }
 
   // ─────────────────────────────────────────────
   // REVIEW
   // ─────────────────────────────────────────────
 
-  /**
-   * Ghi kết quả học 1 card + cập nhật SRS schedule.
-   * grade: 'again' | 'hard' | 'good' | 'easy'
-   */
-  async submitReview(cardId, result, user) {
-    const card = await FlashcardsRepository.findCardById(cardId);
+  async submitReview(cardId, result, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const card = await FlashcardsRepository.findCardById(cardId, schoolId);
     if (!card || !card.is_active) throw new Error('CARD_NOT_FOUND');
 
-    // Kiểm tra quyền xem deck chứa card
-    const deck = await FlashcardsRepository.findDeckById(card.deck_id);
+    const deck = await FlashcardsRepository.findDeckById(card.deck_id, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
-    this._checkViewAccess(deck, user);
+    await this._checkViewAccess(deck, user, tenant);
 
-    // Ghi lịch sử review
     const review = await FlashcardsRepository.createReview({
-      user_id:      user.id,
+      user_id: user.id,
       flashcard_id: cardId,
       result,
+      school_id: schoolId,
     });
 
-    // Tính toán và lưu SRS schedule tiếp theo
-    const currentSchedule = await FlashcardsRepository.findSchedule(user.id, cardId);
-    const nextSchedule    = this._computeNextSchedule(currentSchedule, result);
-    const schedule        = await FlashcardsRepository.upsertSchedule({
-      user_id:      user.id,
+    const currentSchedule = await FlashcardsRepository.findSchedule(user.id, cardId, schoolId);
+    const nextSchedule = this._computeNextSchedule(currentSchedule, result);
+    const schedule = await FlashcardsRepository.upsertSchedule({
+      user_id: user.id,
       flashcard_id: cardId,
       ...nextSchedule,
+      school_id: schoolId,
     });
 
     return { review, schedule };
   }
 
-  /**
-   * Lấy thống kê tiến độ học của user trên 1 deck.
-   */
-  async getDeckReviewStats(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async getDeckReviewStats(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
-    this._checkViewAccess(deck, user);
+    await this._checkViewAccess(deck, user, tenant);
 
-    return FlashcardsRepository.getDeckReviewStats(deckId, user.id);
+    return FlashcardsRepository.getDeckReviewStats(deckId, user.id, schoolId);
   }
 
-  /**
-   * Lấy hàng đợi học theo SRS:
-   * due → new → not_due
-   */
-  async getStudyQueue(deckId, user) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async getStudyQueue(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
-    this._checkViewAccess(deck, user);
+    await this._checkViewAccess(deck, user, tenant);
 
-    const cards = await FlashcardsRepository.getStudyQueue(deckId, user.id);
+    const cards = await FlashcardsRepository.getStudyQueue(deckId, user.id, schoolId);
 
-    // Thống kê nhanh cho UI
     const stats = cards.reduce(
       (acc, c) => { acc[c.study_status]++; return acc; },
       { due: 0, new: 0, not_due: 0 }
@@ -292,9 +311,6 @@ class FlashcardsService {
   // EXCEL IMPORT & TEMPLATE
   // ─────────────────────────────────────────────
 
-  /**
-   * Tạo file Excel mẫu (.xlsx) để người dùng tải về điền dữ liệu flashcards
-   */
   async generateExcelTemplate() {
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Flashcards_Template');
@@ -311,18 +327,16 @@ class FlashcardsService {
       { header: 'Chủ đề (Topic)', key: 'topic', width: 30 },
     ];
 
-    // Style header row
     const headerRow = worksheet.getRow(1);
     headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.fill = {
       type: 'pattern',
       pattern: 'solid',
-      fgColor: { argb: 'FF4F46E5' }, // Indigo color
+      fgColor: { argb: 'FF4F46E5' },
     };
     headerRow.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     headerRow.height = 30;
 
-    // Sample data rows
     const samples = [
       {
         question: 'Ngôn ngữ nào sau đây chạy trực tiếp trên trình duyệt web?',
@@ -346,147 +360,101 @@ class FlashcardsService {
         difficulty: 'medium',
         topic: 'Mạng máy tính & Bảo mật',
       },
-      {
-        question: 'Trong lập trình hướng đối tượng (OOP), tính chất nào cho phép một lớp kế thừa các thuộc tính và phương thức của lớp khác?',
-        option_a: 'Tính đóng gói (Encapsulation)',
-        option_b: 'Tính kế thừa (Inheritance)',
-        option_c: 'Tính đa hình (Polymorphism)',
-        option_d: 'Tính trừu tượng (Abstraction)',
-        answer: 'B',
-        explanation: 'Tính kế thừa cho phép lớp con tái sử dụng và mở rộng các thành phần của lớp cha.',
-        difficulty: 'medium',
-        topic: 'Lập trình hướng đối tượng (OOP)',
-      },
     ];
 
-    samples.forEach((sample) => {
-      worksheet.addRow(sample);
-    });
-
-    // Style data rows
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber > 1) {
-        row.alignment = { vertical: 'middle', wrapText: true };
-      }
-    });
-
+    samples.forEach((sample) => worksheet.addRow(sample));
     return workbook;
   }
 
-  /**
-   * Đọc file Excel (.xlsx, .xls) và thêm cards vào deck
-   */
-  async importCardsFromExcel(deckId, fileBuffer, user, { defaultTopicName } = {}) {
-    const deck = await FlashcardsRepository.findDeckById(deckId);
+  async importCardsFromExcel(deckId, fileBuffer, user, tenant, { defaultTopicName } = {}) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    if (user.role !== 'admin' && deck.created_by !== user.id) {
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
-
     const worksheet = workbook.worksheets[0];
-    if (!worksheet) {
-      throw new Error('EMPTY_WORKBOOK');
-    }
+    if (!worksheet) throw new Error('EMPTY_WORKBOOK');
 
-    const getCellValue = (row, colIndex) => {
-      const cell = row.getCell(colIndex);
-      if (!cell || cell.value === null || cell.value === undefined) return '';
-      if (typeof cell.value === 'object') {
-        if (cell.value.text) return String(cell.value.text).trim();
-        if (cell.value.result !== undefined) return String(cell.value.result).trim();
-        if (Array.isArray(cell.value.richText)) {
-          return cell.value.richText.map(t => t.text).join('').trim();
-        }
-      }
-      return String(cell.value).trim();
-    };
-
-    const validCards = [];
+    const rawCards = [];
     const errors = [];
     let totalProcessedRows = 0;
 
-    for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
-      const row = worksheet.getRow(rowNumber);
-      const question = getCellValue(row, 1);
-      const optA = getCellValue(row, 2);
-      const optB = getCellValue(row, 3);
-      const optC = getCellValue(row, 4);
-      const optD = getCellValue(row, 5);
-      const rawAnswer = getCellValue(row, 6);
-      const explanation = getCellValue(row, 7);
-      const rawDifficulty = getCellValue(row, 8).toLowerCase();
-      const rawTopic = getCellValue(row, 9);
-      const resolvedTopic = rawTopic || defaultTopicName || null;
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Header
 
-      // Bỏ qua dòng trống hoàn toàn
-      if (!question && !optA && !optB && !optC && !optD && !rawAnswer) {
-        continue;
-      }
+      const rowValues = Array.isArray(row.values) ? row.values.slice(1) : [];
+      const hasAnyValue = rowValues.some((v) => v !== null && v !== undefined && String(v).trim() !== '');
+      if (!hasAnyValue) return;
 
       totalProcessedRows++;
 
-      // Kiểm tra câu hỏi
-      if (!question) {
-        errors.push({ row: rowNumber, message: 'Thiếu nội dung câu hỏi' });
-        continue;
+      const getCellText = (colIndex) => {
+        const val = row.getCell(colIndex).value;
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'object' && val.text) return String(val.text).trim();
+        return String(val).trim();
+      };
+
+      const question = getCellText(1);
+      const optA = getCellText(2);
+      const optB = getCellText(3);
+      const optC = getCellText(4);
+      const optD = getCellText(5);
+      const rawAns = getCellText(6);
+      const explanation = getCellText(7);
+      const rawDiff = getCellText(8).toLowerCase();
+      const topicName = getCellText(9) || defaultTopicName || null;
+
+      const rowErrors = [];
+      if (!question) rowErrors.push('Thiếu câu hỏi');
+      if (!optA || !optB) rowErrors.push('Cần ít nhất 2 lựa chọn (A và B)');
+      if (!rawAns) rowErrors.push('Thiếu đáp án đúng');
+
+      let difficulty = 'medium';
+      if (['easy', 'medium', 'hard'].includes(rawDiff)) {
+        difficulty = rawDiff;
       }
 
-      // Thu thập các lựa chọn không rỗng
-      const options = [optA, optB, optC, optD].filter(Boolean);
-      if (options.length < 2) {
-        errors.push({ row: rowNumber, message: 'Cần có ít nhất 2 lựa chọn đáp án (A và B)' });
-        continue;
-      }
+      const options = [];
+      if (optA) options.push({ key: 'A', text: optA });
+      if (optB) options.push({ key: 'B', text: optB });
+      if (optC) options.push({ key: 'C', text: optC });
+      if (optD) options.push({ key: 'D', text: optD });
 
-      // Kiểm tra đáp án
-      if (!rawAnswer) {
-        errors.push({ row: rowNumber, message: 'Thiếu đáp án đúng' });
-        continue;
-      }
-
-      let answer = '';
-      const upperAns = rawAnswer.toUpperCase();
-      if (upperAns === 'A' && optA) answer = optA;
-      else if (upperAns === 'B' && optB) answer = optB;
-      else if (upperAns === 'C' && optC) answer = optC;
-      else if (upperAns === 'D' && optD) answer = optD;
-      else {
-        // Tìm xem có khớp với text của lựa chọn nào không
-        const matched = options.find((opt) => opt.toLowerCase() === rawAnswer.toLowerCase());
-        if (matched) {
-          answer = matched;
-        } else {
-          errors.push({
-            row: rowNumber,
-            message: `Đáp án "${rawAnswer}" không khớp với các lựa chọn (A, B, C, D hoặc nội dung lựa chọn)`,
-          });
-          continue;
+      let resolvedAnswer = rawAns;
+      const upperAns = rawAns.toUpperCase();
+      if (['A', 'B', 'C', 'D'].includes(upperAns)) {
+        const found = options.find((o) => o.key === upperAns);
+        if (found) {
+          resolvedAnswer = found.text;
         }
       }
 
-      // Độ khó
-      const difficulty = ['easy', 'medium', 'hard'].includes(rawDifficulty) ? rawDifficulty : 'medium';
+      if (rowErrors.length > 0) {
+        errors.push({ row: rowNumber, errors: rowErrors });
+        return;
+      }
 
-      validCards.push({
+      rawCards.push({
         question,
         options,
-        answer,
+        answer: resolvedAnswer,
         explanation,
         difficulty,
-        topic_name: resolvedTopic,
+        topic_name: topicName,
       });
-    }
+    });
 
-    if (validCards.length === 0) {
+    if (rawCards.length === 0) {
       return {
         success: false,
-        message: errors.length > 0
-          ? 'Không tìm thấy thẻ hợp lệ nào trong file do có lỗi dữ liệu'
-          : 'File Excel không có dữ liệu câu hỏi',
+        message: 'Không tìm thấy dòng dữ liệu hợp lệ nào để nhập.',
         total_rows: totalProcessedRows,
         imported_count: 0,
         errors,
@@ -494,8 +462,8 @@ class FlashcardsService {
       };
     }
 
-    let nextPos = await FlashcardsRepository.getNextPosition(deckId);
-    const cardsToInsert = validCards.map((c) => ({
+    let nextPos = await FlashcardsRepository.getNextPosition(deckId, schoolId);
+    const cardsToInsert = rawCards.map((c) => ({
       deck_id: deckId,
       type: 'multiple_choice',
       question: c.question,
@@ -505,11 +473,13 @@ class FlashcardsService {
       difficulty: c.difficulty,
       position: nextPos++,
       topic_name: c.topic_name,
+      school_id: schoolId,
     }));
 
     const inserted = await FlashcardsRepository.createCardsBatch(cardsToInsert, {
       subject_id: deck.subject_id,
       userId: user.id,
+      school_id: schoolId,
     });
 
     return {
@@ -526,17 +496,6 @@ class FlashcardsService {
   // PRIVATE HELPERS
   // ─────────────────────────────────────────────
 
-  /**
-   * Thuật toán SM-2 đơn giản hóa.
-   * Input  : current schedule (null nếu card chưa từng học), grade của user
-   * Output : { ease_factor, interval_days, repetitions, due_date }
-   *
-   * Grade mapping:
-   *  again → reset (interval=1, reps=0, EF-=0.20)
-   *  hard  → interval ×1.2, EF-=0.15
-   *  good  → interval ×EF (standard SM-2)
-   *  easy  → interval ×EF×1.3, EF+=0.15
-   */
   _computeNextSchedule(current, grade) {
     let ef       = parseFloat(current?.ease_factor   ?? 2.5);
     let interval = parseInt(current?.interval_days   ?? 0,  10);
@@ -562,7 +521,7 @@ class FlashcardsService {
         else if (reps === 1) newInterval = 6;
         else                 newInterval = Math.max(1, Math.round(interval * ef));
         newReps = reps + 1;
-        newEf   = ef;                          // giữ nguyên EF
+        newEf   = ef;
         break;
 
       case 'easy':
@@ -570,14 +529,13 @@ class FlashcardsService {
         else if (reps === 1) newInterval = 8;
         else                 newInterval = Math.max(1, Math.round(interval * ef * 1.3));
         newReps = reps + 1;
-        newEf   = Math.min(2.5, ef + 0.15);   // cấp tại 2.5
+        newEf   = Math.min(2.5, ef + 0.15);
         break;
 
       default:
         newInterval = 1; newReps = 0; newEf = ef;
     }
 
-    // Tính ngày đến hạn tiếp theo (UTC)
     const due = new Date();
     due.setUTCDate(due.getUTCDate() + newInterval);
     const dueDate = due.toISOString().slice(0, 10);
@@ -591,21 +549,30 @@ class FlashcardsService {
   }
 
   /**
-   * Kiểm tra quyền xem deck:
-   * - Admin: luôn xem được
-   * - Lecturer: deck public hoặc deck của mình
-   * - Student: deck public (class_id matching được xử lý ở query filter)
+   * Kiểm tra quyền xem deck theo vai trò trường học:
+   * - School Admin: toàn quyền xem các deck thuộc trường
+   * - Lecturer: deck của mình hoặc deck public thuộc trường
+   * - Student: deck của mình, deck public thuộc trường, hoặc deck được chia sẻ cho lớp sinh viên tham gia
    */
-  _checkViewAccess(deck, user) {
-    if (user.role === 'admin') return;
-    if (user.role === 'lecturer') {
-      if (deck.created_by !== user.id) {
-        throw new Error('FORBIDDEN');
-      }
-      return;
+  async _checkViewAccess(deck, user, tenant) {
+    const role = tenant?.role || user?.role;
+    if (role === 'school_admin' || role === 'admin') return;
+
+    if (role === 'lecturer') {
+      if (deck.created_by === user.id || deck.is_public) return;
+      throw new Error('FORBIDDEN');
     }
-    if (deck.is_public) return;
+
+    // Student
     if (deck.created_by === user.id) return;
+    if (deck.is_public) return;
+
+    const schoolId = tenant?.schoolId;
+    if (schoolId) {
+      const hasClassAccess = await FlashcardsRepository.checkStudentDeckAccess(deck.id, user.id, schoolId);
+      if (hasClassAccess) return;
+    }
+
     throw new Error('FORBIDDEN');
   }
 }

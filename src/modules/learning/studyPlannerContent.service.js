@@ -134,7 +134,7 @@ function validateGeneratedQuestions(text, count, sourceQuestion) {
 }
 
 const StudyPlannerContentService = {
-    async generateDay(planDayId, studentId) {
+    async generateDay(planDayId, studentId, schoolId = null) {
         const day = await ContentRepository.findDayForStudent(
             planDayId,
             studentId
@@ -148,7 +148,8 @@ const StudyPlannerContentService = {
         const hasAccess =
             await LearningRepository.isStudentActiveInSubject(
                 studentId,
-                day.subjectId
+                day.subjectId,
+                schoolId
             );
 
         if (!hasAccess) {
@@ -184,7 +185,8 @@ const StudyPlannerContentService = {
                     .findLatestIncorrectFlashcardsByTopic(
                         studentId,
                         day.subjectId,
-                        [day.topicId]
+                        [day.topicId],
+                        schoolId
                     );
 
             // FALLBACK: Nếu sinh viên chưa có câu làm sai nào trong chủ đề này,
@@ -194,7 +196,8 @@ const StudyPlannerContentService = {
                     await ContentRepository.findDiagnosticSources(
                         studentId,
                         day.subjectId,
-                        day.topicId
+                        day.topicId,
+                        schoolId
                     );
             }
         } else {
@@ -204,7 +207,8 @@ const StudyPlannerContentService = {
                 await ContentRepository.findDiagnosticSources(
                     studentId,
                     day.subjectId,
-                    day.topicId
+                    day.topicId,
+                    schoolId
                 );
         }
 
@@ -379,7 +383,8 @@ ${input}
                 planDayId,
                 studentId,
                 sourceFlashcardId: selectedSource.flashcardId,
-                questions
+                questions,
+                schoolId,
             });
 
         // Chỉ lấy các trường công khai,

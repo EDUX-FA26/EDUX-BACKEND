@@ -7,9 +7,11 @@ const Repo = require('./todos.repository');
 
 const normalizeTitle = (title) => String(title).trim().replace(/\s+/g, ' ').toLowerCase();
 
-/** Khóa chống trùng: cùng người + cùng nguồn + cùng nội dung + còn đang mở. */
-const manualKey = (title) => `manual:${normalizeTitle(title)}`;
-const plannerKey = (planDayId) => `plan_day:${planDayId}`;
+/** Khóa chống trùng: cùng người + cùng nguồn + cùng school + cùng nội dung + còn đang mở. */
+const manualKey = (title, schoolId) =>
+  schoolId ? `manual:${schoolId}:${normalizeTitle(title)}` : `manual:${normalizeTitle(title)}`;
+const plannerKey = (planDayId, schoolId) =>
+  schoolId ? `plan_day:${schoolId}:${planDayId}` : `plan_day:${planDayId}`;
 
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 
@@ -50,7 +52,7 @@ const PLANNER_LABEL = { review: 'Ôn tập', diagnostic: 'Khảo sát năng lự
  * Kiểm tra các tham chiếu thuộc về người dùng / hợp lệ.
  * `undefined` = không đổi, `null` = gỡ liên kết. Trả về các cột cần ghi.
  */
-async function resolveReferences(user, refs) {
+async function resolveReferences(user, refs, schoolId = null) {
   const out = {};
   const has = (k) => refs[k] !== undefined;
   let topicRecord = null;
@@ -59,7 +61,7 @@ async function resolveReferences(user, refs) {
     if (refs.studyPlanDayId === null) {
       out.studyPlanDayId = null;
     } else {
-      const day = await Repo.findPlanDayForUser(user.id, refs.studyPlanDayId);
+      const day = await Repo.findPlanDayForUser(user.id, refs.studyPlanDayId, schoolId);
       if (!day) throw new AppError('STUDY_PLAN_DAY_NOT_FOUND', 404);
       out.studyPlanDayId = day.id;
       // Suy ra môn/chủ đề từ ngày học nếu người dùng không chỉ định
@@ -72,7 +74,7 @@ async function resolveReferences(user, refs) {
     if (refs.topicId === null) {
       out.topicId = null;
     } else {
-      topicRecord = await Repo.findTopic(refs.topicId);
+      topicRecord = await Repo.findTopic(refs.topicId, schoolId);
       if (!topicRecord || !topicRecord.is_active) throw new AppError('TOPIC_NOT_FOUND', 404);
       out.topicId = refs.topicId;
       if (!has('subjectId') && out.subjectId === undefined) out.subjectId = topicRecord.subject_id;
@@ -86,10 +88,10 @@ async function resolveReferences(user, refs) {
   }
 
   if (out.subjectId) {
-    const subject = await LearningRepository.findSubjectById(out.subjectId);
+    const subject = await LearningRepository.findSubjectById(out.subjectId, schoolId);
     if (!subject) throw new AppError('SUBJECT_NOT_FOUND', 404);
     if (user.role === 'student' &&
-        !(await LearningRepository.isStudentActiveInSubject(user.id, out.subjectId))) {
+        !(await LearningRepository.isStudentActiveInSubject(user.id, out.subjectId, schoolId))) {
       throw new AppError('SUBJECT_ACCESS_FORBIDDEN', 403);
     }
   }
@@ -102,7 +104,7 @@ async function resolveReferences(user, refs) {
     if (refs.flashcardDeckId === null) {
       out.flashcardDeckId = null;
     } else {
-      const deck = await Repo.findDeckAccessible(user.id, refs.flashcardDeckId);
+      const deck = await Repo.findDeckAccessible(user.id, refs.flashcardDeckId, schoolId);
       if (!deck) throw new AppError('FLASHCARD_DECK_NOT_FOUND', 404);
       out.flashcardDeckId = deck.id;
     }
@@ -113,25 +115,25 @@ async function resolveReferences(user, refs) {
 
 const isUniqueViolation = (e) => e.code === '23505';
 
-async function duplicateError(userId, key) {
-  const existing = key ? await Repo.findOpenByDedupeKey(userId, key) : null;
+async function duplicateError(userId, key, schoolId = null) {
+  const existing = key ? await Repo.findOpenByDedupeKey(userId, key, schoolId) : null;
   return new AppError('DUPLICATE_TODO', 409, existing ? { existingId: existing.id } : undefined);
 }
 
 // ── service ──────────────────────────────────────────────
 
 const TodosService = {
-  async create(user, body) {
-    const key = manualKey(body.title);
+  async create(user, body, schoolId = null) {
+    const key = manualKey(body.title, schoolId);
 
-    if (await Repo.findOpenByDedupeKey(user.id, key)) throw await duplicateError(user.id, key);
+    if (await Repo.findOpenByDedupeKey(user.id, key, schoolId)) throw await duplicateError(user.id, key, schoolId);
 
     const refs = await resolveReferences(user, {
       subjectId: body.subjectId,
       topicId: body.topicId,
       flashcardDeckId: body.flashcardDeckId,
       studyPlanDayId: body.studyPlanDayId,
-    });
+    }, schoolId);
 
     try {
       const id = await Repo.insert(null, {
@@ -143,23 +145,25 @@ const TodosService = {
         dueDate: body.dueDate,
         sourceType: 'MANUAL', // API này chỉ tạo Todo thủ công
         dedupeKey: (body.status || 'TODO') === 'COMPLETED' ? null : key,
+        schoolId,
         ...refs,
       });
-      return toView(await Repo.findViewById(user.id, id));
+      return toView(await Repo.findViewById(user.id, id, schoolId));
     } catch (error) {
-      if (isUniqueViolation(error)) throw await duplicateError(user.id, key);
+      if (isUniqueViolation(error)) throw await duplicateError(user.id, key, schoolId);
       throw error;
     }
   },
 
   /** Tạo Todo từ một ngày của Study Plan (idempotent — chỉ tham chiếu planDayId). */
-  async createFromStudyPlan(user, { planDayId }) {
-    const day = await Repo.findPlanDayForUser(user.id, planDayId);
+  async createFromStudyPlan(user, { planDayId }, schoolId = null) {
+    const day = await Repo.findPlanDayForUser(user.id, planDayId, schoolId);
     if (!day) throw new AppError('STUDY_PLAN_DAY_NOT_FOUND', 404);
 
-    const existing = await Repo.findPlannerTodoByDay(user.id, planDayId);
-    if (existing) return { created: false, todo: toView(await Repo.findViewById(user.id, existing.id)) };
+    const existing = await Repo.findPlannerTodoByDay(user.id, planDayId, schoolId);
+    if (existing) return { created: false, todo: toView(await Repo.findViewById(user.id, existing.id, schoolId)) };
 
+    const key = plannerKey(day.id, schoolId);
     const id = await Repo.insert(null, {
       userId: user.id,
       title: `${PLANNER_LABEL[day.activity] || 'Học'} – ${day.topic_name} (Ngày ${day.day_number})`,
@@ -171,19 +175,20 @@ const TodosService = {
       subjectId: day.subject_id,
       topicId: day.topic_id,
       studyPlanDayId: day.id,
-      dedupeKey: plannerKey(day.id),
+      dedupeKey: key,
+      schoolId,
     }).catch(async (error) => {
       if (!isUniqueViolation(error)) throw error;
-      const raced = await Repo.findPlannerTodoByDay(user.id, planDayId);
+      const raced = await Repo.findPlannerTodoByDay(user.id, planDayId, schoolId);
       if (!raced) throw error;
       return raced.id;
     });
 
-    return { created: true, todo: toView(await Repo.findViewById(user.id, id)) };
+    return { created: true, todo: toView(await Repo.findViewById(user.id, id, schoolId)) };
   },
 
-  async suggestions(user, { subjectId }) {
-    const rows = await Repo.listPlanSuggestions(user.id, subjectId);
+  async suggestions(user, { subjectId }, schoolId = null) {
+    const rows = await Repo.listPlanSuggestions(user.id, subjectId, schoolId);
     return rows.map((r) => ({
       planDayId: r.plan_day_id,
       day: r.day_number,
@@ -200,24 +205,24 @@ const TodosService = {
     }));
   },
 
-  async list(user, query) {
-    const { rows, pagination } = await Repo.list(user.id, query);
+  async list(user, query, schoolId = null) {
+    const { rows, pagination } = await Repo.list(user.id, { ...query, schoolId });
     return { items: rows.map(toView), pagination };
   },
 
-  async getById(user, id) {
-    const row = await Repo.findViewById(user.id, id);
+  async getById(user, id, schoolId = null) {
+    const row = await Repo.findViewById(user.id, id, schoolId);
     if (!row) throw new AppError('TODO_NOT_FOUND', 404);
     return toView(row);
   },
 
-  async update(user, id, body) {
+  async update(user, id, body, schoolId = null) {
     const client = await pool.connect();
     let key = null;
     try {
       await client.query('BEGIN');
 
-      const current = await Repo.findRawById(client, user.id, id);
+      const current = await Repo.findRawById(client, user.id, id, schoolId);
       if (!current) throw new AppError('TODO_NOT_FOUND', 404);
 
       const refs = await resolveReferences(user, {
@@ -225,7 +230,7 @@ const TodosService = {
         topicId: body.topicId,
         flashcardDeckId: body.flashcardDeckId,
         studyPlanDayId: body.studyPlanDayId,
-      });
+      }, schoolId);
 
       const patch = { ...refs };
       for (const f of ['title', 'description', 'priority', 'dueDate']) {
@@ -234,34 +239,34 @@ const TodosService = {
 
       // Đổi tiêu đề Todo thủ công → cập nhật khóa chống trùng
       if (body.title !== undefined && current.source_type === 'MANUAL' && current.status !== 'COMPLETED') {
-        key = manualKey(body.title);
+        key = manualKey(body.title, schoolId);
         if (key !== current.dedupe_key) {
-          const clash = await Repo.findOpenByDedupeKey(user.id, key);
-          if (clash && clash.id !== id) throw await duplicateError(user.id, key);
+          const clash = await Repo.findOpenByDedupeKey(user.id, key, schoolId);
+          if (clash && clash.id !== id) throw await duplicateError(user.id, key, schoolId);
         }
         patch.dedupeKey = key;
       }
 
-      await Repo.update(client, user.id, id, patch);
+      await Repo.update(client, user.id, id, patch, schoolId);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
-      if (isUniqueViolation(error)) throw await duplicateError(user.id, key);
+      if (isUniqueViolation(error)) throw await duplicateError(user.id, key, schoolId);
       throw error;
     } finally {
       client.release();
     }
 
-    return toView(await Repo.findViewById(user.id, id));
+    return toView(await Repo.findViewById(user.id, id, schoolId));
   },
 
   /** Đổi trạng thái thủ công. KHÔNG có đường nào tự hoàn thành Todo (kể cả khi Pomodoro kết thúc). */
-  async changeStatus(user, id, { status }) {
+  async changeStatus(user, id, { status }, schoolId = null) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      const current = await Repo.findRawById(client, user.id, id);
+      const current = await Repo.findRawById(client, user.id, id, schoolId);
       if (!current) throw new AppError('TODO_NOT_FOUND', 404);
 
       if (current.status !== status) {
@@ -272,13 +277,13 @@ const TodosService = {
 
         // Mở lại Todo thủ công: khôi phục khóa chống trùng (có thể trùng với Todo đang mở khác)
         if (current.status === 'COMPLETED') {
-          if (current.source_type === 'MANUAL') patch.dedupeKey = manualKey(current.title);
+          if (current.source_type === 'MANUAL') patch.dedupeKey = manualKey(current.title, schoolId);
           if (current.source_type === 'STUDY_PLANNER' && current.study_plan_day_id) {
-            patch.dedupeKey = plannerKey(current.study_plan_day_id);
+            patch.dedupeKey = plannerKey(current.study_plan_day_id, schoolId);
           }
         }
 
-        await Repo.update(client, user.id, id, patch);
+        await Repo.update(client, user.id, id, patch, schoolId);
       }
 
       await client.query('COMMIT');
@@ -290,17 +295,16 @@ const TodosService = {
       client.release();
     }
 
-    return toView(await Repo.findViewById(user.id, id));
+    return toView(await Repo.findViewById(user.id, id, schoolId));
   },
 
-  async remove(user, id) {
-    const deleted = await Repo.delete(user.id, id);
+  async remove(user, id, schoolId = null) {
+    const deleted = await Repo.delete(user.id, id, schoolId);
     if (!deleted) throw new AppError('TODO_NOT_FOUND', 404);
     return { id };
   },
 
-  stats: (user) => Repo.stats(user.id),
+  stats: (user, schoolId = null) => Repo.stats(user.id, schoolId),
 };
 
 module.exports = TodosService;
-

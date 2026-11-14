@@ -3,6 +3,7 @@ const router = express.Router();
 const { z } = require('zod');
 const ctrl = require('./learning.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
   subjectIdParam,
@@ -27,8 +28,8 @@ const submitStudyPlanDayBody = z.object({
   ).min(1).max(20)
 }).strict();
 
-// Toàn bộ route yêu cầu đăng nhập
-router.use(authenticate);
+// Toàn bộ route yêu cầu đăng nhập và school context
+router.use(authenticate, requireSchoolContext);
 
 // GET /api/learning/profile?subjectId=... — Profile học tập của chính student
 router.get('/profile', validate(getLearningProfileQuery, 'query'), ctrl.getLearningProfile);
