@@ -250,3 +250,8 @@ service-account*.json
 .env.production.local
 
 test/
+# ============================================
+# MARKDOWN / DOCUMENTATION
+# ============================================
+
+*.md

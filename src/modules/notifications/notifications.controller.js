@@ -3,7 +3,7 @@ const NotificationsService = require('./notifications.service');
 const NotificationsController = {
   /**
    * GET /api/notifications
-   * Lấy tất cả thông báo của user hiện tại (có phân trang)
+   * Lấy tất cả thông báo của user hiện tại theo Tenant Context (có phân trang)
    */
   async getNotifications(req, res, next) {
     try {
@@ -11,8 +11,10 @@ const NotificationsController = {
         req.validatedQuery ?? req.query;
       const result = await NotificationsService.getNotifications(
         { page, limit },
-        req.user.id,
-        req.tenant.schoolId
+        {
+          userId: req.tenant.userId,
+          schoolId: req.tenant.schoolId,
+        }
       );
 
       res.status(200).json({
@@ -31,18 +33,22 @@ const NotificationsController = {
   },
 
   /**
-   * GET /api/notifications/unread
-   * Lấy thông báo chưa đọc (có phân trang + trả về unread_count)
-   */
+ * GET /api/notifications/unread
+ * Lấy thông báo chưa đọc theo Tenant Context
+ */
   async getUnreadNotifications(req, res, next) {
     try {
       const { page = 1, limit = 20 } =
         req.validatedQuery ?? req.query;
-      const result = await NotificationsService.getUnreadNotifications(
-        { page, limit },
-        req.user.id,
-        req.tenant.schoolId
-      );
+
+      const result =
+        await NotificationsService.getUnreadNotifications(
+          { page, limit },
+          {
+            userId: req.tenant.userId,
+            schoolId: req.tenant.schoolId,
+          }
+        );
 
       res.status(200).json({
         success: true,
@@ -52,8 +58,9 @@ const NotificationsController = {
           page: Number(page),
           limit: Number(limit),
           total: result.total,
-          totalPages: Math.ceil(result.total / Number(limit)) || 1
-        }
+          totalPages:
+            Math.ceil(result.total / Number(limit)) || 1,
+        },
       });
     } catch (error) {
       next(error);
@@ -62,7 +69,7 @@ const NotificationsController = {
 
   /**
    * GET /api/notifications/:id
-   * Lấy chi tiết một thông báo
+   * Lấy chi tiết một thông báo thuộc Tenant Context
    */
   async getNotificationById(req, res, next) {
     try {
@@ -85,7 +92,7 @@ const NotificationsController = {
 
   /**
    * PATCH /api/notifications/:id/read
-   * Đánh dấu một thông báo là đã đọc
+   * Đánh dấu một thông báo là đã đọc trong Tenant Context
    */
   async markAsRead(req, res, next) {
     try {
@@ -108,7 +115,7 @@ const NotificationsController = {
 
   /**
    * PATCH /api/notifications/read-all
-   * Đánh dấu tất cả thông báo chưa đọc là đã đọc
+   * Đánh dấu tất cả thông báo chưa đọc là đã đọc trong Tenant Context
    */
   async markAllAsRead(req, res, next) {
     try {

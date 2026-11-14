@@ -2,11 +2,13 @@ const express = require('express');
 const ctrl = require('./todos.controller');
 const v = require('./todos.validation');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
 const { parseRequest, appErrorHandler } = require('../../middlewares/zodRequest.middleware');
 
 const router = express.Router();
 
 router.use(authenticate);
+router.use(requireSchoolContext);
 
 router.post('/', parseRequest({ body: v.createTodo }), ctrl.create);
 router.get('/', parseRequest({ query: v.listQuery }), ctrl.list);

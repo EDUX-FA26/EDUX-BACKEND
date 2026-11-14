@@ -45,6 +45,7 @@ const DashboardRepository = {
               OR a.publish_status = 'published'
             )
             AND (a.deadline IS NULL OR a.deadline > NOW())
+            AND (a.publish_status IS NULL OR a.publish_status = 'published')
             AND NOT EXISTS (
               SELECT 1
               FROM submissions sub

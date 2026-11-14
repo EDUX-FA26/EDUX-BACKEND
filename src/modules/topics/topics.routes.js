@@ -2,7 +2,8 @@
 const router = require('express').Router();
 
 const { authenticate } = require('../../middlewares/auth.middleware');
-const { authorizeRoles } = require('../../middlewares/rbac.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 
 const ctrl = require('./topics.controller');
@@ -10,7 +11,8 @@ const schema = require('./topics.validation');
 
 router.use(
   authenticate,
-  authorizeRoles('admin', 'lecturer')
+  requireSchoolContext,
+  authorizeSchoolRoles('lecturer', 'school_admin')
 );
 
 // Phase 2B - AI Classification

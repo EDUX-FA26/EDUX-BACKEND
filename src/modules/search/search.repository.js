@@ -9,8 +9,9 @@ const sources = {
     JOIN subjects s ON s.id = c.subject_id
     JOIN semesters sem ON sem.id = c.semester_id
     WHERE c.is_active = true AND s.is_active = true
+      AND c.school_id = $4
       AND (c.class_code ILIKE $1 OR s.name ILIKE $1 OR s.code ILIKE $1)
-      AND ($3 = 'admin' OR ($3 = 'lecturer' AND c.lecturer_id = $2)
+      AND (($3 = 'school_admin' OR $3 = 'admin') OR ($3 = 'lecturer' AND c.lecturer_id = $2)
         OR ($3 = 'student' AND EXISTS (
           SELECT 1 FROM class_members cm WHERE cm.class_id = c.id
             AND cm.student_id = $2 AND cm.status = 'active'
@@ -22,8 +23,9 @@ const sources = {
     FROM assignments a
     JOIN classes c ON c.id = a.class_id
     WHERE c.is_active = true
+      AND c.school_id = $4
       AND (a.title ILIKE $1 OR a.description ILIKE $1 OR c.class_code ILIKE $1)
-      AND ($3 = 'admin' OR ($3 = 'lecturer' AND c.lecturer_id = $2)
+      AND (($3 = 'school_admin' OR $3 = 'admin') OR ($3 = 'lecturer' AND c.lecturer_id = $2)
         OR ($3 = 'student' AND a.publish_status = 'published' AND EXISTS (
           SELECT 1 FROM class_members cm WHERE cm.class_id = c.id
             AND cm.student_id = $2 AND cm.status = 'active'
@@ -35,8 +37,9 @@ const sources = {
     FROM class_materials m
     JOIN classes c ON c.id = m.class_id
     WHERE c.is_active = true
+      AND c.school_id = $4
       AND (m.title ILIKE $1 OR m.description ILIKE $1 OR m.file_name ILIKE $1)
-      AND ($3 = 'admin' OR ($3 = 'lecturer' AND c.lecturer_id = $2)
+      AND (($3 = 'school_admin' OR $3 = 'admin') OR ($3 = 'lecturer' AND c.lecturer_id = $2)
         OR ($3 = 'student' AND EXISTS (
           SELECT 1 FROM class_members cm WHERE cm.class_id = c.id
             AND cm.student_id = $2 AND cm.status = 'active'
@@ -47,9 +50,11 @@ const sources = {
            fd.class_id, fd.subject_id
     FROM flashcard_decks fd
     JOIN subjects s ON s.id = fd.subject_id
+    LEFT JOIN classes c ON c.id = fd.class_id
     WHERE fd.is_active = true AND s.is_active = true
+      AND (fd.school_id = $4 OR (fd.school_id IS NULL AND c.school_id = $4))
       AND (fd.title ILIKE $1 OR fd.description ILIKE $1 OR s.name ILIKE $1)
-      AND ($3 = 'admin' OR ($3 = 'lecturer' AND (fd.is_public = true OR fd.created_by = $2))
+      AND (($3 = 'school_admin' OR $3 = 'admin') OR ($3 = 'lecturer' AND (fd.is_public = true OR fd.created_by = $2 OR c.lecturer_id = $2))
         OR ($3 = 'student' AND (fd.is_public = true OR EXISTS (
           SELECT 1 FROM class_members cm WHERE cm.class_id = fd.class_id
             AND cm.student_id = $2 AND cm.status = 'active'
@@ -57,13 +62,21 @@ const sources = {
 };
 
 module.exports = {
-  async search({ q, type, page, limit }, user) {
+  async search({ q, type, page, limit }, tenant) {
+    const schoolId = tenant?.schoolId;
+    const userId = tenant?.userId || tenant?.id;
+    const role = tenant?.role;
+
+    if (!schoolId) {
+      throw new Error('SCHOOL_ID_REQUIRED_FOR_SEARCH');
+    }
+
     const selected = type ? [sources[type]] : Object.values(sources);
     const union = selected.join('\nUNION ALL\n');
-    const values = [`%${q}%`, user.id, user.role];
+    const values = [`%${q}%`, userId, role, schoolId];
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM (${union}) results`, values);
     const result = await pool.query(
-      `SELECT * FROM (${union}) results ORDER BY created_at DESC, type, id LIMIT $4 OFFSET $5`,
+      `SELECT * FROM (${union}) results ORDER BY created_at DESC, type, id LIMIT $5 OFFSET $6`,
       [...values, limit, (page - 1) * limit]
     );
     return { data: result.rows, total: count.rows[0].total };

@@ -30,8 +30,13 @@ const StudyPlannerContentRepository = {
     async findDiagnosticSources(
         studentId,
         subjectId,
-        topicId
+        topicId,
+        schoolId = null
     ) {
+        const schoolFilter = schoolId ? `AND fd.school_id = $4 AND t.school_id = $4` : '';
+        const params = schoolId
+            ? [studentId, subjectId, topicId, schoolId]
+            : [studentId, subjectId, topicId];
         const { rows } = await pool.query(
             `SELECT DISTINCT
          fc.id AS "flashcardId",
@@ -51,6 +56,7 @@ const StudyPlannerContentRepository = {
          AND fc.is_active = true
          AND fd.is_active = true
          AND fc.type = 'multiple_choice'
+         ${schoolFilter}
          AND (
            fd.is_public = true
            OR fd.class_id IN (
@@ -70,7 +76,7 @@ const StudyPlannerContentRepository = {
          )
        ORDER BY fc.question, fc.id
        LIMIT 10`,
-            [studentId, subjectId, topicId]
+            params
         );
 
         return rows;
@@ -118,7 +124,8 @@ const StudyPlannerContentRepository = {
         planDayId,
         studentId,
         sourceFlashcardId,
-        questions
+        questions,
+        schoolId = null,
     }) {
         const client = await pool.connect();
 
@@ -152,8 +159,41 @@ const StudyPlannerContentRepository = {
             for (let i = 0; i < questions.length; i++) {
                 const question = questions[i];
 
-                await client.query(
-                    `INSERT INTO study_plan_questions (
+                if (schoolId) {
+                    await client.query(
+                        `INSERT INTO study_plan_questions (
+             plan_day_id,
+             source_flashcard_id,
+             question_order,
+             question,
+             answer,
+             explanation,
+             options,
+             type,
+             difficulty,
+             generation_source,
+             school_id
+           )
+           VALUES (
+             $1, $2, $3, $4, $5, $6,
+             $7::jsonb, $8, $9, 'ai', $10
+           )`,
+                        [
+                            planDayId,
+                            sourceFlashcardId,
+                            i + 1,
+                            question.question,
+                            question.answer,
+                            question.explanation,
+                            JSON.stringify(question.options),
+                            question.type,
+                            question.difficulty,
+                            schoolId,
+                        ]
+                    );
+                } else {
+                    await client.query(
+                        `INSERT INTO study_plan_questions (
              plan_day_id,
              source_flashcard_id,
              question_order,
@@ -169,18 +209,19 @@ const StudyPlannerContentRepository = {
              $1, $2, $3, $4, $5, $6,
              $7::jsonb, $8, $9, 'ai'
            )`,
-                    [
-                        planDayId,
-                        sourceFlashcardId,
-                        i + 1,
-                        question.question,
-                        question.answer,
-                        question.explanation,
-                        JSON.stringify(question.options),
-                        question.type,
-                        question.difficulty
-                    ]
-                );
+                        [
+                            planDayId,
+                            sourceFlashcardId,
+                            i + 1,
+                            question.question,
+                            question.answer,
+                            question.explanation,
+                            JSON.stringify(question.options),
+                            question.type,
+                            question.difficulty,
+                        ]
+                    );
+                }
             }
 
             await client.query(

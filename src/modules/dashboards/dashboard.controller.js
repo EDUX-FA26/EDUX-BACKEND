@@ -53,6 +53,9 @@ const DashboardController = {
         data,
       });
     } catch (error) {
+      if (error.message === 'SCHOOL_CONTEXT_REQUIRED') {
+        return res.status(400).json({ success: false, message: 'School context required' });
+      }
       next(error);
     }
   },

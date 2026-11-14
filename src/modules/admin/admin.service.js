@@ -2,6 +2,7 @@ const bcrypt = require("bcryptjs");
 const ExcelJS = require("exceljs");
 const adminRepository = require("./admin.repository");
 const authRepository = require("../auth/auth.repository");
+const EmailService = require("../../config/email.config");
 const notificationsRepository = require("../notifications/notifications.repository");
 const { getIO } = require("../../config/socket.config");
 const {
@@ -168,12 +169,13 @@ const AdminService = {
     ];
 
     if (!allowedTargets.includes(target)) {
-      const error = new Error("INVALID_BROADCAST_TARGET");
-      error.status = 400;
-      throw error;
+      throw Object.assign(
+        new Error("INVALID_BROADCAST_TARGET"),
+        { status: 400 }
+      );
     }
 
-    // Recipients are derived from active memberships, never global roles.
+    // 1. Lấy danh sách người nhận theo trường
     const userIds =
       await adminRepository.findUserIdsBySchoolTarget(
         tenant.schoolId,
@@ -184,11 +186,16 @@ const AdminService = {
       return {
         success: true,
         count: 0,
+        email: {
+          attempted: 0,
+          sent: 0,
+          failed: 0,
+        },
       };
     }
 
-    // 2. Chuẩn bị notifications
-    const notifications = userIds.map(userId => ({
+    // 2. Tạo thông báo nội bộ
+    const notifications = userIds.map((userId) => ({
       userId,
       title,
       message,
@@ -199,12 +206,10 @@ const AdminService = {
       school_id: tenant.schoolId,
     }));
 
-    // 3. Lưu notification vào PostgreSQL
     const createdNotifications =
       await notificationsRepository.bulkCreate(notifications);
 
-    // 4. Phát sự kiện realtime
-    // Không làm thất bại API nếu socket gặp lỗi
+    // 3. Phát thông báo realtime
     try {
       emitCreatedNotifications(createdNotifications);
     } catch (error) {
@@ -214,10 +219,55 @@ const AdminService = {
       );
     }
 
-    // 5. Trả kết quả
+    // 4. Lấy email người nhận theo trường
+    const recipients =
+      await adminRepository.findEmailRecipientsBySchoolTarget(
+        tenant.schoolId,
+        target
+      );
+
+    let emailSent = 0;
+    let emailFailed = 0;
+
+    // 5. Gửi email theo từng nhóm 5 người
+    const BATCH_SIZE = 5;
+
+    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+      const batch = recipients.slice(i, i + BATCH_SIZE);
+
+      const results = await Promise.allSettled(
+        batch.map((recipient) =>
+          EmailService.sendEmail({
+            to: recipient.email,
+            subject: title,
+            message,
+          })
+        )
+      );
+
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          emailSent++;
+        } else {
+          emailFailed++;
+
+          console.error("[BROADCAST EMAIL FAILED]", {
+            userId: batch[index].id,
+            error: result.reason?.message,
+          });
+        }
+      });
+    }
+
+    // 6. Trả kết quả từng kênh
     return {
       success: true,
       count: createdNotifications.length,
+      email: {
+        attempted: recipients.length,
+        sent: emailSent,
+        failed: emailFailed,
+      },
     };
   },
 

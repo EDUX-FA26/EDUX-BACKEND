@@ -1,52 +1,43 @@
 
+"use strict";
+
 const express = require('express');
 const router = express.Router();
 
-const { authenticate } = require(
-  '../../middlewares/auth.middleware'
-);
-const { requireSchoolContext } = require(
-  '../../middlewares/requireSchoolContext'
-);
-const { authorizeSchoolRoles } = require(
-  '../../middlewares/authorizeSchoolRoles'
-);
-
+const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const controller = require('./projects.controller');
 
-router.use(
-  authenticate,
-  requireSchoolContext,
-  authorizeSchoolRoles('school_admin', 'lecturer', 'student')
-);
+// ==========================================
+// Multi-Tenant Middleware Chain
+// authenticate -> requireSchoolContext
+// ==========================================
+router.use(authenticate, requireSchoolContext);
 
 // Sinh viên xem Project của mình
-router.get('/my', controller.getMine);
+router.get('/my', authorizeSchoolRoles('student'), controller.getMine);
 
-// Giảng viên xem các Project trong lớp
-router.get('/class/:classId', controller.getByClass);
+// Giảng viên hoặc Quản trị viên trường xem các Project trong lớp
+router.get('/class/:classId', authorizeSchoolRoles('lecturer', 'school_admin'), controller.getByClass);
 
 // Sinh viên tạo Project
-router.post('/', controller.create);
+router.post('/', authorizeSchoolRoles('student'), controller.create);
 
-// Phản hồi lời mời
-router.post('/invitations/:id/accept', controller.accept);
-router.post('/invitations/:id/reject', controller.reject);
+// Sinh viên phản hồi lời mời
+router.post('/invitations/:id/accept', authorizeSchoolRoles('student'), controller.accept);
+router.post('/invitations/:id/reject', authorizeSchoolRoles('student'), controller.reject);
 
-router.get('/invitations/my', controller.getInvitations);
+// Lời mời của sinh viên
+router.get('/invitations/my', authorizeSchoolRoles('student'), controller.getInvitations);
 
-// Chi tiết Project
-router.get('/:projectId', controller.getById);
+// Chi tiết Project (Student tham gia, Lecturer phụ trách, hoặc School Admin)
+router.get('/:projectId', authorizeSchoolRoles('student', 'lecturer', 'school_admin'), controller.getById);
 
-router.get(
-  '/:projectId/invitations',
-  controller.getProjectInvitations
-);
+// Owner xem danh sách lời mời của Project
+router.get('/:projectId/invitations', authorizeSchoolRoles('student'), controller.getProjectInvitations);
 
-// Owner mời thành viên
-router.post(
-  '/:projectId/invitations',
-  controller.invite
-);
+// Owner mời thành viên vào Project
+router.post('/:projectId/invitations', authorizeSchoolRoles('student'), controller.invite);
 
 module.exports = router;

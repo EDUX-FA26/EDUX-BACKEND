@@ -16,7 +16,7 @@ function makeError(message, status = 400) {
 
 const StudyPlannerSubmissionService = {
     // Sinh viên mở bài ôn tập.
-    async getDay(planDayId, studentId) {
+    async getDay(planDayId, studentId, schoolId = null) {
         const day = await ContentRepository.findDayForStudent(
             planDayId,
             studentId
@@ -29,7 +29,8 @@ const StudyPlannerSubmissionService = {
         const hasAccess =
             await LearningRepository.isStudentActiveInSubject(
                 studentId,
-                day.subjectId
+                day.subjectId,
+                schoolId
             );
 
         if (!hasAccess) {
@@ -63,7 +64,7 @@ const StudyPlannerSubmissionService = {
     },
 
     // Sinh viên nộp bài.
-    async submitDay(planDayId, studentId, answers) {
+    async submitDay(planDayId, studentId, answers, schoolId = null) {
         const day = await ContentRepository.findDayForStudent(
             planDayId,
             studentId
@@ -76,7 +77,8 @@ const StudyPlannerSubmissionService = {
         const hasAccess =
             await LearningRepository.isStudentActiveInSubject(
                 studentId,
-                day.subjectId
+                day.subjectId,
+                schoolId
             );
 
         if (!hasAccess) {
@@ -86,12 +88,13 @@ const StudyPlannerSubmissionService = {
         return SubmissionRepository.submitDay(
             planDayId,
             studentId,
-            answers
+            answers,
+            schoolId
         );
     },
 
 
-    async getResult(planDayId, studentId) {
+    async getResult(planDayId, studentId, schoolId = null) {
         const day = await ContentRepository.findDayForStudent(
             planDayId,
             studentId
@@ -104,7 +107,8 @@ const StudyPlannerSubmissionService = {
         const hasAccess =
             await LearningRepository.isStudentActiveInSubject(
                 studentId,
-                day.subjectId
+                day.subjectId,
+                schoolId
             );
 
         if (!hasAccess) {

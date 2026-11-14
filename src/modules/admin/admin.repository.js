@@ -271,6 +271,43 @@ const AdminRepository = {
     return rows.map((row) => row.id);
   },
 
+  async findEmailRecipientsBySchoolTarget(schoolId, target) {
+    const params = [schoolId];
+
+    const roleFilter =
+      target === "student" || target === "lecturer"
+        ? "AND sm.role = $2"
+        : "";
+
+    if (roleFilter) {
+      params.push(target);
+    }
+
+    const { rows } = await pool.query(
+      `
+    SELECT DISTINCT
+      u.id,
+      u.email
+    FROM public.school_memberships sm
+    JOIN public.schools s
+      ON s.id = sm.school_id
+    JOIN public.users u
+      ON u.id = sm.user_id
+    WHERE sm.school_id = $1
+      AND sm.status = 'active'
+      AND s.status = 'active'
+      AND u.is_active = TRUE
+      AND u.email IS NOT NULL
+      AND TRIM(u.email) <> ''
+      ${roleFilter}
+    ORDER BY u.id
+    `,
+      params
+    );
+
+    return rows;
+  },
+
   async findUserIdsByPlatformTarget(target) {
     let query = `
       SELECT DISTINCT u.id
@@ -786,6 +823,16 @@ const AdminRepository = {
         let res = await client.query('SELECT id FROM users WHERE email = $1', [email]);
         if (res.rows.length > 0) {
           userCache[email] = res.rows[0].id;
+          if (role === 'student' && code) {
+            await client.query(
+              `UPDATE user_profiles
+               SET student_code = COALESCE(NULLIF(student_code, ''), $1),
+                   full_name = COALESCE(NULLIF(full_name, ''), $2),
+                   department_id = COALESCE(department_id, $3)
+               WHERE user_id = $4`,
+              [code, fullName, deptId, res.rows[0].id]
+            );
+          }
           return res.rows[0].id;
         }
 
@@ -931,6 +978,16 @@ const AdminRepository = {
         let res = await client.query('SELECT id FROM users WHERE email = $1', [email]);
         if (res.rows.length > 0) {
           userCache[email] = res.rows[0].id;
+          if (role === 'student' && code) {
+            await client.query(
+              `UPDATE user_profiles
+               SET student_code = COALESCE(NULLIF(student_code, ''), $1),
+                   full_name = COALESCE(NULLIF(full_name, ''), $2),
+                   department_id = COALESCE(department_id, $3)
+               WHERE user_id = $4`,
+              [code, fullName, deptId, res.rows[0].id]
+            );
+          }
           return userCache[email];
         }
 
