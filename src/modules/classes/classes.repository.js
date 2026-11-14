@@ -197,37 +197,62 @@ const ClassesRepository = {
   },
   async getSlots(classId, schoolId) {
     const query = `
-      SELECT 
-        s.id, 
-        s.session_no as slot_number, 
-        s.learning_date as date, 
-        COALESCE(s.slot_time, '09:30-11:45') as time, 
-        s.title, 
-        s.note as content,
-        COALESCE(
-          (
-            SELECT json_agg(
-              json_build_object(
-                'id', a.id,
-                'title', a.title,
-                'description', a.description,
-                'deadline', a.deadline,
-                'max_score', a.max_score,
-                'weight', a.weight,
-                'publish_status', a.publish_status,
-                'slot_id', COALESCE(a.slot_id, a.session_id)
-              ) ORDER BY a.created_at ASC
+    SELECT
+      s.id,
+      s.session_no AS slot_number,
+      s.learning_date AS date,
+      COALESCE(
+        s.slot_time,
+        '09:30-11:45'
+      ) AS time,
+      s.title,
+      s.note AS content,
+
+      COALESCE(
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', a.id,
+              'title', a.title,
+              'description', a.description,
+              'deadline', a.deadline,
+              'max_score', a.max_score,
+              'weight', a.weight,
+              'publish_status', a.publish_status,
+              'slot_id', COALESCE(a.slot_id, a.session_id)
             )
-            FROM assignments a
-            WHERE (a.slot_id = s.id OR a.session_id = s.id)
-          ),
-          '[]'::json
-        ) as assignments
-      FROM sessions s
-      WHERE s.class_id = $1 
-      ORDER BY s.session_no ASC
-    `;
-    const { rows } = await pool.query(query, [classId, schoolId]);
+            ORDER BY a.created_at ASC
+          )
+
+          FROM assignments a
+
+          WHERE (
+            a.slot_id = s.id
+            OR a.session_id = s.id
+          )
+
+          -- Assignment phải thuộc đúng lớp
+          AND a.class_id = s.class_id
+
+          -- Assignment phải thuộc đúng trường
+          AND a.school_id = s.school_id
+        ),
+        '[]'::json
+      ) AS assignments
+
+    FROM sessions s
+
+    WHERE s.class_id = $1
+      AND s.school_id = $2
+
+    ORDER BY s.session_no ASC
+  `;
+
+    const { rows } = await pool.query(
+      query,
+      [classId, schoolId]
+    );
+
     return rows;
   },
 
