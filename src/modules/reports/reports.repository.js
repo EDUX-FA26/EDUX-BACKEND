@@ -1,7 +1,7 @@
 /**
  * ===========================================================================
  * FILE: src/modules/reports/reports.repository.js
- * MÔ TẢ: Tầng truy vấn dữ liệu (Repository) phục vụ báo cáo & thống kê cho Admin
+ * MÔ TẢ: Tầng truy vấn dữ liệu (Repository) phục vụ báo cáo & thống kê cho School Admin & Lecturer
  * ===========================================================================
  */
 
@@ -61,10 +61,16 @@ const extractDeclarationsFromNote = (rawNote) => {
 };
 
 /**
- * 1. Thống kê tổng quan hệ thống (System Overview)
- * Trả về các chỉ số tổng hợp và dữ liệu phân bổ chi tiết cho các biểu đồ.
+ * 1. Thống kê tổng quan trường học (School Overview)
+ * Lọc theo schoolId và phân quyền role (Lecturer chỉ thấy các lớp phụ trách)
  */
-const getSystemStats = async () => {
+const getSystemStats = async (schoolId, userId, role) => {
+  if (!schoolId) throw new Error("SCHOOL_ID_REQUIRED_FOR_REPORTS");
+
+  const isLecturer = role === "lecturer";
+  const params = isLecturer ? [schoolId, userId] : [schoolId];
+  const lecturerFilter = isLecturer ? "AND c.lecturer_id = $2" : "";
+
   const [
     usersRes,
     classesRes,
@@ -79,94 +85,142 @@ const getSystemStats = async () => {
     subjectsByDeptRes,
     gradeDistRes,
   ] = await Promise.all([
-    pool.query(`
-      SELECT
+    // Người dùng trong phạm vi trường học (public.school_memberships)
+    pool.query(
+      `SELECT
         COUNT(*)::int AS total_users,
-        COUNT(*) FILTER (WHERE is_active = true)::int AS active_users,
-        COUNT(*) FILTER (WHERE is_active = false)::int AS inactive_users,
-        COUNT(*) FILTER (WHERE role = 'student')::int AS total_students,
-        COUNT(*) FILTER (WHERE role = 'lecturer')::int AS total_lecturers,
-        COUNT(*) FILTER (WHERE role = 'admin')::int AS total_admins
-      FROM users
-    `),
-    pool.query(`
-      SELECT
+        COUNT(*) FILTER (WHERE status = 'active')::int AS active_users,
+        COUNT(*) FILTER (WHERE status != 'active')::int AS inactive_users,
+        COUNT(*) FILTER (WHERE role = 'student' AND status = 'active')::int AS total_students,
+        COUNT(*) FILTER (WHERE role = 'lecturer' AND status = 'active')::int AS total_lecturers,
+        COUNT(*) FILTER (WHERE (role = 'school_admin' OR role = 'admin') AND status = 'active')::int AS total_admins
+      FROM public.school_memberships
+      WHERE school_id = $1`,
+      [schoolId]
+    ),
+    // Lớp học thuộc trường
+    pool.query(
+      `SELECT
         COUNT(*)::int AS total_classes,
         COUNT(*) FILTER (WHERE is_active = true)::int AS active_classes
-      FROM classes
-    `),
-    pool.query(`
-      SELECT
-        COUNT(*)::int AS total_subjects,
-        COUNT(*) FILTER (WHERE is_active = true)::int AS active_subjects
-      FROM subjects
-    `),
-    pool.query(`SELECT COUNT(*)::int AS total_departments FROM departments`),
-    pool.query(`
-      SELECT
-        COUNT(*)::int AS total_semesters,
-        COUNT(*) FILTER (WHERE is_active = true)::int AS active_semesters
-      FROM semesters
-    `),
-    pool.query(`
-      SELECT
+      FROM classes c
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Môn học thuộc trường
+    pool.query(
+      `SELECT
+        COUNT(DISTINCT c.subject_id)::int AS total_subjects,
+        COUNT(DISTINCT c.subject_id) FILTER (WHERE c.is_active = true)::int AS active_subjects
+      FROM classes c
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Khoa/Bộ môn
+    pool.query(
+      `SELECT COUNT(DISTINCT s.department_id)::int AS total_departments
+      FROM classes c
+      JOIN subjects s ON s.id = c.subject_id
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Học kỳ
+    pool.query(
+      `SELECT
+        COUNT(DISTINCT c.semester_id)::int AS total_semesters,
+        COUNT(DISTINCT c.semester_id) FILTER (WHERE c.is_active = true)::int AS active_semesters
+      FROM classes c
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Bài tập
+    pool.query(
+      `SELECT
         COUNT(*)::int AS total_assignments,
-        COUNT(*)::int AS published_assignments
-      FROM assignments
-    `),
-    pool.query(`
-      SELECT
+        COUNT(*) FILTER (WHERE a.publish_status = 'published')::int AS published_assignments
+      FROM assignments a
+      JOIN classes c ON a.class_id = c.id
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Bài nộp
+    pool.query(
+      `SELECT
         COUNT(*)::int AS total_submissions,
-        COUNT(*) FILTER (WHERE status = 'late')::int AS late_submissions,
-        COUNT(*) FILTER (WHERE status = 'submitted')::int AS ontime_submissions
-      FROM submissions
-    `),
-    pool.query(`
-      SELECT
+        COUNT(*) FILTER (WHERE s.status = 'late')::int AS late_submissions,
+        COUNT(*) FILTER (WHERE s.status = 'submitted')::int AS ontime_submissions
+      FROM submissions s
+      JOIN assignments a ON a.id = s.assignment_id
+      JOIN classes c ON c.id = a.class_id
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Điểm số
+    pool.query(
+      `SELECT
         COUNT(*)::int AS graded_submissions,
-        ROUND(AVG(score)::numeric, 2) AS avg_score,
-        MAX(score)::numeric AS max_score,
-        MIN(score)::numeric AS min_score
-      FROM grades
-    `),
-    pool.query(`SELECT COUNT(*)::int AS total_ai_evaluations FROM ai_evaluations`),
-    pool.query(`
-      SELECT
-        s.code AS semester_code,
-        s.name AS semester_name,
+        ROUND(AVG(g.score)::numeric, 2) AS avg_score,
+        MAX(g.score)::numeric AS max_score,
+        MIN(g.score)::numeric AS min_score
+      FROM grades g
+      JOIN classes c ON c.id = g.class_id
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Đánh giá AI
+    pool.query(
+      `SELECT COUNT(*)::int AS total_ai_evaluations
+      FROM ai_evaluations ae
+      JOIN classes c ON ae.class_id = c.id
+      WHERE c.school_id = $1 ${lecturerFilter}`,
+      params
+    ),
+    // Lớp học theo học kỳ
+    pool.query(
+      `SELECT
+        sem.code AS semester_code,
+        sem.name AS semester_name,
         COUNT(DISTINCT c.id)::int AS class_count,
         COUNT(DISTINCT cm.student_id)::int AS student_count,
         COUNT(DISTINCT a.id)::int AS assignment_count
-      FROM semesters s
-      LEFT JOIN classes c ON c.semester_id = s.id
+      FROM classes c
+      JOIN semesters sem ON c.semester_id = sem.id
       LEFT JOIN class_members cm ON cm.class_id = c.id
       LEFT JOIN assignments a ON a.class_id = c.id
-      GROUP BY s.id, s.code, s.name, s.start_date
-      ORDER BY class_count DESC, s.start_date DESC NULLS LAST
-      LIMIT 8
-    `),
-    pool.query(`
-      SELECT
+      WHERE c.school_id = $1 ${lecturerFilter}
+      GROUP BY sem.id, sem.code, sem.name, sem.start_date
+      ORDER BY class_count DESC, sem.start_date DESC NULLS LAST
+      LIMIT 8`,
+      params
+    ),
+    // Môn học theo khoa
+    pool.query(
+      `SELECT
         d.code AS department_code,
         d.name AS department_name,
         COUNT(DISTINCT sub.id)::int AS subject_count,
         COUNT(DISTINCT c.id)::int AS class_count
-      FROM departments d
-      LEFT JOIN subjects sub ON sub.department_id = d.id
-      LEFT JOIN classes c ON c.subject_id = sub.id
+      FROM classes c
+      JOIN subjects sub ON sub.id = c.subject_id
+      JOIN departments d ON d.id = sub.department_id
+      WHERE c.school_id = $1 ${lecturerFilter}
       GROUP BY d.id, d.code, d.name
       ORDER BY subject_count DESC, class_count DESC, d.code ASC
-      LIMIT 8
-    `),
-    pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE score >= 8.5)::int AS excellent_count,
-        COUNT(*) FILTER (WHERE score >= 7.0 AND score < 8.5)::int AS good_count,
-        COUNT(*) FILTER (WHERE score >= 5.5 AND score < 7.0)::int AS fair_count,
-        COUNT(*) FILTER (WHERE score < 5.5)::int AS below_avg_count
-      FROM grades
-      WHERE score IS NOT NULL
-    `),
+      LIMIT 8`,
+      params
+    ),
+    // Phân bổ điểm
+    pool.query(
+      `SELECT
+        COUNT(*) FILTER (WHERE g.score >= 8.5)::int AS excellent_count,
+        COUNT(*) FILTER (WHERE g.score >= 7.0 AND g.score < 8.5)::int AS good_count,
+        COUNT(*) FILTER (WHERE g.score >= 5.5 AND g.score < 7.0)::int AS fair_count,
+        COUNT(*) FILTER (WHERE g.score < 5.5)::int AS below_avg_count
+      FROM grades g
+      JOIN classes c ON c.id = g.class_id
+      WHERE c.school_id = $1 ${lecturerFilter} AND g.score IS NOT NULL`,
+      params
+    ),
   ]);
 
   const u = usersRes.rows[0] || {};
@@ -237,24 +291,37 @@ const getSystemStats = async () => {
 
 /**
  * 2. Thống kê tình hình sử dụng AI (AI Usage & Transparency)
- * Kết hợp dữ liệu từ bảng ai_interactions, ai_evaluations và khai báo AI trong submission_versions.note
+ * Lọc theo schoolId và phân quyền role
  */
-const getAiUsageStats = async () => {
+const getAiUsageStats = async (schoolId, userId, role) => {
+  if (!schoolId) throw new Error("SCHOOL_ID_REQUIRED_FOR_REPORTS");
+
+  const isLecturer = role === "lecturer";
+  const params = isLecturer ? [schoolId, userId] : [schoolId];
+  const lecturerFilter = isLecturer ? "AND c.lecturer_id = $2" : "";
+
   const [interactionsToolRes, interactionsDecisionRes, versionsRes, aiEvalsRes] =
     await Promise.all([
-      pool.query(`
-        SELECT ai_tool, COUNT(*)::int AS count
-        FROM ai_interactions
-        GROUP BY ai_tool
-      `),
-      pool.query(`
-        SELECT student_decision, COUNT(*)::int AS count
-        FROM ai_interactions
-        WHERE student_decision IS NOT NULL
-        GROUP BY student_decision
-      `),
-      pool.query(`
-        SELECT
+      pool.query(
+        `SELECT ai.ai_tool, COUNT(*)::int AS count
+        FROM ai_interactions ai
+        JOIN assignments a ON a.id = ai.assignment_id
+        JOIN classes c ON c.id = a.class_id
+        WHERE c.school_id = $1 ${lecturerFilter}
+        GROUP BY ai.ai_tool`,
+        params
+      ),
+      pool.query(
+        `SELECT ai.student_decision, COUNT(*)::int AS count
+        FROM ai_interactions ai
+        JOIN assignments a ON a.id = ai.assignment_id
+        JOIN classes c ON c.id = a.class_id
+        WHERE c.school_id = $1 ${lecturerFilter} AND ai.student_decision IS NOT NULL
+        GROUP BY ai.student_decision`,
+        params
+      ),
+      pool.query(
+        `SELECT
           sv.submission_id,
           sv.note,
           a.title AS assignment_title,
@@ -263,10 +330,12 @@ const getAiUsageStats = async () => {
         JOIN submissions s ON s.id = sv.submission_id
         JOIN assignments a ON a.id = s.assignment_id
         JOIN classes c ON c.id = a.class_id
-        WHERE sv.is_latest = true AND sv.note IS NOT NULL
-      `),
-      pool.query(`
-        SELECT
+        WHERE c.school_id = $1 ${lecturerFilter}
+          AND sv.is_latest = true AND sv.note IS NOT NULL`,
+        params
+      ),
+      pool.query(
+        `SELECT
           ae.submission_id,
           ae.pattern,
           ae.risk_level,
@@ -279,10 +348,12 @@ const getAiUsageStats = async () => {
           a.title AS assignment_title,
           c.class_code
         FROM ai_evaluations ae
-        LEFT JOIN submissions s ON s.id = ae.submission_id
-        LEFT JOIN assignments a ON a.id = s.assignment_id
-        LEFT JOIN classes c ON c.id = a.class_id
-      `),
+        JOIN classes c ON ae.class_id = c.id
+        JOIN submissions s ON s.id = ae.submission_id
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE c.school_id = $1 ${lecturerFilter}`,
+        params
+      ),
     ]);
 
   const toolCounts = new Map();
@@ -502,12 +573,18 @@ const getAiUsageStats = async () => {
 
 /**
  * 3. Nhật ký cảnh báo & kiểm toán (Audit Logs)
- * Tổng hợp từ kết quả hậu kiểm AI (ai_evaluations) và lịch sử bài nộp / khai báo AI (submissions + submission_versions)
+ * Lọc theo schoolId và phân quyền role
  */
-const getAuditLogs = async () => {
+const getAuditLogs = async (schoolId, userId, role) => {
+  if (!schoolId) throw new Error("SCHOOL_ID_REQUIRED_FOR_REPORTS");
+
+  const isLecturer = role === "lecturer";
+  const params = isLecturer ? [schoolId, userId] : [schoolId];
+  const lecturerFilter = isLecturer ? "AND c.lecturer_id = $2" : "";
+
   const [evalLogsRes, submissionLogsRes] = await Promise.all([
-    pool.query(`
-      SELECT
+    pool.query(
+      `SELECT
         ae.id::text AS id,
         'ai_evaluation' AS flag_type,
         COALESCE(u.full_name, u.email, 'Hệ thống AI') AS flagged_by,
@@ -532,11 +609,13 @@ const getAuditLogs = async () => {
       JOIN assignments a ON a.id = s.assignment_id
       JOIN classes c ON c.id = a.class_id
       JOIN subjects sub ON sub.id = c.subject_id
+      WHERE c.school_id = $1 ${lecturerFilter}
       ORDER BY ae.evaluated_at DESC
-      LIMIT 30
-    `),
-    pool.query(`
-      SELECT
+      LIMIT 30`,
+      params
+    ),
+    pool.query(
+      `SELECT
         s.id::text AS id,
         s.status AS submission_status,
         u.full_name AS student_name,
@@ -556,9 +635,11 @@ const getAuditLogs = async () => {
       JOIN subjects sub ON sub.id = c.subject_id
       LEFT JOIN submission_versions sv ON sv.submission_id = s.id AND sv.is_latest = true
       LEFT JOIN grades g ON g.submission_id = s.id
+      WHERE c.school_id = $1 ${lecturerFilter}
       ORDER BY COALESCE(s.last_submitted_at, s.submitted_at, s.created_at) DESC
-      LIMIT 50
-    `),
+      LIMIT 50`,
+      params
+    ),
   ]);
 
   const logs = [...evalLogsRes.rows];
@@ -641,10 +722,16 @@ const getAuditLogs = async () => {
 };
 
 /**
- * 4. Xuất dữ liệu hoạt động học tập
- * Phục vụ xuất báo cáo Excel cho Admin
+ * 4. Xuất dữ liệu hoạt động học tập (Export Learning Activity)
+ * Lọc theo schoolId và phân quyền role
  */
-const getLearningActivityExportData = async () => {
+const getLearningActivityExportData = async (schoolId, userId, role) => {
+  if (!schoolId) throw new Error("SCHOOL_ID_REQUIRED_FOR_REPORTS");
+
+  const isLecturer = role === "lecturer";
+  const params = isLecturer ? [schoolId, userId] : [schoolId];
+  const lecturerFilter = isLecturer ? "AND c.lecturer_id = $2" : "";
+
   const query = `
     SELECT
       u.id AS student_id,
@@ -686,22 +773,29 @@ const getLearningActivityExportData = async () => {
     LEFT JOIN submission_versions sv ON sv.submission_id = s.id
     LEFT JOIN grades g ON g.submission_id = s.id
     LEFT JOIN users grader ON g.graded_by = grader.id
+    WHERE c.school_id = $1 ${lecturerFilter}
     GROUP BY
       u.id, c.id, sem.id, sub.id, a.id, s.id, g.id, grader.id
     ORDER BY COALESCE(s.last_submitted_at, s.submitted_at, s.created_at) DESC NULLS LAST;
   `;
-  const { rows } = await pool.query(query);
+  const { rows } = await pool.query(query, params);
   return rows;
 };
 
 /**
- * 5. Xuất dữ liệu minh bạch AI
- * Kết hợp dữ liệu từ ai_evaluations và khai báo AI trong submission_versions
+ * 5. Xuất dữ liệu minh bạch AI (Export AI Transparency)
+ * Lọc theo schoolId và phân quyền role
  */
-const getAiTransparencyExportData = async () => {
+const getAiTransparencyExportData = async (schoolId, userId, role) => {
+  if (!schoolId) throw new Error("SCHOOL_ID_REQUIRED_FOR_REPORTS");
+
+  const isLecturer = role === "lecturer";
+  const params = isLecturer ? [schoolId, userId] : [schoolId];
+  const lecturerFilter = isLecturer ? "AND c.lecturer_id = $2" : "";
+
   const [evalRes, declRes] = await Promise.all([
-    pool.query(`
-      SELECT
+    pool.query(
+      `SELECT
         s.id AS submission_id,
         u.email,
         u.full_name,
@@ -729,10 +823,12 @@ const getAiTransparencyExportData = async () => {
       JOIN assignments a ON s.assignment_id = a.id
       JOIN classes c ON a.class_id = c.id
       JOIN subjects sub ON c.subject_id = sub.id
-      ORDER BY ae.evaluated_at DESC
-    `),
-    pool.query(`
-      SELECT
+      WHERE c.school_id = $1 ${lecturerFilter}
+      ORDER BY ae.evaluated_at DESC`,
+      params
+    ),
+    pool.query(
+      `SELECT
         s.id AS submission_id,
         u.email,
         u.full_name,
@@ -750,9 +846,11 @@ const getAiTransparencyExportData = async () => {
       JOIN assignments a ON s.assignment_id = a.id
       JOIN classes c ON a.class_id = c.id
       JOIN subjects sub ON c.subject_id = sub.id
-      WHERE sv.is_latest = true AND sv.note IS NOT NULL
-      ORDER BY COALESCE(sv.submitted_at, s.last_submitted_at, s.submitted_at, s.created_at) DESC
-    `),
+      WHERE c.school_id = $1 ${lecturerFilter}
+        AND sv.is_latest = true AND sv.note IS NOT NULL
+      ORDER BY COALESCE(sv.submitted_at, s.last_submitted_at, s.submitted_at, s.created_at) DESC`,
+      params
+    ),
   ]);
 
   const results = [...evalRes.rows];
