@@ -1,4 +1,6 @@
 
+"use strict";
+
 const ProjectsService = require('./projects.service');
 
 function handleError(error, res, next) {
@@ -23,8 +25,7 @@ function handleError(error, res, next) {
         });
     }
 
-    // Unique active membership: không tham gia hai nhóm
-    // trong cùng lớp.
+    // Unique active membership: không tham gia hai nhóm trong cùng lớp
     if (
         error.code === '23505' &&
         error.constraint === 'uq_project_active_member_per_class'
@@ -144,7 +145,9 @@ const ProjectsController = {
 
     async getInvitations(req, res, next) {
         try {
-            const data = await ProjectsService.getMyInvitations(req.tenant);
+            const data = await ProjectsService.getMyInvitations(
+                req.tenant
+            );
 
             return res.json({ success: true, data });
         } catch (error) {
@@ -152,14 +155,12 @@ const ProjectsController = {
         }
     },
 
-
     async getProjectInvitations(req, res, next) {
         try {
-            const data =
-                await ProjectsService.getProjectInvitations(
-                    req.params.projectId,
-                    req.tenant
-                );
+            const data = await ProjectsService.getProjectInvitations(
+                req.params.projectId,
+                req.tenant
+            );
 
             return res.status(200).json({
                 success: true,
@@ -169,7 +170,6 @@ const ProjectsController = {
             return handleError(error, res, next);
         }
     },
-
 };
 
 module.exports = ProjectsController;

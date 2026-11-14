@@ -4,11 +4,14 @@ const router = express.Router();
 const notificationsController = require('./notifications.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
 const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 const { getNotificationsQuery } = require('./notifications.validation');
 
-// Tất cả các route đều yêu cầu đăng nhập
-router.use(authenticate, requireSchoolContext);
+// Tất cả các route School Notifications đều yêu cầu authenticate, requireSchoolContext và role hợp lệ trong trường
+router.use(authenticate);
+router.use(requireSchoolContext);
+router.use(authorizeSchoolRoles('student', 'lecturer', 'school_admin'));
 
 // GET  /api/notifications              - Lấy tất cả thông báo (có phân trang)
 router.get('/', validate(getNotificationsQuery, 'query'), notificationsController.getNotifications);

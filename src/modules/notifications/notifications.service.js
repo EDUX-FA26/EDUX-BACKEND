@@ -2,9 +2,28 @@ const NotificationsRepository = require('./notifications.repository');
 
 class NotificationsService {
   /**
-   * Lấy danh sách tất cả thông báo của user hiện tại (có phân trang)
+   * Trích xuất userId và schoolId từ tenant object hoặc userId đơn thuần (hỗ trợ backward compatibility)
    */
-  async getNotifications({ page, limit }, userId, schoolId) {
+  _resolveContext(tenantOrUserId) {
+    if (tenantOrUserId && typeof tenantOrUserId === 'object') {
+      return {
+        userId: tenantOrUserId.userId,
+        schoolId: tenantOrUserId.schoolId,
+        role: tenantOrUserId.role,
+      };
+    }
+    return {
+      userId: tenantOrUserId,
+      schoolId: null,
+      role: null,
+    };
+  }
+
+  /**
+   * Lấy danh sách tất cả thông báo của user hiện tại theo Tenant Context (có phân trang)
+   */
+  async getNotifications({ page, limit }, tenantOrUserId) {
+    const { userId, schoolId } = this._resolveContext(tenantOrUserId);
     const result = await NotificationsRepository.findByUserId({
       userId,
       schoolId,
@@ -15,9 +34,10 @@ class NotificationsService {
   }
 
   /**
-   * Lấy danh sách thông báo CHƯA ĐỌC của user kèm số lượng tổng
+   * Lấy danh sách thông báo CHƯA ĐỌC của user kèm số lượng tổng theo Tenant Context
    */
-  async getUnreadNotifications({ page, limit }, userId, schoolId) {
+  async getUnreadNotifications({ page, limit }, tenantOrUserId) {
+    const { userId, schoolId } = this._resolveContext(tenantOrUserId);
     const result = await NotificationsRepository.findByUserId({
       userId,
       schoolId,
@@ -29,30 +49,38 @@ class NotificationsService {
   }
 
   /**
-   * Lấy chi tiết một thông báo (chỉ cho phép xem thông báo của chính mình)
+   * Lấy chi tiết một thông báo (chỉ cho phép xem thông báo của chính mình trong phạm vi School/Platform)
    */
-  async getNotificationById(id, userId, schoolId) {
-    const notification = await NotificationsRepository.findById(
-      id,
-      userId,
-      schoolId
-    );
+  async getNotificationById(id, tenantOrUserId) {
+    const { userId, schoolId } = this._resolveContext(tenantOrUserId);
+    const notification = await NotificationsRepository.findById(id, schoolId);
     if (!notification) {
+      throw new Error('NOTIFICATION_NOT_FOUND');
+    }
+    if (notification.user_id !== userId) {
+      throw new Error('FORBIDDEN');
+    }
+    // Defense-in-depth: nếu là thông báo thuộc trường khác thì chặn
+    if (notification.notification_scope === 'school' && schoolId && notification.school_id !== schoolId) {
       throw new Error('NOTIFICATION_NOT_FOUND');
     }
     return notification;
   }
 
   /**
-   * Đánh dấu một thông báo là đã đọc
+   * Đánh dấu một thông báo là đã đọc trong Tenant Context
    */
-  async markAsRead(id, userId, schoolId) {
-    const notification = await NotificationsRepository.findById(
-      id,
-      userId,
-      schoolId
-    );
+  async markAsRead(id, tenantOrUserId) {
+    const { userId, schoolId } = this._resolveContext(tenantOrUserId);
+    // Kiểm tra tồn tại và quyền truy cập trước
+    const notification = await NotificationsRepository.findById(id, schoolId);
     if (!notification) {
+      throw new Error('NOTIFICATION_NOT_FOUND');
+    }
+    if (notification.user_id !== userId) {
+      throw new Error('FORBIDDEN');
+    }
+    if (notification.notification_scope === 'school' && schoolId && notification.school_id !== schoolId) {
       throw new Error('NOTIFICATION_NOT_FOUND');
     }
 
@@ -61,22 +89,16 @@ class NotificationsService {
       return notification;
     }
 
-    const updated = await NotificationsRepository.markAsRead(
-      id,
-      userId,
-      schoolId
-    );
+    const updated = await NotificationsRepository.markAsRead(id, userId, schoolId);
     return updated;
   }
 
   /**
-   * Đánh dấu tất cả thông báo chưa đọc là đã đọc
+   * Đánh dấu tất cả thông báo chưa đọc là đã đọc trong Tenant Context
    */
-  async markAllAsRead(userId, schoolId) {
-    const updatedCount = await NotificationsRepository.markAllAsRead(
-      userId,
-      schoolId
-    );
+  async markAllAsRead(tenantOrUserId) {
+    const { userId, schoolId } = this._resolveContext(tenantOrUserId);
+    const updatedCount = await NotificationsRepository.markAllAsRead(userId, schoolId);
     return { updated: updatedCount };
   }
 }

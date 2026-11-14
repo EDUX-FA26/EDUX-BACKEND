@@ -6,7 +6,7 @@ const ReportsController = {
    */
   async getSystemReports(req, res, next) {
     try {
-      const data = await reportsService.getSystemReports();
+      const data = await reportsService.getSystemReports(req.tenant);
       res.status(200).json({
         success: true,
         message: "Lấy báo cáo hệ thống thành công",
@@ -22,7 +22,7 @@ const ReportsController = {
    */
   async getAiUsageStats(req, res, next) {
     try {
-      const data = await reportsService.getAiUsageStatistics();
+      const data = await reportsService.getAiUsageStatistics(req.tenant);
       res.status(200).json({
         success: true,
         message: "Lấy thống kê AI thành công",
@@ -38,7 +38,7 @@ const ReportsController = {
    */
   async getAuditLogs(req, res, next) {
     try {
-      const data = await reportsService.getAuditLogs();
+      const data = await reportsService.getAuditLogs(req.tenant);
       res.status(200).json({
         success: true,
         message: "Lấy lịch sử hoạt động thành công",
@@ -54,7 +54,7 @@ const ReportsController = {
    */
   async exportLearningActivity(req, res, next) {
     try {
-      const data = await reportsService.exportLearningActivity();
+      const data = await reportsService.exportLearningActivity(req.tenant);
       res.status(200).json({
         success: true,
         message: "Export dữ liệu học tập thành công",
@@ -70,7 +70,7 @@ const ReportsController = {
    */
   async exportAiTransparency(req, res, next) {
     try {
-      const data = await reportsService.exportAiTransparency();
+      const data = await reportsService.exportAiTransparency(req.tenant);
       res.status(200).json({
         success: true,
         message: "Export dữ liệu minh bạch AI thành công",

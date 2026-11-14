@@ -2,10 +2,15 @@ const express = require("express");
 const router = express.Router();
 const reportsController = require("./reports.controller");
 const { authenticate } = require("../../middlewares/auth.middleware");
-const { authorize } = require("../../middlewares/role.middleware");
+const { requireSchoolContext } = require("../../middlewares/requireSchoolContext");
+const { authorizeSchoolRoles } = require("../../middlewares/authorizeSchoolRoles");
 
-// Tất cả APIs báo cáo đều yêu cầu đăng nhập và có role admin (hoặc bổ sung lecturer tuỳ yêu cầu)
-router.use(authenticate, authorize(["admin"]));
+// Tất cả APIs báo cáo cấp trường yêu cầu đăng nhập, School Context và vai trò school_admin hoặc lecturer
+router.use(
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles("school_admin", "lecturer")
+);
 
 // UC 91: View System Reports
 router.get("/system", reportsController.getSystemReports);

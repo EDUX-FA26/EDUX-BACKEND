@@ -56,12 +56,21 @@ function fallbackAnswer(message, context) {
 }
 
 class AiChatService {
-  async answer(message, user) {
+  async answer(message, tenantOrUser) {
     const cleanMessage = String(message || '').trim();
     if (!cleanMessage) throw Object.assign(new Error('MESSAGE_REQUIRED'), { status: 400 });
     if (cleanMessage.length > 500) throw Object.assign(new Error('MESSAGE_TOO_LONG'), { status: 400 });
 
-    const context = await AiChatRepository.getStudentContext(user.id);
+    const userId = tenantOrUser?.userId || tenantOrUser?.id;
+    const schoolId = tenantOrUser?.schoolId;
+
+    // Nguyên tắc Fail-Closed: Bắt buộc phải có schoolId hợp lệ trước khi truy vấn dữ liệu
+    // Tuyệt đối không cho phép truy vấn khi schoolId bị thiếu hoặc null để ngăn ngừa rò rỉ dữ liệu chéo trường
+    if (!userId || !schoolId) {
+      throw Object.assign(new Error('SCHOOL_CONTEXT_REQUIRED'), { status: 400 });
+    }
+
+    const context = await AiChatRepository.getStudentContext(userId, schoolId);
     const directAnswer = fallbackAnswer(cleanMessage, context);
     const knownTopic = /bài tập|assignment|thông báo|notification|lớp|môn|học kỳ|semester|lịch|buổi học|flash.?card|cải thiện|cần học|tiến bộ/i.test(cleanMessage);
     if (knownTopic || !process.env.GEMINI_API_KEY) return { answer: directAnswer, source: 'context' };

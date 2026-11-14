@@ -3,7 +3,7 @@ const NotificationsService = require('./notifications.service');
 const NotificationsController = {
   /**
    * GET /api/notifications
-   * Lấy tất cả thông báo của user hiện tại (có phân trang)
+   * Lấy tất cả thông báo của user hiện tại theo Tenant Context (có phân trang)
    */
   async getNotifications(req, res, next) {
     try {
@@ -32,7 +32,7 @@ const NotificationsController = {
 
   /**
    * GET /api/notifications/unread
-   * Lấy thông báo chưa đọc (có phân trang + trả về unread_count)
+   * Lấy thông báo chưa đọc theo Tenant Context (có phân trang + trả về unread_count)
    */
   async getUnreadNotifications(req, res, next) {
     try {
@@ -62,7 +62,7 @@ const NotificationsController = {
 
   /**
    * GET /api/notifications/:id
-   * Lấy chi tiết một thông báo
+   * Lấy chi tiết một thông báo thuộc Tenant Context
    */
   async getNotificationById(req, res, next) {
     try {
@@ -85,7 +85,7 @@ const NotificationsController = {
 
   /**
    * PATCH /api/notifications/:id/read
-   * Đánh dấu một thông báo là đã đọc
+   * Đánh dấu một thông báo là đã đọc trong Tenant Context
    */
   async markAsRead(req, res, next) {
     try {
@@ -108,7 +108,7 @@ const NotificationsController = {
 
   /**
    * PATCH /api/notifications/read-all
-   * Đánh dấu tất cả thông báo chưa đọc là đã đọc
+   * Đánh dấu tất cả thông báo chưa đọc là đã đọc trong Tenant Context
    */
   async markAllAsRead(req, res, next) {
     try {
