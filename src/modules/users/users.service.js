@@ -1,29 +1,79 @@
+
 const usersRepository = require("./users.repository");
+
 const authService = require("../auth/auth.service");
 
 class UsersService {
-  async getMe(userId) {
-    return await usersRepository.findUserByIdWithProfile(userId);
+  // =========================================
+  // GET MY SCHOOL PROFILE
+  // =========================================
+
+  async getMe({
+    userId,
+    schoolId,
+  }) {
+    return usersRepository.findUserByIdWithProfile({
+      userId,
+      schoolId,
+    });
   }
 
-  async updateProfile(userId, role, updateData) {
-    // Chỉ cho phép lecturer cập nhật department_id
-    if (role !== "lecturer" && updateData.department_id !== undefined) {
-      delete updateData.department_id;
+  // =========================================
+  // UPDATE MY PROFILE
+  // =========================================
+
+  async updateProfile({
+    userId,
+    schoolId,
+    role,
+    updateData,
+  }) {
+    const data = { ...updateData };
+
+    // Preserve the existing EDUX rule:
+    // Only lecturers may self-update department.
+    //
+    // This is checked again against the current
+    // DB membership inside the repository transaction.
+
+    if (
+      data.department_id !== undefined &&
+      role !== "lecturer"
+    ) {
+      const error = new Error(
+        "Only lecturers can update their department"
+      );
+
+      error.status = 403;
+      throw error;
     }
 
-    // Các trường khác (full_name, avatar_url) đã được validate bởi Zod và validate.middleware, 
-    // chặn bất kỳ trường nào lạ.
-    await usersRepository.updateUserProfile(userId, updateData);
+    await usersRepository.updateUserProfile({
+      userId,
+      schoolId,
+      updateData: data,
+    });
 
-    // Trả về profile mới
-    const updatedUser = await this.getMe(userId);
-    return updatedUser;
+    return this.getMe({
+      userId,
+      schoolId,
+    });
   }
 
-  async changePassword(userId, oldPassword, newPassword) {
-    // Alias sang logic của Auth Service
-    return await authService.changePassword(userId, oldPassword, newPassword);
+  // =========================================
+  // GLOBAL PASSWORD CHANGE
+  // =========================================
+
+  async changePassword(
+    userId,
+    oldPassword,
+    newPassword
+  ) {
+    return authService.changePassword(
+      userId,
+      oldPassword,
+      newPassword
+    );
   }
 }
 

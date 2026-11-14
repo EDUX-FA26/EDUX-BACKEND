@@ -3,6 +3,8 @@ const multer = require('multer');
 
 const classMaterialController = require('./classMaterial.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
+const { authorizeSchoolRoles } = require('../../middlewares/authorizeSchoolRoles');
 const { validate } = require('../../middlewares/validate.middleware');
 const {
   createClassMaterial,
@@ -13,21 +15,15 @@ const {
 const upload = multer({ storage: multer.memoryStorage() });
 
 // -----------------------------------------------------------------------
-// authorize helper — kiểm tra role, dùng chung trong file này
-// -----------------------------------------------------------------------
-const authorize = (...roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return res.status(403).json({ success: false, message: 'Forbidden: Insufficient permissions' });
-  }
-  next();
-};
-
-// -----------------------------------------------------------------------
 // Router A: routes gắn vào /api/classes/:classId/materials
 // Dùng mergeParams: true để kế thừa :classId từ parent router
 // -----------------------------------------------------------------------
 const classIdRouter = express.Router({ mergeParams: true });
-classIdRouter.use(authenticate);
+classIdRouter.use(
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student')
+);
 
 // GET  /api/classes/:classId/materials   (UC17 — danh sách)
 classIdRouter.get(
@@ -39,7 +35,7 @@ classIdRouter.get(
 // POST /api/classes/:classId/materials   (UC19 — upload, chỉ lecturer)
 classIdRouter.post(
   '/',
-  authorize('lecturer', 'admin'),
+  authorizeSchoolRoles('lecturer', 'school_admin'),
   upload.single('file'),
   validate(createClassMaterial),
   classMaterialController.uploadMaterial
@@ -50,7 +46,11 @@ classIdRouter.post(
 // Tất cả đều cần xác thực
 // -----------------------------------------------------------------------
 const materialIdRouter = express.Router();
-materialIdRouter.use(authenticate);
+materialIdRouter.use(
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student')
+);
 
 // GET    /api/materials/classes/:id           (UC17 — chi tiết)
 materialIdRouter.get(
@@ -67,7 +67,7 @@ materialIdRouter.get(
 // PATCH  /api/materials/classes/:id           (UC20 — update metadata, chỉ lecturer)
 materialIdRouter.patch(
   '/:id',
-  authorize('lecturer', 'admin'),
+  authorizeSchoolRoles('lecturer', 'school_admin'),
   validate(updateClassMaterial),
   classMaterialController.updateMaterial
 );
@@ -75,7 +75,7 @@ materialIdRouter.patch(
 // DELETE /api/materials/classes/:id           (UC21 — xóa, chỉ lecturer)
 materialIdRouter.delete(
   '/:id',
-  authorize('lecturer', 'admin'),
+  authorizeSchoolRoles('lecturer', 'school_admin'),
   classMaterialController.deleteMaterial
 );
 

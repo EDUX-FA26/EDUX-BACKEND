@@ -230,9 +230,9 @@ function buildClassHealthMessage({
 
 
 const ClassHealthService = {
-    async getSnapshot(classId, user) {
+    async getSnapshot(classId, tenant) {
         // Verify access to this class.
-        await ClassesService.getClassById(classId, user);
+        await ClassesService.getClassById(classId, tenant);
 
         const [
             members,
@@ -240,7 +240,7 @@ const ClassHealthService = {
             quizRows,
             assignmentRows,
         ] = await Promise.all([
-            ClassesService.getMembers(classId, user),
+            ClassesService.getMembers(classId, tenant),
             Repository.getStreakSignals(classId),
             Repository.getQuizSignals(classId),
             Repository.getAssignmentSignals(classId),
@@ -300,15 +300,15 @@ const ClassHealthService = {
 
 
 
-    async sendBulkNotification(classId, user, payload) {
+    async sendBulkNotification(classId, tenant, payload) {
         // 1. Xác thực quyền giảng viên
-        if (!['admin', 'lecturer'].includes(user?.role)) {
+        if (!['school_admin', 'lecturer'].includes(tenant?.role)) {
             throw new Error('FORBIDDEN');
         }
 
         const classData = await ClassesService.getClassById(
             classId,
-            user
+            tenant
         );
 
         const classCode = classData.class_code;
@@ -354,7 +354,7 @@ const ClassHealthService = {
         }
 
         // 3. Kiểm tra sinh viên thực sự thuộc lớp
-        const members = await ClassesService.getMembers(classId, user);
+        const members = await ClassesService.getMembers(classId, tenant);
 
         const activeMembers = new Map(
             members
@@ -415,6 +415,8 @@ const ClassHealthService = {
                     type: 'system_announcement',
                     related_entity_type: 'class',
                     related_entity_id: classId,
+                    notification_scope: 'school',
+                    school_id: tenant.schoolId,
                 };
             });
 

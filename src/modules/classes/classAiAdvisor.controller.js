@@ -7,7 +7,10 @@ const ClassAiAdvisorController = {
   async getAiAdvisor(req, res, next) {
     try {
       const classId = req.params.classId || req.params.id;
-      const result = await ClassAiAdvisorService.getAiAdvisor(classId, req.user);
+      const result = await ClassAiAdvisorService.getAiAdvisor(
+        classId,
+        req.tenant
+      );
       return res.status(200).json({
         success: true,
         ...result,
@@ -30,7 +33,10 @@ const ClassAiAdvisorController = {
   async refreshAiAdvisor(req, res, next) {
     try {
       const classId = req.params.classId || req.params.id;
-      const result = await ClassAiAdvisorService.refreshAiAdvisor(classId, req.user);
+      const result = await ClassAiAdvisorService.refreshAiAdvisor(
+        classId,
+        req.tenant
+      );
       return res.status(200).json({
         success: true,
         message: 'Làm mới phân tích AI thành công',

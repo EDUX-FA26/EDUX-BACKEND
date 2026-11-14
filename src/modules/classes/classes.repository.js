@@ -17,14 +17,34 @@ const ClassesRepository = {
     semester,
     semester_id,
     role,
-    userId
+    userId,
+    schoolId,
   }) {
     page = Math.max(1, Number(page) || 1);
     limit = Math.max(1, Number(limit) || 10);
 
+    const allowedRoles = [
+      "school_admin",
+      "lecturer",
+      "student",
+    ];
+
+    if (!allowedRoles.includes(role)) {
+      const error = new Error("FORBIDDEN");
+      error.status = 403;
+      throw error;
+    }
+
+    if (!schoolId || !userId) {
+      const error = new Error("SCHOOL_CONTEXT_REQUIRED");
+      error.status = 400;
+      throw error;
+    }
+
     const offset = (page - 1) * limit;
     const params = [];
-    const whereConditions = [];
+    params.push(schoolId);
+    const whereConditions = [`c.school_id = $${params.length}`];
 
     let query = `
     SELECT
@@ -37,8 +57,10 @@ const ClassesRepository = {
     FROM classes c
     JOIN subjects s
       ON c.subject_id = s.id
+     AND s.school_id = c.school_id
     JOIN semesters sem
       ON c.semester_id = sem.id
+     AND sem.school_id = c.school_id
     JOIN user_profiles u
       ON c.lecturer_id = u.user_id
   `;
@@ -63,6 +85,7 @@ const ClassesRepository = {
       query += `
       JOIN class_members cm
         ON c.id = cm.class_id
+       AND c.school_id = cm.school_id
     `;
 
       params.push(userId);
@@ -155,19 +178,24 @@ const ClassesRepository = {
   /**
    * Lấy chi tiết lớp học
    */
-  async findById(id) {
+  async findById(id, schoolId) {
     const query = `
       SELECT c.*, s.name as subject_name, s.code as subject_code, sem.name as semester_name, u.full_name as lecturer_name 
-      FROM classes c 
-      JOIN subjects s ON c.subject_id = s.id 
-      JOIN semesters sem ON c.semester_id = sem.id 
+      FROM classes c
+      JOIN subjects s
+        ON c.subject_id = s.id
+       AND s.school_id = c.school_id
+      JOIN semesters sem
+        ON c.semester_id = sem.id
+       AND sem.school_id = c.school_id
       JOIN user_profiles u ON c.lecturer_id = u.user_id
       WHERE c.id = $1
+        AND c.school_id = $2
     `;
-    const { rows } = await pool.query(query, [id]);
+    const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
   },
-  async getSlots(classId) {
+  async getSlots(classId, schoolId) {
     const query = `
       SELECT 
         id, 
@@ -176,11 +204,12 @@ const ClassesRepository = {
         COALESCE(slot_time, '09:30-11:45') as time, 
         title, 
         note as content
-      FROM sessions 
-      WHERE class_id = $1 
+      FROM sessions
+      WHERE class_id = $1
+        AND school_id = $2
       ORDER BY session_no ASC
     `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, [classId, schoolId]);
     return rows;
   },
 
@@ -255,14 +284,14 @@ const ClassesRepository = {
   /**
    * Lấy danh sách thành viên lớp
    */
-  async findMembers(classId) {
+  async findMembers(classId, schoolId) {
     const query = `
     SELECT 
       cm.student_id, 
       cm.status, 
       u.email, 
       up.full_name, 
-      up.student_code, 
+      mp.student_code,
       d.name AS department_name,
       -- Thông tin streak từ bảng subject_streaks
       ss.current_streak,
@@ -271,17 +300,34 @@ const ClassesRepository = {
       ss.recovery_used,
       ss.recovery_month,
       ss.is_active
-    FROM class_members cm 
-    JOIN classes c ON cm.class_id = c.id
-    JOIN users u ON cm.student_id = u.id 
-    JOIN user_profiles up ON u.id = up.user_id 
-    LEFT JOIN departments d ON up.department_id = d.id 
-    LEFT JOIN subject_streaks ss 
-      ON cm.student_id = ss.user_id AND c.subject_id = ss.subject_id
+    FROM class_members cm
+    JOIN classes c
+      ON cm.class_id = c.id
+     AND cm.school_id = c.school_id
+    JOIN school_memberships sm
+      ON sm.school_id = cm.school_id
+     AND sm.user_id = cm.student_id
+     AND sm.role = 'student'
+     AND sm.status = 'active'
+    JOIN users u
+      ON cm.student_id = u.id
+     AND u.is_active = TRUE
+    JOIN user_profiles up ON u.id = up.user_id
+    LEFT JOIN school_member_profiles mp
+      ON mp.school_id = cm.school_id
+     AND mp.user_id = cm.student_id
+    LEFT JOIN departments d
+      ON d.id = mp.department_id
+     AND d.school_id = cm.school_id
+LEFT JOIN subject_streaks ss
+  ON ss.user_id = cm.student_id
+ AND ss.subject_id = c.subject_id
+ AND ss.school_id = cm.school_id
     WHERE cm.class_id = $1
-    ORDER BY up.student_code ASC
+      AND cm.school_id = $2
+    ORDER BY mp.student_code ASC
   `;
-    const { rows } = await pool.query(query, [classId]);
+    const { rows } = await pool.query(query, [classId, schoolId]);
     return rows;
   },
 

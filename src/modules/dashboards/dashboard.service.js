@@ -1,63 +1,122 @@
-const DashboardRepository = require('./dashboard.repository');
-const { redis } = require('../../config/redis.config');
+const DashboardRepository = require("./dashboard.repository");
+
+const { redis } = require("../../config/redis.config");
 
 class DashboardService {
+  async getDashboard(user, tenant) {
+    const userId = user?.id;
 
-  async getDashboard(user) {
-    const { id: userId, role } = user;
-    const cacheKey = `dashboard:${userId}`;
+    const schoolId = tenant?.schoolId;
+    const schoolRole = tenant?.role;
 
-    // 1. Check Redis cache
+    if (!userId || !schoolId || !schoolRole) {
+      const error = new Error("SCHOOL_CONTEXT_REQUIRED");
+      error.status = 400;
+      throw error;
+    }
+
+    // Cache riêng theo user, school và role.
+    const cacheKey =
+      `dashboard:${schoolId}:${schoolRole}:${userId}`;
+
+    // =========================================
+    // READ CACHE
+    // =========================================
+
     try {
       if (redis.isOpen) {
         const cached = await redis.get(cacheKey);
+
         if (cached) {
           return JSON.parse(cached);
         }
       }
-    } catch (err) {
-      // Ignore cache error, fallback to DB
+    } catch (error) {
+      console.warn(
+        "Dashboard cache read failed:",
+        error.message
+      );
     }
 
-    // 2. Fetch from database
+    // =========================================
+    // BUILD DASHBOARD
+    // =========================================
+
     let data;
-    switch (role) {
-      case 'student':
-        data = await this._buildStudentDashboard(userId);
+
+    switch (schoolRole) {
+      case "student":
+        data = await this._buildStudentDashboard(
+          userId,
+          schoolId
+        );
         break;
 
-      case 'lecturer':
-        data = await this._buildLecturerDashboard(userId);
+      case "lecturer":
+        data = await this._buildLecturerDashboard(
+          userId,
+          schoolId
+        );
         break;
 
-      case 'admin':
-        data = await this._buildAdminDashboard(userId);
+      case "school_admin":
+        data = await this._buildAdminDashboard(
+          schoolId
+        );
         break;
 
       default: {
-        const error = new Error('UNKNOWN_ROLE');
+        const error = new Error("UNKNOWN_SCHOOL_ROLE");
         error.status = 403;
         throw error;
       }
     }
 
-    // 3. Save to Redis cache (60 seconds TTL)
+    // =========================================
+    // SAVE CACHE
+    // =========================================
+
     try {
       if (redis.isOpen) {
-        await redis.setEx(cacheKey, 60, JSON.stringify(data));
+        await redis.setEx(
+          cacheKey,
+          60,
+          JSON.stringify(data)
+        );
       }
-    } catch (err) {
-      // Ignore cache write error
+    } catch (error) {
+      console.warn(
+        "Dashboard cache write failed:",
+        error.message
+      );
     }
 
     return data;
   }
 
-  async getDashboardNotifications(userId) {
-    const [notifications, unreadCount] = await Promise.all([
-      DashboardRepository.getRecentNotifications(userId),
-      DashboardRepository.getUnreadCount(userId),
-    ]);
+  // =========================================
+  // NOTIFICATIONS
+  // =========================================
+
+  async getDashboardNotifications(userId, schoolId) {
+    if (!userId || !schoolId) {
+      const error = new Error("SCHOOL_CONTEXT_REQUIRED");
+      error.status = 400;
+      throw error;
+    }
+
+    const [notifications, unreadCount] =
+      await Promise.all([
+        DashboardRepository.getRecentNotifications(
+          userId,
+          schoolId
+        ),
+
+        DashboardRepository.getUnreadCount(
+          userId,
+          schoolId
+        ),
+      ]);
 
     return {
       notifications,
@@ -65,52 +124,74 @@ class DashboardService {
     };
   }
 
-  // ─────────────────────────────────────────────
+  // =========================================
   // STUDENT
-  // ─────────────────────────────────────────────
+  // =========================================
 
-  async _buildStudentDashboard(userId) {
-    const [statistics, recentAssignments] = await Promise.all([
-      DashboardRepository.getStudentStatistics(userId),
-      DashboardRepository.getStudentRecentAssignments(userId),
-    ]);
+  async _buildStudentDashboard(userId, schoolId) {
+    const [statistics, recentAssignments] =
+      await Promise.all([
+        DashboardRepository.getStudentStatistics(
+          userId,
+          schoolId
+        ),
+
+        DashboardRepository.getStudentRecentAssignments(
+          userId,
+          schoolId
+        ),
+      ]);
 
     return {
-      role: 'student',
+      role: "student",
       statistics,
       recentAssignments,
     };
   }
 
-  // ─────────────────────────────────────────────
+  // =========================================
   // LECTURER
-  // ─────────────────────────────────────────────
+  // =========================================
 
-  async _buildLecturerDashboard(userId) {
-    const [statistics, recentSubmissions] = await Promise.all([
-      DashboardRepository.getLecturerStatistics(userId),
-      DashboardRepository.getLecturerRecentSubmissions(userId),
-    ]);
+  async _buildLecturerDashboard(userId, schoolId) {
+    const [statistics, recentSubmissions] =
+      await Promise.all([
+        DashboardRepository.getLecturerStatistics(
+          userId,
+          schoolId
+        ),
+
+        DashboardRepository.getLecturerRecentSubmissions(
+          userId,
+          schoolId
+        ),
+      ]);
 
     return {
-      role: 'lecturer',
+      role: "lecturer",
       statistics,
       recentSubmissions,
     };
   }
 
-  // ─────────────────────────────────────────────
-  // ADMIN
-  // ─────────────────────────────────────────────
+  // =========================================
+  // SCHOOL ADMIN
+  // =========================================
 
-  async _buildAdminDashboard(userId) {
-    const [statistics, recentUsers] = await Promise.all([
-      DashboardRepository.getAdminStatistics(),
-      DashboardRepository.getAdminRecentUsers(),
-    ]);
+  async _buildAdminDashboard(schoolId) {
+    const [statistics, recentUsers] =
+      await Promise.all([
+        DashboardRepository.getAdminStatistics(
+          schoolId
+        ),
+
+        DashboardRepository.getAdminRecentUsers(
+          schoolId
+        ),
+      ]);
 
     return {
-      role: 'admin',
+      role: "school_admin",
       statistics,
       recentUsers,
     };

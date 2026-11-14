@@ -11,29 +11,32 @@ function translate(error) {
 }
 
 module.exports = {
-  list: filters => repository.list(filters),
-  async get(id) {
-    const row = await repository.findById(id);
+  list: (filters, tenant) => repository.list({
+    ...filters,
+    schoolId: tenant.schoolId,
+  }),
+  async get(id, tenant) {
+    const row = await repository.findById(id, tenant.schoolId);
     if (!row) throw problem(404, 'Subject not found');
     return row;
   },
-  async create(data) {
-    try { return await repository.create(data); } catch (error) { translate(error); }
+  async create(data, tenant) {
+    try { return await repository.create(data, tenant.schoolId); } catch (error) { translate(error); }
   },
-  async update(id, data) {
+  async update(id, data, tenant) {
     try {
-      const row = await repository.update(id, data);
+      const row = await repository.update(id, data, tenant.schoolId);
       if (!row) throw problem(404, 'Active subject not found');
       return row;
     } catch (error) { translate(error); }
   },
-  async remove(id) {
-    const row = await repository.remove(id);
+  async remove(id, tenant) {
+    const row = await repository.remove(id, tenant.schoolId);
     if (!row) throw problem(404, 'Active subject not found');
     return row;
   },
-  async restore(id) {
-    const row = await repository.restore(id);
+  async restore(id, tenant) {
+    const row = await repository.restore(id, tenant.schoolId);
     if (!row) throw problem(404, 'Subject not found');
     return row;
   },

@@ -7,8 +7,8 @@ const validId = id =>
     typeof id === 'string' && isUuid(id);
 
 const ProjectsService = {
-    async createProject(data, user) {
-        if (user.role !== 'student') {
+    async createProject(data, tenant) {
+        if (tenant.role !== 'student') {
             throw new Error('FORBIDDEN');
         }
 
@@ -25,37 +25,46 @@ const ProjectsService = {
             throw new Error('INVALID_PROJECT_DATA');
         }
 
+        await ClassesService.getClassById(classId, tenant);
+
         return ProjectsRepository.create({
             classId,
-            ownerId: user.id,
+            ownerId: tenant.userId,
+            schoolId: tenant.schoolId,
             name: name.trim(),
             description: description.trim(),
         });
     },
 
-    async getMyProjects(user) {
-        if (user.role !== 'student') {
+    async getMyProjects(tenant) {
+        if (tenant.role !== 'student') {
             throw new Error('FORBIDDEN');
         }
 
-        return ProjectsRepository.findMyProjects(user.id);
+        return ProjectsRepository.findMyProjects(
+            tenant.userId,
+            tenant.schoolId
+        );
     },
 
-    async getClassProjects(classId, user) {
+    async getClassProjects(classId, tenant) {
         if (!validId(classId)) {
             throw new Error('INVALID_PROJECT_DATA');
         }
 
-        if (!['admin', 'lecturer'].includes(user.role)) {
+        if (!['school_admin', 'lecturer'].includes(tenant.role)) {
             throw new Error('FORBIDDEN');
         }
 
-        await ClassesService.getClassById(classId, user);
+        await ClassesService.getClassById(classId, tenant);
 
-        return ProjectsRepository.findByClass(classId);
+        return ProjectsRepository.findByClass(
+            classId,
+            tenant.schoolId
+        );
     },
 
-    async getProject(projectId, user) {
+    async getProject(projectId, tenant) {
         if (!validId(projectId)) {
             throw new Error('INVALID_PROJECT_DATA');
         }
@@ -66,24 +75,18 @@ const ProjectsService = {
             throw new Error('PROJECT_NOT_FOUND');
         }
 
-        if (['admin', 'lecturer'].includes(user.role)) {
-            await ClassesService.getClassById(project.class_id, user);
-        } else if (user.role === 'student') {
+        await ClassesService.getClassById(project.class_id, tenant);
+
+        if (tenant.role === 'student') {
             const member = await ProjectsRepository.findActiveMember(
                 projectId,
-                user.id
+                tenant.userId
             );
 
-            const inClass =
-                await ProjectsRepository.isActiveClassMember(
-                    project.class_id,
-                    user.id
-                );
-
-            if (!member || !inClass) {
+            if (!member) {
                 throw new Error('FORBIDDEN');
             }
-        } else {
+        } else if (!['school_admin', 'lecturer'].includes(tenant.role)) {
             throw new Error('FORBIDDEN');
         }
 
@@ -92,8 +95,8 @@ const ProjectsService = {
         return { ...project, members };
     },
 
-    async inviteMember(projectId, studentId, user) {
-        if (user.role !== 'student') {
+    async inviteMember(projectId, studentId, tenant) {
+        if (tenant.role !== 'student') {
             throw new Error('FORBIDDEN');
         }
 
@@ -111,22 +114,27 @@ const ProjectsService = {
             throw new Error('PROJECT_NOT_ACTIVE');
         }
 
-        if (project.owner_id !== user.id) {
+        await ClassesService.getClassById(project.class_id, tenant);
+
+        if (project.owner_id !== tenant.userId) {
             throw new Error('FORBIDDEN');
         }
 
-        if (studentId === user.id) {
+        if (studentId === tenant.userId) {
             throw new Error('CANNOT_INVITE_SELF');
         }
 
-        const [ownerInClass, recipientInClass] = await Promise.all([
-            ProjectsRepository.isActiveClassMember(
-                project.class_id, user.id
-            ),
-            ProjectsRepository.isActiveClassMember(
-                project.class_id, studentId
-            ),
-        ]);
+        const members = await ClassesService.getMembers(
+            project.class_id,
+            tenant
+        );
+        const activeMemberIds = new Set(
+            members
+                .filter(member => member.membershipStatus === 'active')
+                .map(member => member.studentId)
+        );
+        const ownerInClass = activeMemberIds.has(tenant.userId);
+        const recipientInClass = activeMemberIds.has(studentId);
 
         if (!ownerInClass || !recipientInClass) {
             throw new Error('NOT_CLASS_MEMBER');
@@ -136,7 +144,7 @@ const ProjectsService = {
             projectId,
             classId: project.class_id,
             userId: studentId,
-            invitedBy: user.id,
+            invitedBy: tenant.userId,
         });
 
         if (!invitation) {
@@ -146,8 +154,8 @@ const ProjectsService = {
         return invitation;
     },
 
-    async respondToInvitation(invitationId, accept, user) {
-        if (user.role !== 'student') {
+    async respondToInvitation(invitationId, accept, tenant) {
+        if (tenant.role !== 'student') {
             throw new Error('FORBIDDEN');
         }
 
@@ -155,24 +163,42 @@ const ProjectsService = {
             throw new Error('INVALID_PROJECT_DATA');
         }
 
+        const invitation =
+            await ProjectsRepository.findInvitationForUser(
+                invitationId,
+                tenant.userId
+            );
+
+        if (!invitation) {
+            throw new Error('INVITATION_NOT_FOUND');
+        }
+
+        await ClassesService.getClassById(
+            invitation.class_id,
+            tenant
+        );
+
         return ProjectsRepository.respondToInvitation(
             invitationId,
-            user.id,
+            tenant.userId,
             accept
         );
     },
 
-    async getMyInvitations(user) {
-        if (user.role !== 'student') {
+    async getMyInvitations(tenant) {
+        if (tenant.role !== 'student') {
             throw new Error('FORBIDDEN');
         }
 
-        return ProjectsRepository.findPendingInvitations(user.id);
+        return ProjectsRepository.findPendingInvitations(
+            tenant.userId,
+            tenant.schoolId
+        );
     },
 
 
-    async getProjectInvitations(projectId, user) {
-        if (user.role !== 'student') {
+    async getProjectInvitations(projectId, tenant) {
+        if (tenant.role !== 'student') {
             throw new Error('FORBIDDEN');
         }
 
@@ -187,23 +213,17 @@ const ProjectsService = {
             throw new Error('PROJECT_NOT_FOUND');
         }
 
+        await ClassesService.getClassById(project.class_id, tenant);
+
         // Chỉ Owner được xem danh sách lời mời
-        if (project.owner_id !== user.id) {
+        if (project.owner_id !== tenant.userId) {
             throw new Error('FORBIDDEN');
         }
 
-        // Owner phải còn thuộc lớp đang hoạt động
-        const isClassMember =
-            await ProjectsRepository.isActiveClassMember(
-                project.class_id,
-                user.id
-            );
-
-        if (!isClassMember) {
-            throw new Error('FORBIDDEN');
-        }
-
-        return ProjectsRepository.findProjectInvitations(projectId);
+        return ProjectsRepository.findProjectInvitations(
+            projectId,
+            tenant.schoolId
+        );
     },
 
 };

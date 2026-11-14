@@ -33,7 +33,7 @@ class AuthRepository {
         userData.student_code,
       ];
       const profileResult = await client.query(profileQuery, profileValues);
-      
+
       // Trả về thông tin user mới (không chứa password_hash)
       return {
         ...newUser,
@@ -154,6 +154,31 @@ class AuthRepository {
     const result = await pool.query(query, [userId]);
     return result.rows[0] || null;
   }
+
+
+  /**
+   * 007D-1: Load current global account state.
+   *
+   * Used by refresh-token flow.
+   * School roles are NOT read from users.role.
+   */
+  async findUserForTokenRefresh(userId) {
+    const { rows } = await pool.query(
+      `
+    SELECT
+      id,
+      role,
+      is_active
+    FROM public.users
+    WHERE id = $1
+    LIMIT 1
+    `,
+      [userId]
+    );
+
+    return rows[0] || null;
+  }
+
 }
 
 module.exports = new AuthRepository();

@@ -1,16 +1,20 @@
 const adminService = require("./admin.service");
 
 const AdminController = {
-  /**
-   * UC 86 — POST /api/admin/users
-   * Tạo user mới
-   */
+
+  // POST /api/admin/users
   async createUser(req, res, next) {
     try {
-      const user = await adminService.createUser(req.body);
-      res.status(201).json({
+      const user = await adminService.createUser(
+        req.body,
+        req.tenant
+      );
+
+      return res.status(201).json({
         success: true,
-        message: "Tạo người dùng thành công",
+        message: user.linked_existing_user
+          ? "Đã thêm tài khoản có sẵn vào trường"
+          : "Tạo tài khoản và thành viên thành công",
         data: user,
       });
     } catch (error) {
@@ -18,88 +22,80 @@ const AdminController = {
     }
   },
 
-  /**
-   * UC 87 — PATCH /api/admin/users/:id
-   * Cập nhật thông tin user
-   */
+  // PATCH /api/admin/users/:id
   async updateUser(req, res, next) {
     try {
-      const { id } = req.params;
-      const user = await adminService.updateUser(id, req.body);
-      res.status(200).json({
+      const user = await adminService.updateUser(
+        req.params.id,
+        req.body,
+        req.tenant
+      );
+
+      return res.status(200).json({
         success: true,
-        message: "Cập nhật người dùng thành công",
+        message: "Cập nhật thành viên thành công",
         data: user,
       });
     } catch (error) {
-      if (error.status === 404) {
-        return res.status(404).json({ success: false, message: error.message });
-      }
-      if (error.status === 409) {
-        return res.status(409).json({ success: false, message: error.message });
-      }
       next(error);
     }
   },
 
-  /**
-   * UC 88 — PATCH /api/admin/users/:id/suspend
-   * Tạm khóa tài khoản người dùng
-   */
-  async suspendUser(req, res, next) {
-    try {
-      const { id } = req.params;
-      await adminService.suspendUser(id);
-      res.status(200).json({
-        success: true,
-        message: "Tài khoản người dùng đã bị tạm khóa",
-        data: null,
-      });
-    } catch (error) {
-      if (error.status === 404) {
-        return res.status(404).json({ success: false, message: error.message });
-      }
-      next(error);
-    }
-  },
-
-  /**
-   * UC 89 — PATCH /api/admin/users/:id/activate
-   * Kích hoạt lại tài khoản người dùng
-   */
-  async activateUser(req, res, next) {
-    try {
-      const { id } = req.params;
-      await adminService.activateUser(id);
-      res.status(200).json({
-        success: true,
-        message: "Tài khoản người dùng đã được kích hoạt",
-        data: null,
-      });
-    } catch (error) {
-      if (error.status === 404) {
-        return res.status(404).json({ success: false, message: error.message });
-      }
-      next(error);
-    }
-  },
-
-  /**
-   * GET /api/admin/users
-   * Lấy danh sách tất cả users (phục vụ giao diện quản lý)
-   */
+  // GET /api/admin/users
   async getAllUsers(req, res, next) {
     try {
-      const users = await adminService.getAllUsers();
-      res.status(200).json({
+      const users = await adminService.getAllUsers(
+        req.tenant.schoolId
+      );
+
+      return res.status(200).json({
         success: true,
-        message: "Lấy danh sách người dùng thành công",
+        message: "Lấy danh sách thành viên thành công",
         data: users,
       });
     } catch (error) {
       next(error);
     }
   },
+
+  // PATCH /api/admin/users/:id/suspend
+  async suspendUser(req, res, next) {
+    try {
+      await adminService.suspendUser({
+        schoolId: req.tenant.schoolId,
+        actorUserId: req.tenant.userId,
+        targetUserId: req.params.id,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Đã tạm ngưng thành viên tại trường",
+        data: null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // PATCH /api/admin/users/:id/activate
+  async activateUser(req, res, next) {
+    try {
+      await adminService.activateUser({
+        schoolId: req.tenant.schoolId,
+        actorUserId: req.tenant.userId,
+        targetUserId: req.params.id,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Đã kích hoạt thành viên tại trường",
+        data: null,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
 
   /**
    * POST /api/admin/users/import
@@ -111,11 +107,10 @@ const AdminController = {
         return res.status(400).json({ success: false, message: "Vui lòng đính kèm file Excel" });
       }
 
-      const result = await adminService.importExcelData(req.file.buffer);
-      res.status(200).json({
-        success: true,
-        message: "Import dữ liệu thành công",
-        data: result,
+      return res.status(501).json({
+        success: false,
+        code: "TENANT_IMPORT_NOT_READY",
+        message: "Import chưa được bật vì luồng Legacy chưa bảo đảm ghi dữ liệu theo school context.",
       });
     } catch (error) {
       next(error);
@@ -128,7 +123,11 @@ const AdminController = {
    */
   async broadcastNotification(req, res, next) {
     try {
-      const result = await adminService.broadcastNotification(req.body);
+      const result =
+        await adminService.broadcastNotification(
+          req.body,
+          req.tenant
+        );
       res.status(200).json({
         success: true,
         message: `Đã gửi thông báo thành công đến ${result.count} người dùng.`,
@@ -145,7 +144,9 @@ const AdminController = {
    */
   async getSystemNotifications(req, res, next) {
     try {
-      const notifications = await adminService.getSystemNotifications();
+      const notifications = await adminService.getSystemNotifications(
+        req.tenant.schoolId
+      );
       res.status(200).json({
         success: true,
         message: "Lấy danh sách thông báo thành công",
@@ -162,8 +163,12 @@ const AdminController = {
    */
   async getAllClasses(req, res, next) {
     try {
-      const classes = await adminService.getAllClasses();
-      res.status(200).json({
+      const classes =
+        await adminService.getAllClasses(
+          req.tenant.schoolId
+        );
+
+      return res.status(200).json({
         success: true,
         message: "Lấy danh sách lớp học thành công",
         data: classes,
@@ -173,10 +178,15 @@ const AdminController = {
     }
   },
 
+
   async createClass(req, res, next) {
     try {
-      const created = await adminService.createClass(req.body);
-      res.status(201).json({
+      const created = await adminService.createClass(
+        req.body,
+        req.tenant
+      );
+
+      return res.status(201).json({
         success: true,
         message: "Tạo lớp học thành công",
         data: created,
@@ -186,11 +196,20 @@ const AdminController = {
     }
   },
 
+
   async updateClass(req, res, next) {
     try {
-      const classId = req.params.id;
-      const data = await adminService.updateClass(classId, req.body);
-      res.status(200).json({ success: true, message: "Cập nhật lớp học thành công", data });
+      const data = await adminService.updateClass(
+        req.params.id,
+        req.body,
+        req.tenant
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Cập nhật lớp học thành công",
+        data,
+      });
     } catch (error) {
       next(error);
     }
@@ -198,18 +217,32 @@ const AdminController = {
 
   async deleteClass(req, res, next) {
     try {
-      const classId = req.params.id;
-      await adminService.deleteClass(classId);
-      res.status(200).json({ success: true, message: "Xóa lớp học thành công" });
+      const data = await adminService.deleteClass(
+        req.params.id,
+        req.tenant
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Đã ngưng hoạt động lớp học",
+        data,
+      });
     } catch (error) {
       next(error);
     }
   },
 
+
+
+  // GET /api/admin/departments
   async getAllDepartments(req, res, next) {
     try {
-      const departments = await adminService.getAllDepartments();
-      res.status(200).json({
+      const departments =
+        await adminService.getAllDepartments(
+          req.tenant.schoolId
+        );
+
+      return res.status(200).json({
         success: true,
         message: "Lấy danh sách khoa thành công",
         data: departments,
@@ -219,10 +252,16 @@ const AdminController = {
     }
   },
 
+  // POST /api/admin/departments
   async createDepartment(req, res, next) {
     try {
-      const department = await adminService.createDepartment(req.body);
-      res.status(201).json({
+      const department =
+        await adminService.createDepartment(
+          req.body,
+          req.tenant
+        );
+
+      return res.status(201).json({
         success: true,
         message: "Tạo khoa thành công",
         data: department,
@@ -232,10 +271,17 @@ const AdminController = {
     }
   },
 
+  // PATCH /api/admin/departments/:id
   async updateDepartment(req, res, next) {
     try {
-      const department = await adminService.updateDepartment(req.params.id, req.body);
-      res.status(200).json({
+      const department =
+        await adminService.updateDepartment(
+          req.params.id,
+          req.body,
+          req.tenant
+        );
+
+      return res.status(200).json({
         success: true,
         message: "Cập nhật khoa thành công",
         data: department,
@@ -245,12 +291,18 @@ const AdminController = {
     }
   },
 
+  // DELETE /api/admin/departments/:id
   async deleteDepartment(req, res, next) {
     try {
-      const result = await adminService.deleteDepartment(req.params.id);
-      res.status(200).json({
+      const result =
+        await adminService.deleteDepartment(
+          req.params.id,
+          req.tenant
+        );
+
+      return res.status(200).json({
         success: true,
-        message: result.action === "deactivated" ? "Đã ngưng hoạt động khoa" : "Đã xóa khoa thành công",
+        message: "Đã ngưng hoạt động khoa",
         data: result,
       });
     } catch (error) {
@@ -263,11 +315,10 @@ const AdminController = {
       if (!req.file) {
         return res.status(400).json({ success: false, message: "Vui lòng đính kèm file Excel" });
       }
-      const result = await adminService.importAutoAssignExcelData(req.file.buffer);
-      res.status(200).json({
-        success: true,
-        message: "Tự động xếp lớp thành công",
-        data: result,
+      return res.status(501).json({
+        success: false,
+        code: "TENANT_IMPORT_NOT_READY",
+        message: "Import tự động xếp lớp chưa được bật vì luồng hiện tại ghi dữ liệu theo Legacy school; cần hoàn tất nhập theo school context trước khi sử dụng.",
       });
     } catch (error) {
       next(error);
@@ -275,41 +326,101 @@ const AdminController = {
   }
 };
 
-AdminController.getClassStudents = async (req, res, next) => {
+
+AdminController.getLecturers = async (
+  req,
+  res,
+  next
+) => {
   try {
-    const classId = req.params.id;
-    const students = await adminService.getClassStudents(classId);
-    res.status(200).json({ success: true, message: "Lấy danh sách sinh viên thành công", data: students });
+    const lecturers =
+      await adminService.getLecturers(
+        req.tenant.schoolId
+      );
+
+    return res.status(200).json({
+      success: true,
+      data: lecturers,
+    });
   } catch (error) {
     next(error);
   }
 };
 
-AdminController.getClassSlots = async (req, res, next) => {
+AdminController.getClassStudents = async (
+  req,
+  res,
+  next
+) => {
   try {
-    const classId = req.params.id;
-    const slots = await adminService.getClassSlots(classId);
-    res.status(200).json({ success: true, message: "Lấy danh sách slot học thành công", data: slots });
+    const students =
+      await adminService.getClassStudents(
+        req.params.id,
+        req.tenant.schoolId
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Lấy danh sách sinh viên thành công",
+      data: students,
+    });
   } catch (error) {
     next(error);
   }
 };
+
+AdminController.getClassSlots = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const slots =
+      await adminService.getClassSlots(
+        req.params.id,
+        req.tenant.schoolId
+      );
+
+    return res.status(200).json({
+      success: true,
+      message: "Lấy danh sách slot học thành công",
+      data: slots,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 AdminController.updateClassSlots = async (req, res, next) => {
   try {
     const classId = req.params.id;
-    const slots = await adminService.updateClassSlots(classId, req.body);
+    const slots = await adminService.updateClassSlots(
+      classId,
+      req.body,
+      req.tenant
+    );
     res.status(200).json({ success: true, message: "Cập nhật lịch và chia slot học thành công", data: slots });
   } catch (error) {
     next(error);
   }
 };
 
-AdminController.addClassStudent = async (req, res, next) => {
+
+AdminController.addClassStudent = async (
+  req,
+  res,
+  next
+) => {
   try {
-    const classId = req.params.id;
-    const student = await adminService.addClassStudent(classId, req.body);
-    res.status(201).json({
+    const student =
+      await adminService.addClassStudent(
+        req.params.id,
+        req.body,
+        req.tenant
+      );
+
+    return res.status(201).json({
       success: true,
       message: "Đã thêm sinh viên vào lớp học",
       data: student,
@@ -319,20 +430,20 @@ AdminController.addClassStudent = async (req, res, next) => {
   }
 };
 
-AdminController.getLecturers = async (req, res, next) => {
-  try {
-    const lecturers = await adminService.getLecturers();
-    res.status(200).json({ success: true, data: lecturers });
-  } catch (error) {
-    next(error);
-  }
-};
 
 AdminController.removeClassStudent = async (req, res, next) => {
   try {
     const { id: classId, studentId } = req.params;
-    await adminService.removeClassStudent(classId, studentId);
-    res.status(200).json({ success: true, message: "Đã xóa sinh viên khỏi lớp" });
+    const result = await adminService.removeClassStudent(
+      classId,
+      studentId,
+      req.tenant
+    );
+    res.status(200).json({
+      success: true,
+      message: "Đã ngừng thành viên khỏi lớp; lịch sử được giữ nguyên",
+      data: result,
+    });
   } catch (error) {
     if (error.status === 404) {
       return res.status(404).json({ success: false, message: error.message });
@@ -346,11 +457,10 @@ AdminController.importUsers = async (req, res, next) => {
     if (!req.file) {
       return res.status(400).json({ success: false, message: "Vui lòng đính kèm file Excel hoặc CSV" });
     }
-    const result = await adminService.importUsersData(req.file.buffer, req.file.originalname);
-    res.status(200).json({
-      success: true,
-      message: `Đã tạo ${result.importedUsers} tài khoản; bỏ qua ${result.skippedUsers} bản ghi.`,
-      data: result
+    return res.status(501).json({
+      success: false,
+      code: "TENANT_IMPORT_NOT_READY",
+      message: "Import người dùng chưa được bật vì luồng hiện tại tạo tài khoản Legacy với mật khẩu mặc định; cần quy trình cấp tài khoản an toàn theo trường.",
     });
   } catch (error) {
     next(error);

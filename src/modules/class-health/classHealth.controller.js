@@ -17,7 +17,7 @@ const ClassHealthController = {
 
             const result = await ClassHealthService.getSnapshot(
                 classId,
-                req.user
+                req.tenant
             );
 
             return res.status(200).json({
@@ -58,7 +58,7 @@ const ClassHealthController = {
             const result =
                 await ClassHealthService.sendBulkNotification(
                     classId,
-                    req.user,
+                    req.tenant,
                     req.body
                 );
 

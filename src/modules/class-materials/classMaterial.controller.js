@@ -8,7 +8,7 @@ const ClassMaterialController = {
   async listMaterials(req, res, next) {
     try {
       const { classId } = req.params;
-      const result = await ClassMaterialService.listMaterials(classId, req.query, req.user);
+      const result = await ClassMaterialService.listMaterials(classId, req.query, req.tenant);
 
       const { page = 1, limit = 20 } = req.query;
       res.status(200).json({
@@ -42,7 +42,7 @@ const ClassMaterialController = {
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'No file uploaded' });
       }
-      const material = await ClassMaterialService.uploadMaterial(classId, req.body, req.file, req.user);
+      const material = await ClassMaterialService.uploadMaterial(classId, req.body, req.file, req.tenant);
       res.status(201).json({ success: true, data: material });
     } catch (error) {
       if (error.message === 'CLASS_NOT_FOUND') {
@@ -61,7 +61,7 @@ const ClassMaterialController = {
    */
   async getMaterialById(req, res, next) {
     try {
-      const material = await ClassMaterialService.getMaterialById(req.params.id, req.user);
+      const material = await ClassMaterialService.getMaterialById(req.params.id, req.tenant);
       res.status(200).json({ success: true, data: material });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
@@ -83,7 +83,7 @@ const ClassMaterialController = {
    */
   async updateMaterial(req, res, next) {
     try {
-      const updated = await ClassMaterialService.updateMaterial(req.params.id, req.body, req.user);
+      const updated = await ClassMaterialService.updateMaterial(req.params.id, req.body, req.tenant);
       res.status(200).json({ success: true, data: updated });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
@@ -105,7 +105,7 @@ const ClassMaterialController = {
    */
   async deleteMaterial(req, res, next) {
     try {
-      const deleted = await ClassMaterialService.deleteMaterial(req.params.id, req.user);
+      const deleted = await ClassMaterialService.deleteMaterial(req.params.id, req.tenant);
       res.status(200).json({ success: true, message: 'Material deleted successfully', data: deleted });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
@@ -127,7 +127,7 @@ const ClassMaterialController = {
    */
   async downloadMaterial(req, res, next) {
     try {
-      const result = await ClassMaterialService.downloadMaterial(req.params.id, req.user);
+      const result = await ClassMaterialService.downloadMaterial(req.params.id, req.tenant);
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {

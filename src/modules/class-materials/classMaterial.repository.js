@@ -4,7 +4,7 @@ const ClassMaterialRepository = {
   /**
    * Lấy danh sách tài liệu của lớp (có phân trang) - Đã tối ưu song song
    */
-  async findByClassId(classId, { page = 1, limit = 20 } = {}) {
+  async findByClassId(classId, schoolId, { page = 1, limit = 20 } = {}) {
     page = Number(page);
     limit = Number(limit);
     const offset = (page - 1) * limit;
@@ -12,21 +12,27 @@ const ClassMaterialRepository = {
     const countQuery = `
       SELECT COUNT(*) FROM class_materials
       WHERE class_id = $1
+        AND EXISTS (
+          SELECT 1 FROM classes c
+          WHERE c.id = class_materials.class_id
+            AND c.school_id = $2
+        )
     `;
 
     const query = `
       SELECT cm.*, up.full_name AS uploaded_by_name
       FROM class_materials cm
       JOIN user_profiles up ON cm.uploaded_by = up.user_id
+      JOIN classes c ON c.id = cm.class_id AND c.school_id = $2
       WHERE cm.class_id = $1
       ORDER BY cm.created_at DESC
-      LIMIT $2 OFFSET $3
+      LIMIT $3 OFFSET $4
     `;
 
     // Chạy song song cả 2 query cùng một lúc để tiết kiệm thời gian
     const [countResult, dataResult] = await Promise.all([
-      pool.query(countQuery, [classId]),
-      pool.query(query, [classId, limit, offset])
+      pool.query(countQuery, [classId, schoolId]),
+      pool.query(query, [classId, schoolId, limit, offset])
     ]);
 
     const total = parseInt(countResult.rows[0].count, 10);
@@ -36,14 +42,15 @@ const ClassMaterialRepository = {
   /**
    * Lấy chi tiết 1 tài liệu lớp theo id
    */
-  async findById(id) {
+  async findById(id, schoolId) {
     const query = `
       SELECT cm.*, up.full_name AS uploaded_by_name
       FROM class_materials cm
       JOIN user_profiles up ON cm.uploaded_by = up.user_id
+      JOIN classes c ON c.id = cm.class_id AND c.school_id = $2
       WHERE cm.id = $1
     `;
-    const { rows } = await pool.query(query, [id]);
+    const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
   },
 
@@ -66,7 +73,7 @@ const ClassMaterialRepository = {
   /**
    * Cập nhật tài liệu lớp
    */
-  async update(id, data) {
+  async update(id, data, schoolId) {
     const allowedFields = ['title', 'description', 'is_private'];
     const fields = [];
     const values = [];
@@ -83,12 +90,18 @@ const ClassMaterialRepository = {
     if (fields.length === 0) return null;
 
     fields.push(`updated_at = NOW()`);
-    values.push(id);
+    values.push(id, schoolId);
 
     const query = `
       UPDATE class_materials
       SET ${fields.join(', ')}
       WHERE id = $${idx}
+        AND EXISTS (
+          SELECT 1
+          FROM classes c
+          WHERE c.id = class_materials.class_id
+            AND c.school_id = $${idx + 1}
+        )
       RETURNING *
     `;
     const { rows } = await pool.query(query, values);
@@ -98,9 +111,19 @@ const ClassMaterialRepository = {
   /**
    * Xóa tài liệu lớp
    */
-  async delete(id) {
-    const query = `DELETE FROM class_materials WHERE id = $1 RETURNING *`;
-    const { rows } = await pool.query(query, [id]);
+  async delete(id, schoolId) {
+    const query = `
+      DELETE FROM class_materials
+      WHERE id = $1
+        AND EXISTS (
+          SELECT 1
+          FROM classes c
+          WHERE c.id = class_materials.class_id
+            AND c.school_id = $2
+        )
+      RETURNING *
+    `;
+    const { rows } = await pool.query(query, [id, schoolId]);
     return rows[0];
   },
 };

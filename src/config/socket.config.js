@@ -1,5 +1,6 @@
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
+const { pool } = require("./db.config");
 
 let io;
 
@@ -11,49 +12,140 @@ function initializeSocket(server) {
     },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     try {
-      const authHeader = socket.handshake.headers?.authorization;
+      const authHeader =
+        socket.handshake.headers?.authorization;
+
+      const bearerToken =
+        authHeader?.startsWith("Bearer ")
+          ? authHeader.slice(7)
+          : null;
+
       const token =
         socket.handshake.auth?.token ||
-        socket.handshake.query?.token ||
-        (authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null);
+        bearerToken;
 
-      if (token && process.env.JWT_SECRET) {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        socket.userId = decoded.userId;
-      } else if (socket.handshake.auth?.userId || socket.handshake.query?.userId) {
-        socket.userId = socket.handshake.auth?.userId || socket.handshake.query?.userId;
+      const schoolId =
+        socket.handshake.auth?.schoolId || null;
+
+      // =========================================
+      // VERIFY JWT
+      // =========================================
+
+      if (!token || !process.env.JWT_SECRET) {
+        return next(new Error("UNAUTHORIZED"));
       }
-    } catch (err) {
-      // Continue connection even if token verification fails
+
+      const decoded = jwt.verify(
+        token,
+        process.env.JWT_SECRET,
+        {
+          algorithms: ["HS256"],
+        }
+      );
+
+      const userId = decoded?.userId;
+
+      if (!userId) {
+        return next(new Error("UNAUTHORIZED"));
+      }
+
+      // =========================================
+      // CHECK GLOBAL ACCOUNT
+      // =========================================
+
+      const userResult = await pool.query(
+        `
+      SELECT id
+      FROM public.users
+      WHERE id = $1
+        AND is_active = TRUE
+      `,
+        [userId]
+      );
+
+      if (userResult.rowCount === 0) {
+        return next(new Error("ACCOUNT_INACTIVE"));
+      }
+
+      // =========================================
+      // CHECK SCHOOL MEMBERSHIP
+      // =========================================
+
+      if (schoolId) {
+        const membershipResult = await pool.query(
+          `
+        SELECT sm.role
+        FROM public.school_memberships sm
+
+        JOIN public.schools s
+          ON s.id = sm.school_id
+
+        WHERE sm.school_id = $1
+          AND sm.user_id = $2
+          AND sm.status = 'active'
+          AND s.status = 'active'
+        `,
+          [schoolId, userId]
+        );
+
+        if (membershipResult.rowCount === 0) {
+          return next(
+            new Error("SCHOOL_ACCESS_DENIED")
+          );
+        }
+
+        socket.data.schoolRole =
+          membershipResult.rows[0].role;
+      }
+
+      // =========================================
+      // VERIFIED SOCKET IDENTITY
+      // =========================================
+
+      socket.data.userId = userId;
+      socket.data.schoolId = schoolId;
+
+      // Backward compatibility
+      socket.userId = userId;
+
+      next();
+    } catch (error) {
+      console.warn(
+        "[SOCKET AUTH]",
+        error.message
+      );
+
+      return next(new Error("UNAUTHORIZED"));
     }
-    next();
   });
 
   io.on("connection", (socket) => {
-    console.log(`🔌 Socket connected: ${socket.id}`);
+    const userId = socket.data.userId;
+    const schoolId = socket.data.schoolId;
 
-    if (socket.userId) {
-      socket.join(`user:${socket.userId}`);
-      console.log(`🔌 Socket ${socket.id} auto-joined room user:${socket.userId}`);
+    // Platform notifications
+    socket.join(`user:${userId}`);
+
+    // School notifications
+    if (schoolId) {
+      socket.join(
+        `user:${userId}:school:${schoolId}`
+      );
     }
 
-    socket.on("join-user", (userId) => {
-      if (userId) {
-        socket.join(`user:${userId}`);
-        console.log(`🔌 Socket ${socket.id} joined room user:${userId}`);
-      }
+    console.log("[SOCKET] Authorized connection:", {
+      socketId: socket.id,
+      userId,
+      schoolId,
     });
 
-    socket.on("join", (room) => {
-      if (room) {
-        socket.join(room);
-      }
-    });
-
-    socket.on("disconnect", () => {
-      console.log(`🔌 Socket disconnected: ${socket.id}`);
+    socket.on("disconnect", (reason) => {
+      console.log("[SOCKET] Disconnected:", {
+        socketId: socket.id,
+        reason,
+      });
     });
   });
 

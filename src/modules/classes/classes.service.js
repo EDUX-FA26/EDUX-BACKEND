@@ -1,33 +1,43 @@
 const ClassesRepository = require('./classes.repository');
 const ExcelJS = require('exceljs');
 const LearningStreakService = require('../learning/learningStreak.service');
+const SchoolClassesRepository = require('../admin/admin.school-classes.repository');
 
 const ClassesService = {
-  async getClasses(filters, user) {
-    // If admin, they see all. Lecturer sees theirs. Student sees joined.
+  async getClasses(filters, tenant) {
     return await ClassesRepository.findClasses({
       ...filters,
-      role: user.role,
-      userId: user.id
+      role: tenant.role,
+      userId: tenant.userId,
+      schoolId: tenant.schoolId,
     });
   },
 
-  async getClassById(id, user) {
-    const classData = await ClassesRepository.findById(id);
+  async getClassById(id, tenant) {
+    const classData = await ClassesRepository.findById(
+      id,
+      tenant.schoolId
+    );
     if (!classData) {
       throw new Error('CLASS_NOT_FOUND');
     }
 
-    // Checking permissions:
-    // Admin: allowed
-    // Lecturer: must be their class
-    // Student: must be in class_members
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
+    if (
+      tenant.role === 'lecturer' &&
+      classData.lecturer_id !== tenant.userId
+    ) {
       throw new Error('FORBIDDEN');
     }
-    if (user.role === 'student') {
-      const members = await ClassesRepository.findMembers(id);
-      const isMember = members.some(m => m.student_id === user.id && m.status === 'active');
+    if (tenant.role === 'student') {
+      const members = await ClassesRepository.findMembers(
+        id,
+        tenant.schoolId
+      );
+      const isMember = members.some(
+        member =>
+          member.student_id === tenant.userId &&
+          member.status === 'active'
+      );
       if (!isMember) {
         throw new Error('FORBIDDEN');
       }
@@ -35,39 +45,48 @@ const ClassesService = {
 
     return classData;
   },
-  async getSlots(classId, user) {
-    // verify access using getClassById logic
-    await this.getClassById(classId, user);
-    return await ClassesRepository.getSlots(classId);
+  async getSlots(classId, tenant) {
+    await this.getClassById(classId, tenant);
+    return await ClassesRepository.getSlots(
+      classId,
+      tenant.schoolId
+    );
   },
 
 
-  async createClass(data) {
-    // Could add uniqueness check for class_code + semester_id + subject_id here 
-    // by catching DB unique constraint error in controller, or checking beforehand.
-    return await ClassesRepository.create(data);
+  async createClass(data, tenant) {
+    return SchoolClassesRepository.createSchoolClass({
+      schoolId: tenant.schoolId,
+      actorUserId: tenant.userId,
+      data,
+    });
   },
 
-  async updateClass(id, data) {
-    const existing = await ClassesRepository.findById(id);
-    if (!existing) throw new Error('CLASS_NOT_FOUND');
-
-    return await ClassesRepository.update(id, data);
+  async updateClass(id, data, tenant) {
+    return SchoolClassesRepository.updateSchoolClass({
+      schoolId: tenant.schoolId,
+      actorUserId: tenant.userId,
+      classId: id,
+      data,
+    });
   },
 
-  async deleteClass(id) {
-    const existing = await ClassesRepository.findById(id);
-    if (!existing) throw new Error('CLASS_NOT_FOUND');
-
-    return await ClassesRepository.delete(id);
+  async deleteClass(id, tenant) {
+    return SchoolClassesRepository.deleteSchoolClass({
+      schoolId: tenant.schoolId,
+      actorUserId: tenant.userId,
+      classId: id,
+    });
   },
 
 
-  async getMembers(classId, user) {
-    // Kiểm tra quyền truy cập lớp
-    await this.getClassById(classId, user);
+  async getMembers(classId, tenant) {
+    await this.getClassById(classId, tenant);
 
-    const rows = await ClassesRepository.findMembers(classId);
+    const rows = await ClassesRepository.findMembers(
+      classId,
+      tenant.schoolId
+    );
 
     return rows.map((row) => {
       let streakInfo = {
@@ -126,26 +145,17 @@ const ClassesService = {
     });
   },
 
-  async removeMember(classId, studentId, user) {
-    const classData = await ClassesRepository.findById(classId);
-    if (!classData) throw new Error('CLASS_NOT_FOUND');
-
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
-      throw new Error('FORBIDDEN');
-    }
-
-    const removed = await ClassesRepository.removeMember(classId, studentId);
-    if (!removed) throw new Error('MEMBER_NOT_FOUND');
-    return removed;
+  async removeMember(classId, studentId, tenant) {
+    return SchoolClassesRepository.removeSchoolClassStudent({
+      schoolId: tenant.schoolId,
+      actorUserId: tenant.userId,
+      classId,
+      studentId,
+    });
   },
 
-  async importMembers(classId, fileBuffer, user) {
-    const classData = await ClassesRepository.findById(classId);
-    if (!classData) throw new Error('CLASS_NOT_FOUND');
-
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
-      throw new Error('FORBIDDEN');
-    }
+  async importMembers(classId, fileBuffer, tenant) {
+    await this.getClassById(classId, tenant);
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(fileBuffer);
@@ -170,45 +180,59 @@ const ClassesService = {
       throw new Error('HEADER_STUDENT_CODE_NOT_FOUND');
     }
 
-    const codes = new Set();
+    const records = [];
     worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return; // Skip header
+      if (rowNumber === 1) return;
       const code = String(row.getCell(studentCodeColIdx).value || '').trim();
-      if (code) codes.add(code);
+      if (code) records.push({ rowNumber, code });
     });
 
-    const uniqueCodes = Array.from(codes);
-    if (uniqueCodes.length === 0) {
-      return { total: 0, imported: 0, skipped: 0, invalidCodes: [] };
+    if (records.length === 0) {
+      return { total: 0, imported: 0, skipped: 0, errors: [] };
     }
 
-    const foundUsers = await ClassesRepository.getStudentIdsByCodes(uniqueCodes);
-    const validCodesMap = new Map();
-    foundUsers.forEach(u => validCodesMap.set(u.student_code, u.user_id));
+    let imported = 0;
+    let skipped = 0;
+    const errors = [];
 
-    const invalidCodes = uniqueCodes.filter(code => !validCodesMap.has(code));
-    const studentIdsToInsert = Array.from(validCodesMap.values());
+    for (const record of records) {
+      try {
+        await SchoolClassesRepository.addSchoolClassStudent({
+          schoolId: tenant.schoolId,
+          actorUserId: tenant.userId,
+          classId,
+          payload: { identifier: record.code },
+        });
+        imported += 1;
+      } catch (error) {
+        if (error.status !== 404 && error.status !== 409) {
+          throw error;
+        }
 
-    const importedCount = await ClassesRepository.bulkUpsertMembers(classId, studentIdsToInsert);
+        skipped += 1;
+        errors.push({
+          row: record.rowNumber,
+          code: record.code,
+          reason: error.message,
+        });
+      }
+    }
 
     return {
-      total: uniqueCodes.length,
-      imported: validCodesMap.size,
-      skipped: invalidCodes.length,
-      invalidCodes
+      total: records.length,
+      imported,
+      skipped,
+      errors,
     };
   },
 
-  async exportMembers(classId, user) {
-    // Check permission
-    const classData = await ClassesRepository.findById(classId);
-    if (!classData) throw new Error('CLASS_NOT_FOUND');
+  async exportMembers(classId, tenant) {
+    const classData = await this.getClassById(classId, tenant);
 
-    if (user.role === 'lecturer' && classData.lecturer_id !== user.id) {
-      throw new Error('FORBIDDEN');
-    }
-
-    const members = await ClassesRepository.findMembers(classId);
+    const members = await ClassesRepository.findMembers(
+      classId,
+      tenant.schoolId
+    );
 
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Members');
@@ -240,77 +264,6 @@ const ClassesService = {
     worksheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
 
     return { workbook, classData };
-  },
-
-  async sendBulkNotification(classId, user, payload) {
-    // Chỉ cho phép Lecturer / Admin.
-    if (!['lecturer', 'admin'].includes(user?.role)) {
-      throw new Error('FORBIDDEN');
-    }
-
-    // Kiểm tra quyền truy cập lớp.
-    // Lecturer chỉ được thao tác với lớp mình phụ trách.
-    await ClassesService.getClassById(classId, user);
-
-    const { studentIds, title, message } = payload || {};
-
-    if (
-      !Array.isArray(studentIds) ||
-      studentIds.length === 0 ||
-      studentIds.length > 100 ||
-      studentIds.some(id => typeof id !== 'string' || !isUuid(id)) ||
-      typeof title !== 'string' ||
-      typeof message !== 'string' ||
-      !title.trim() ||
-      !message.trim() ||
-      title.trim().length > 200 ||
-      message.trim().length > 5000
-    ) {
-      throw new Error('INVALID_NOTIFICATION_PAYLOAD');
-    }
-
-    const uniqueStudentIds = [...new Set(studentIds)];
-
-    // Lấy danh sách thành viên từ Backend, không tin danh sách
-    // do Frontend gửi lên.
-    const members = await ClassesService.getMembers(classId, user);
-
-    const activeMemberIds = new Set(
-      members
-        .filter(member => member.membershipStatus === 'active')
-        .map(member => member.studentId)
-    );
-
-    // Từ chối toàn bộ request nếu có người nhận không hợp lệ.
-    const invalidStudentIds = uniqueStudentIds.filter(
-      studentId => !activeMemberIds.has(studentId)
-    );
-
-    if (invalidStudentIds.length > 0) {
-      throw new Error('INVALID_RECIPIENTS');
-    }
-
-    // Tạo một notification cho mỗi sinh viên.
-    const notifications = uniqueStudentIds.map(studentId => ({
-      userId: studentId,
-      title: title.trim(),
-      message: message.trim(),
-      type: 'system_announcement',
-      related_entity_type: 'class',
-      related_entity_id: classId,
-    }));
-
-    // Sử dụng Repository đã có của EduX.
-    const created = await NotificationsRepository.bulkCreate(
-      notifications
-    );
-
-    return {
-      classId,
-      sentCount: created.length,
-      requestedCount: uniqueStudentIds.length,
-      notificationIds: created.map(item => item.id),
-    };
   },
 
 };
