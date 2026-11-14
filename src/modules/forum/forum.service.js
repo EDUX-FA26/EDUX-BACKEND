@@ -4,10 +4,18 @@ const FlashcardsService = require('../flashcards/flashcards.service');
 
 const ForumService = {
   stats(user) { return Repo.getUserStats(user.id); },
-  list(user, query) { return Repo.listPosts({ userId: user.id, role: user.role, ...query }); },
-  get(user, id) { return Repo.findPostById(id, user.id, user.role); },
+  async list(user, query) {
+    const schoolId = await Repo.findUserSchoolId(user.id);
+    return Repo.listPosts({ userId: user.id, role: user.role, schoolId, ...query });
+  },
+  async get(user, id) {
+    const schoolId = await Repo.findUserSchoolId(user.id);
+    return Repo.findPostById(id, user.id, user.role, schoolId);
+  },
   async create(user, body) {
     if (!['lecturer', 'admin', 'student'].includes(user.role)) throw Object.assign(new Error('You are not allowed to create forum posts'), { status: 403 });
+    const schoolId = await Repo.findUserSchoolId(user.id);
+    if (!schoolId && user.role !== 'admin') throw Object.assign(new Error('Your account is not assigned to a school'), { status: 403 });
     if (body.flashcardDeckId && user.role !== 'lecturer') {
       throw Object.assign(new Error('Only lecturers can publish Flashcard posts'), { status: 403 });
     }
@@ -20,7 +28,7 @@ const ForumService = {
     const attachments = Array.isArray(body.attachments) ? body.attachments.slice(0, 5).filter((item) => item && item.name && item.dataUrl && String(item.dataUrl).length <= 3_000_000) : [];
     const tags = Array.isArray(body.tags) ? [...new Set(body.tags.map((tag) => String(tag).trim().replace(/^#/, '').slice(0, 40)).filter(Boolean))].slice(0, 10) : [];
     if (body.flashcardDeckId) await FlashcardsService.publishDeckForForum(body.flashcardDeckId, user);
-    const post = await Repo.createPost({ ...body, authorId: user.id, visibility, postType, isAnonymous: Boolean(body.isAnonymous), attachments, tags, classIds: allowedClassIds });
+    const post = await Repo.createPost({ ...body, authorId: user.id, schoolId, visibility, postType, isAnonymous: Boolean(body.isAnonymous), attachments, tags, classIds: allowedClassIds });
     // Notify the public audience or only members/lecturers of selected classes.
     // failure must not roll back a successfully-created forum post.
     try {

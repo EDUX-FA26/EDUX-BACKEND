@@ -31,6 +31,16 @@ ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL D
 ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS attachments JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE forum_posts ADD COLUMN IF NOT EXISTS school_id UUID REFERENCES schools(id) ON DELETE SET NULL;
+
+UPDATE forum_posts fp
+SET school_id = sm.school_id
+FROM school_memberships sm
+WHERE fp.school_id IS NULL
+  AND sm.user_id = fp.author_id
+  AND sm.status = 'active';
+
+CREATE INDEX IF NOT EXISTS forum_posts_school_idx ON forum_posts (school_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS forum_post_likes (
   post_id UUID NOT NULL REFERENCES forum_posts(id) ON DELETE CASCADE,
