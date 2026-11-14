@@ -1,17 +1,19 @@
 const FlashcardsTestRepository = require('./flashcardsTest.repository');
+const FlashcardsRepository = require('../flashcards/flashcards.repository');
 const LearningStreakService = require('../learning/learningStreak.service');
 
 class FlashcardsTestService {
   /**
    * Tạo 1 test session mới cho Student
    */
-  async createTest(deckId, user) {
-    const deck = await FlashcardsTestRepository.findDeckById(deckId);
+  async createTest(deckId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsTestRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
 
-    this._checkViewAccess(deck, user);
+    await this._checkViewAccess(deck, user, tenant);
 
-    const cards = await FlashcardsTestRepository.getDeckCardsForTest(deckId);
+    const cards = await FlashcardsTestRepository.getDeckCardsForTest(deckId, schoolId);
     if (!cards || cards.length === 0) {
       throw new Error('DECK_NO_MULTIPLE_CHOICE');
     }
@@ -20,6 +22,7 @@ class FlashcardsTestService {
       deck_id: deckId,
       user_id: user.id,
       total_questions: cards.length,
+      school_id: schoolId,
     });
 
     return {
@@ -36,15 +39,16 @@ class FlashcardsTestService {
   /**
    * Lấy chi tiết bài test để reload/tiếp tục làm bài
    */
-  async getTest(testId, user) {
-    const test = await FlashcardsTestRepository.findTestById(testId);
+  async getTest(testId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const test = await FlashcardsTestRepository.findTestById(testId, schoolId);
     if (!test) throw new Error('TEST_NOT_FOUND');
 
     if (test.user_id !== user.id) {
       throw new Error('FORBIDDEN');
     }
 
-    const questions = await FlashcardsTestRepository.getDeckCardsForTest(test.deck_id);
+    const questions = await FlashcardsTestRepository.getDeckCardsForTest(test.deck_id, schoolId);
 
     return {
       test_id: test.id,
@@ -63,8 +67,9 @@ class FlashcardsTestService {
    * Nộp bài kiểm tra & chấm điểm tự động
    * YÊU CẦU: Đúng từ 50% câu trở lên mới được tính và tăng chuỗi học tập (Streak)
    */
-  async submitTest(testId, body, user) {
-    const test = await FlashcardsTestRepository.findTestById(testId);
+  async submitTest(testId, body, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const test = await FlashcardsTestRepository.findTestById(testId, schoolId);
     if (!test) throw new Error('TEST_NOT_FOUND');
 
     if (test.user_id !== user.id) {
@@ -75,7 +80,7 @@ class FlashcardsTestService {
       throw new Error('TEST_ALREADY_SUBMITTED');
     }
 
-    const deckCardsWithAnswers = await FlashcardsTestRepository.getDeckCardsWithAnswers(test.deck_id);
+    const deckCardsWithAnswers = await FlashcardsTestRepository.getDeckCardsWithAnswers(test.deck_id, schoolId);
 
     const studentAnswerMap = new Map();
     const rawAnswers = body?.answers || [];
@@ -107,10 +112,11 @@ class FlashcardsTestService {
     const percentage = Math.round((correctCount / totalQuestions) * 100);
     const isPassedStreak = percentage >= 50;
 
-    await FlashcardsTestRepository.saveTestAnswers(testId, processedAnswers);
-    await FlashcardsTestRepository.updateTestResult(testId, {
+    await FlashcardsTestRepository.submitTestTransaction({
+      testId,
+      answers: processedAnswers,
       score: finalScore,
-      status: 'submitted',
+      schoolId,
     });
 
     // ─── TÍNH TOÁN STREAK: Đúng từ 50% trở lên mới tăng chuỗi ─────────
@@ -118,6 +124,7 @@ class FlashcardsTestService {
     if (isPassedStreak) {
       try {
         streakResult = await LearningStreakService.recordFlashcardTestCompletion({
+          schoolId,
           userId: user.id,
           deckId: test.deck_id,
           testId,
@@ -146,8 +153,9 @@ class FlashcardsTestService {
   /**
    * Xem kết quả chi tiết bài test đã nộp
    */
-  async getTestResult(testId, user) {
-    const test = await FlashcardsTestRepository.findTestById(testId);
+  async getTestResult(testId, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const test = await FlashcardsTestRepository.findTestById(testId, schoolId);
     if (!test) throw new Error('TEST_NOT_FOUND');
 
     if (test.user_id !== user.id) {
@@ -158,12 +166,9 @@ class FlashcardsTestService {
       throw new Error('TEST_NOT_SUBMITTED');
     }
 
-    return FlashcardsTestRepository.getTestResult(testId);
+    return FlashcardsTestRepository.getTestResult(testId, schoolId);
   }
 
-  /**
-   * Helper normalize & chấm điểm (Multiple Choice & Essay)
-   */
   _normalizeString(str) {
     if (typeof str !== 'string') return '';
     return str.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -176,19 +181,25 @@ class FlashcardsTestService {
     return normStudent === normReal;
   }
 
-  /**
-   * Kiểm tra quyền xem deck
-   */
-  _checkViewAccess(deck, user) {
-    if (user.role === 'admin') return;
-    if (user.role === 'lecturer') {
-      if (deck.created_by !== user.id) {
-        throw new Error('FORBIDDEN');
-      }
-      return;
+  async _checkViewAccess(deck, user, tenant) {
+    const role = tenant?.role || user?.role;
+    if (role === 'school_admin' || role === 'admin') return;
+
+    if (role === 'lecturer') {
+      if (deck.created_by === user.id || deck.is_public) return;
+      throw new Error('FORBIDDEN');
     }
-    if (deck.is_public) return;
+
+    // Student
     if (deck.created_by === user.id) return;
+    if (deck.is_public) return;
+
+    const schoolId = tenant?.schoolId;
+    if (schoolId) {
+      const hasClassAccess = await FlashcardsRepository.checkStudentDeckAccess(deck.id, user.id, schoolId);
+      if (hasClassAccess) return;
+    }
+
     throw new Error('FORBIDDEN');
   }
 }

@@ -1,23 +1,45 @@
 const { pool } = require('../../config/db.config');
 
 const LearningRepository = {
-  /** Verify that a student is actively enrolled in at least one class of a subject. */
-  async isStudentActiveInSubject(studentId, subjectId) {
+  /** Verify that a student is actively enrolled in at least one class of a subject within school. */
+  async isStudentActiveInSubject(studentId, subjectId, schoolId) {
+    const where = [
+      'cm.student_id = $1',
+      'c.subject_id = $2',
+      `cm.status = 'active'`,
+      'c.is_active = true',
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`c.school_id = $3`);
+    }
+
     const { rows } = await pool.query(
       `SELECT 1
        FROM class_members cm
        JOIN classes c ON c.id = cm.class_id
-       WHERE cm.student_id = $1
-         AND c.subject_id = $2
-         AND cm.status = 'active'
-         AND c.is_active = true
+       WHERE ${where.join(' AND ')}
        LIMIT 1`,
-      [studentId, subjectId]
+      params
     );
     return rows.length > 0;
   },
 
-  async findAssignmentGradesBySubject(studentId, subjectId) {
+  async findAssignmentGradesBySubject(studentId, subjectId, schoolId) {
+    const where = [
+      'g.student_id = $1',
+      'c.subject_id = $2',
+      'sub.student_id = $1',
+      `sub.status = 'graded'`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`g.school_id = $3`);
+      where.push(`c.school_id = $3`);
+    }
+
     const { rows } = await pool.query(
       `SELECT g.id AS grade_id, g.assignment_id, a.title AS assignment_title,
               g.score, g.max_score, g.feedback, g.graded_at
@@ -25,17 +47,43 @@ const LearningRepository = {
        JOIN submissions sub ON sub.id = g.submission_id
        JOIN assignments a ON a.id = g.assignment_id
        JOIN classes c ON c.id = a.class_id
-       WHERE g.student_id = $1
-         AND c.subject_id = $2
-         AND sub.student_id = $1
-         AND sub.status = 'graded'
+       WHERE ${where.join(' AND ')}
        ORDER BY g.graded_at DESC NULLS LAST, g.created_at DESC`,
-      [studentId, subjectId]
+      params
     );
     return rows;
   },
 
-  async findSubmittedFlashcardTestsBySubject(studentId, subjectId, limit) {
+  async findSubmittedFlashcardTestsBySubject(studentId, subjectId, limit, schoolId) {
+    const where = [
+      'ft.user_id = $1',
+      'fd.subject_id = $2',
+      `ft.status = 'submitted'`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ft.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+    }
+
+    if (schoolId) {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
+    params.push(limit);
+    const limitIdx = params.length;
+
     const { rows } = await pool.query(
       `SELECT ft.id AS test_id, ft.deck_id, fd.title AS deck_title, ft.total_questions,
               ft.score, ft.started_at, ft.submitted_at,
@@ -45,21 +93,42 @@ const LearningRepository = {
        FROM flashcard_tests ft
        JOIN flashcard_decks fd ON fd.id = ft.deck_id
        LEFT JOIN flashcard_test_answers fta ON fta.test_id = ft.id
-       WHERE ft.user_id = $1 AND fd.subject_id = $2 AND ft.status = 'submitted'
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
-           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
-         )
+       WHERE ${where.join(' AND ')}
        GROUP BY ft.id, fd.id
        ORDER BY ft.submitted_at DESC NULLS LAST, ft.started_at DESC
-       LIMIT $3`,
-      [studentId, subjectId, limit]
+       LIMIT $${limitIdx}`,
+      params
     );
     return rows;
   },
 
-  async getFlashcardTestAnswerSummaryBySubject(studentId, subjectId) {
+  async getFlashcardTestAnswerSummaryBySubject(studentId, subjectId, schoolId) {
+    const where = [
+      'ft.user_id = $1',
+      'fd.subject_id = $2',
+      `ft.status = 'submitted'`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ft.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+    }
+
+    if (schoolId) {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
     const { rows } = await pool.query(
       `SELECT COUNT(fta.id)::int AS total_answers,
               COUNT(fta.id) FILTER (WHERE fta.is_correct = true)::int AS correct_answers,
@@ -68,18 +137,43 @@ const LearningRepository = {
        FROM flashcard_tests ft
        JOIN flashcard_decks fd ON fd.id = ft.deck_id
        JOIN flashcard_test_answers fta ON fta.test_id = ft.id
-       WHERE ft.user_id = $1 AND fd.subject_id = $2 AND ft.status = 'submitted'
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
-           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
-         )`,
-      [studentId, subjectId]
+       WHERE ${where.join(' AND ')}`,
+      params
     );
     return rows[0];
   },
 
-  async findWrongFlashcardTestAnswersBySubject(studentId, subjectId, limit) {
+  async findWrongFlashcardTestAnswersBySubject(studentId, subjectId, limit, schoolId) {
+    const where = [
+      'ft.user_id = $1',
+      'fd.subject_id = $2',
+      `ft.status = 'submitted'`,
+      'fta.is_correct = false',
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ft.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+    }
+
+    if (schoolId) {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
+    params.push(limit);
+    const limitIdx = params.length;
+
     const { rows } = await pool.query(
       `SELECT ft.id AS test_id, ft.deck_id, fd.title AS deck_title, ft.submitted_at,
               fta.flashcard_id, fta.student_answer, fta.score,
@@ -89,23 +183,34 @@ const LearningRepository = {
        JOIN flashcard_decks fd ON fd.id = ft.deck_id
        JOIN flashcard_test_answers fta ON fta.test_id = ft.id
        JOIN flashcards fc ON fc.id = fta.flashcard_id
-       WHERE ft.user_id = $1
-         AND fd.subject_id = $2
-         AND ft.status = 'submitted'
-         AND fta.is_correct = false
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
-           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
-         )
+       WHERE ${where.join(' AND ')}
        ORDER BY ft.submitted_at DESC NULLS LAST, ft.started_at DESC
-       LIMIT $3`,
-      [studentId, subjectId, limit]
+       LIMIT $${limitIdx}`,
+      params
     );
     return rows;
   },
 
-  async getFlashcardReviewSummaryBySubject(studentId, subjectId) {
+  async getFlashcardReviewSummaryBySubject(studentId, subjectId, schoolId) {
+    const where = ['fr.user_id = $1', 'fd.subject_id = $2'];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`fr.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
     const { rows } = await pool.query(
       `SELECT COUNT(fr.id)::int AS total_reviews,
               COUNT(fr.id) FILTER (WHERE fr.result = 'again')::int AS again,
@@ -115,38 +220,72 @@ const LearningRepository = {
        FROM flashcard_reviews fr
        JOIN flashcards fc ON fc.id = fr.flashcard_id
        JOIN flashcard_decks fd ON fd.id = fc.deck_id
-       WHERE fr.user_id = $1 AND fd.subject_id = $2
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
-           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
-         )`,
-      [studentId, subjectId]
+       WHERE ${where.join(' AND ')}`,
+      params
     );
     return rows[0];
   },
 
-  async findFlashcardReviewHistoryBySubject(studentId, subjectId, limit) {
+  async findFlashcardReviewHistoryBySubject(studentId, subjectId, limit, schoolId) {
+    const where = ['fr.user_id = $1', 'fd.subject_id = $2'];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`fr.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+    params.push(limit);
+    const limitIdx = params.length;
+
     const { rows } = await pool.query(
       `SELECT fr.id AS review_id, fr.flashcard_id, fr.result, fr.reviewed_at,
               fc.question, fd.id AS deck_id, fd.title AS deck_title
        FROM flashcard_reviews fr
        JOIN flashcards fc ON fc.id = fr.flashcard_id
        JOIN flashcard_decks fd ON fd.id = fc.deck_id
-       WHERE fr.user_id = $1 AND fd.subject_id = $2
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
-           OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
-         )
+       WHERE ${where.join(' AND ')}
        ORDER BY fr.reviewed_at DESC
-       LIMIT $3`,
-      [studentId, subjectId, limit]
+       LIMIT $${limitIdx}`,
+      params
     );
     return rows;
   },
 
-  async findDueFlashcardsBySubject(studentId, subjectId) {
+  async findDueFlashcardsBySubject(studentId, subjectId, schoolId) {
+    const where = [
+      'fs.user_id = $1',
+      'fd.subject_id = $2',
+      `fs.due_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::date`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`fs.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
     const { rows } = await pool.query(
       `SELECT fc.id AS flashcard_id, fc.type AS question_type, fc.question, fc.options,
               fc.difficulty, fc.position, fd.id AS deck_id, fd.title AS deck_title,
@@ -154,43 +293,64 @@ const LearningRepository = {
        FROM flashcard_schedules fs
        JOIN flashcards fc ON fc.id = fs.flashcard_id AND fc.is_active = true
        JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
-       WHERE fs.user_id = $1
-         AND fd.subject_id = $2
-         AND fs.due_date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (
-             SELECT class_id FROM class_members
-             WHERE student_id = $1 AND status = 'active'
-           )
-           OR fd.id IN (
-             SELECT fdca.deck_id
-             FROM flashcard_deck_class_access fdca
-             JOIN class_members cm ON cm.class_id = fdca.class_id
-             WHERE cm.student_id = $1 AND cm.status = 'active'
-           )
-         )
+       WHERE ${where.join(' AND ')}
        ORDER BY fs.due_date ASC, fc.position ASC`,
-      [studentId, subjectId]
+      params
     );
     return rows;
   },
 
-  async findActiveTopicsBySubject(subjectId) {
+  async findActiveTopicsBySubject(subjectId, schoolId) {
+    const where = ['subject_id = $1', 'is_active = true'];
+    const params = [subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`school_id = $2`);
+    }
     const { rows } = await pool.query(
-      `SELECT DISTINCT t.id, t.name, t.parent_id
-       FROM topics t
-       JOIN flashcard_topics ft ON ft.topic_id = t.id AND ft.review_status = 'approved'
-       JOIN flashcards fc ON fc.id = ft.flashcard_id AND fc.is_active = true
-       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
-       WHERE t.subject_id = $1 AND t.is_active = true
-       ORDER BY t.name ASC`,
-      [subjectId]
+      `SELECT id, name, parent_id
+       FROM topics WHERE ${where.join(' AND ')}
+       ORDER BY name ASC`,
+      params
     );
     return rows;
   },
 
-  async findSubmittedMultipleChoiceTopicAnswers(studentId, subjectId) {
+  async findSubmittedMultipleChoiceTopicAnswers(studentId, subjectId, schoolId) {
+    const where = [
+      'ft.user_id = $1',
+      `ft.status = 'submitted'`,
+      'fd.subject_id = $2',
+      `fc.type = 'multiple_choice'`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ft.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+      where.push(`t.school_id = $${params.length}`);
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (
+          SELECT fdca.deck_id FROM flashcard_deck_class_access fdca
+          JOIN class_members cm ON cm.class_id = fdca.class_id
+          JOIN classes c ON c.id = cm.class_id
+          WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length}
+        )
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (
+          SELECT fdca.deck_id FROM flashcard_deck_class_access fdca
+          JOIN class_members cm ON cm.class_id = fdca.class_id
+          WHERE cm.student_id = $1 AND cm.status = 'active'
+        )
+      )`);
+    }
+
     const { rows } = await pool.query(
       `SELECT fct.topic_id, fta.id AS answer_id, fta.flashcard_id, fta.is_correct, ft.submitted_at
        FROM flashcard_tests ft
@@ -199,167 +359,201 @@ const LearningRepository = {
        JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
        JOIN flashcard_topics fct ON fct.flashcard_id = fc.id AND fct.review_status = 'approved'
        JOIN topics t ON t.id = fct.topic_id AND t.subject_id = fd.subject_id AND t.is_active = true
-       WHERE ft.user_id = $1
-         AND ft.status = 'submitted'
-         AND fd.subject_id = $2
-         AND fc.type = 'multiple_choice'
-         AND (
-           fd.is_public = true
-           OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
-           OR fd.id IN (
-             SELECT fdca.deck_id FROM flashcard_deck_class_access fdca
-             JOIN class_members cm ON cm.class_id = fdca.class_id
-             WHERE cm.student_id = $1 AND cm.status = 'active'
-           )
-         )`,
-      [studentId, subjectId]
+       WHERE ${where.join(' AND ')}`,
+      params
     );
     return rows;
   },
 
+  async findTopicAttemptBreakdownBySubject(studentId, subjectId, schoolId) {
+    const where = [
+      'ft.user_id = $1',
+      `ft.status = 'submitted'`,
+      'fd.subject_id = $2',
+      `fc.type = 'multiple_choice'`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ft.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+      where.push(`t.school_id = $${params.length}`);
+    }
 
-  async findLatestIncorrectFlashcardsByTopic(
-    studentId,
-    subjectId,
-    topicIds
-  ) {
+    if (schoolId) {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
+    const { rows } = await pool.query(
+      `SELECT t.id AS topic_id, t.name AS topic_name, fta.flashcard_id, fta.is_correct
+       FROM flashcard_tests ft
+       JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+       JOIN flashcards fc ON fc.id = fta.flashcard_id
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id
+       JOIN flashcard_topics fct ON fct.flashcard_id = fc.id AND fct.review_status = 'approved'
+       JOIN topics t ON t.id = fct.topic_id AND t.subject_id = fd.subject_id AND t.is_active = true
+       WHERE ${where.join(' AND ')}`,
+      params
+    );
+    return rows;
+  },
+
+  async findLatestIncorrectFlashcardsByTopic(studentId, subjectId, topicIds, schoolId) {
     if (!topicIds.length) return [];
+
+    const where = [
+      'ft.user_id = $1',
+      `ft.status = 'submitted'`,
+      'fd.subject_id = $2',
+      `fc.type = 'multiple_choice'`,
+      'fct.topic_id = ANY($3::uuid[])',
+    ];
+    const params = [studentId, subjectId, topicIds];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ft.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+      where.push(`t.school_id = $${params.length}`);
+    }
+
+    if (schoolId) {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
 
     const { rows } = await pool.query(
       `WITH ranked_answers AS (
+         SELECT
+           fct.topic_id,
+           fta.flashcard_id,
+           fta.is_correct,
+           ft.submitted_at,
+           ROW_NUMBER() OVER (
+             PARTITION BY fct.topic_id, fta.flashcard_id
+             ORDER BY ft.submitted_at DESC NULLS LAST, fta.id DESC
+           ) AS attempt_rank
+         FROM flashcard_tests ft
+         JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+         JOIN flashcards fc ON fc.id = fta.flashcard_id AND fc.is_active = true
+         JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+         JOIN flashcard_topics fct ON fct.flashcard_id = fc.id AND fct.review_status = 'approved'
+         JOIN topics t ON t.id = fct.topic_id AND t.subject_id = fd.subject_id AND t.is_active = true
+         WHERE ${where.join(' AND ')}
+       ),
+       incorrect AS (
+         SELECT
+           topic_id,
+           flashcard_id,
+           submitted_at,
+           ROW_NUMBER() OVER (
+             PARTITION BY topic_id
+             ORDER BY submitted_at DESC NULLS LAST, flashcard_id
+           ) AS question_rank
+         FROM ranked_answers
+         WHERE attempt_rank = 1 AND is_correct = false
+       )
        SELECT
-         fct.topic_id,
-         fta.flashcard_id,
-         fta.is_correct,
-         ft.submitted_at,
-
-         ROW_NUMBER() OVER (
-           PARTITION BY fct.topic_id, fta.flashcard_id
-           ORDER BY
-             ft.submitted_at DESC NULLS LAST,
-             fta.id DESC
-         ) AS attempt_rank
-
-       FROM flashcard_tests ft
-
-       JOIN flashcard_test_answers fta
-         ON fta.test_id = ft.id
-
-       JOIN flashcards fc
-         ON fc.id = fta.flashcard_id
-         AND fc.is_active = true
-
-       JOIN flashcard_decks fd
-         ON fd.id = fc.deck_id
-         AND fd.is_active = true
-
-       JOIN flashcard_topics fct
-         ON fct.flashcard_id = fc.id
-         AND fct.review_status = 'approved'
-
-       JOIN topics t
-         ON t.id = fct.topic_id
-         AND t.subject_id = fd.subject_id
-         AND t.is_active = true
-
-       WHERE ft.user_id = $1
-         AND ft.status = 'submitted'
-         AND fd.subject_id = $2
-         AND fc.type = 'multiple_choice'
-         AND fct.topic_id = ANY($3::uuid[])
-
-         AND (
-           fd.is_public = true
-
-           OR fd.class_id IN (
-             SELECT class_id
-             FROM class_members
-             WHERE student_id = $1
-               AND status = 'active'
-           )
-
-           OR fd.id IN (
-             SELECT fdca.deck_id
-             FROM flashcard_deck_class_access fdca
-             JOIN class_members cm
-               ON cm.class_id = fdca.class_id
-             WHERE cm.student_id = $1
-               AND cm.status = 'active'
-           )
-         )
-     ),
-
-     incorrect AS (
-       SELECT
-         topic_id,
-         flashcard_id,
-         submitted_at,
-
-         ROW_NUMBER() OVER (
-           PARTITION BY topic_id
-           ORDER BY submitted_at DESC NULLS LAST,
-                    flashcard_id
-         ) AS question_rank
-
-       FROM ranked_answers
-       WHERE attempt_rank = 1
-         AND is_correct = false
-     )
-
-     SELECT
-       i.topic_id AS "topicId",
-       i.flashcard_id AS "flashcardId",
-       fc.question,
-       fc.difficulty,
-       i.submitted_at AS "lastSubmittedAt"
-
-     FROM incorrect i
-     JOIN flashcards fc ON fc.id = i.flashcard_id
-
-     WHERE i.question_rank <= 5
-
-     ORDER BY i.topic_id, i.question_rank`,
-      [studentId, subjectId, topicIds]
+         i.topic_id AS "topicId",
+         i.flashcard_id AS "flashcardId",
+         fc.question,
+         fc.difficulty,
+         i.submitted_at AS "lastSubmittedAt"
+       FROM incorrect i
+       JOIN flashcards fc ON fc.id = i.flashcard_id
+       WHERE i.question_rank <= 5
+       ORDER BY i.topic_id, i.question_rank`,
+      params
     );
-
     return rows;
   },
 
   /**
    * Lấy 1 streak của user theo subject (kèm thông tin subject)
    */
-  async findStreakByUserAndSubject(userId, subjectId, client = null) {
+  async findStreakByUserAndSubject(userId, subjectId, schoolId, client = null) {
     const q = client || pool;
+    const where = ['ss.user_id = $1', 'ss.subject_id = $2'];
+    const params = [userId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ss.school_id = $3`);
+    }
+
     const query = `
       SELECT ss.*, s.name AS subject_name, s.code AS subject_code
       FROM subject_streaks ss
       JOIN subjects s ON ss.subject_id = s.id
-      WHERE ss.user_id = $1 AND ss.subject_id = $2
+      WHERE ${where.join(' AND ')}
     `;
-    const { rows } = await q.query(query, [userId, subjectId]);
+    const { rows } = await q.query(query, params);
     return rows[0] || null;
   },
 
   /**
-   * Lấy tất cả streak của user (theo từng subject)
+   * Lấy tất cả streak của user trong trường hiện tại
    */
-  async findAllStreaksByUser(userId) {
+  async findAllStreaksByUser(userId, schoolId) {
+    const where = ['ss.user_id = $1', 'ss.is_active = true'];
+    const params = [userId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ss.school_id = $2`);
+    }
+
     const query = `
       SELECT ss.*, s.name AS subject_name, s.code AS subject_code
       FROM subject_streaks ss
       JOIN subjects s ON ss.subject_id = s.id
-      WHERE ss.user_id = $1 AND ss.is_active = true
+      WHERE ${where.join(' AND ')}
       ORDER BY s.name ASC
     `;
-    const { rows } = await pool.query(query, [userId]);
+    const { rows } = await pool.query(query, params);
     return rows;
   },
 
   /**
    * Tạo bản ghi streak khởi tạo nếu chưa tồn tại
    */
-  async getOrCreateStreakRow(userId, subjectId, client = null) {
+  async getOrCreateStreakRow(userId, subjectId, schoolId, client = null) {
     const q = client || pool;
+    if (schoolId) {
+      const insertQuery = `
+        INSERT INTO subject_streaks (user_id, subject_id, school_id, current_streak, longest_streak, recovery_used)
+        VALUES ($1, $2, $3, 0, 0, 0)
+        ON CONFLICT (school_id, user_id, subject_id) DO NOTHING
+        RETURNING *
+      `;
+      await q.query(insertQuery, [userId, subjectId, schoolId]);
+
+      const selectQuery = `
+        SELECT ss.*, s.name AS subject_name, s.code AS subject_code
+        FROM subject_streaks ss
+        JOIN subjects s ON ss.subject_id = s.id
+        WHERE ss.user_id = $1 AND ss.subject_id = $2 AND ss.school_id = $3
+      `;
+      const { rows } = await q.query(selectQuery, [userId, subjectId, schoolId]);
+      return rows[0];
+    }
+
     const insertQuery = `
       INSERT INTO subject_streaks (user_id, subject_id, current_streak, longest_streak, recovery_used)
       VALUES ($1, $2, 0, 0, 0)
@@ -381,8 +575,25 @@ const LearningRepository = {
   /**
    * Khóa row streak phục vụ transaction (chống concurrency race conditions)
    */
-  async lockStreakForUpdate(userId, subjectId, client) {
-    // Đảm bảo row đã tồn tại
+  async lockStreakForUpdate(userId, subjectId, schoolId, client) {
+    if (schoolId) {
+      await client.query(`
+        INSERT INTO subject_streaks (user_id, subject_id, school_id, current_streak, longest_streak, recovery_used)
+        VALUES ($1, $2, $3, 0, 0, 0)
+        ON CONFLICT (school_id, user_id, subject_id) DO NOTHING
+      `, [userId, subjectId, schoolId]);
+
+      const query = `
+        SELECT ss.*, s.name AS subject_name, s.code AS subject_code
+        FROM subject_streaks ss
+        JOIN subjects s ON ss.subject_id = s.id
+        WHERE ss.user_id = $1 AND ss.subject_id = $2 AND ss.school_id = $3
+        FOR UPDATE
+      `;
+      const { rows } = await client.query(query, [userId, subjectId, schoolId]);
+      return rows[0];
+    }
+
     await client.query(`
       INSERT INTO subject_streaks (user_id, subject_id, current_streak, longest_streak, recovery_used)
       VALUES ($1, $2, 0, 0, 0)
@@ -400,49 +611,55 @@ const LearningRepository = {
     return rows[0];
   },
 
-
-  /**
- * Kiểm tra user đã có activity của môn trong ngày chưa
- * Dùng để đảm bảo streak chỉ tăng 1 lần / subject / day
- */
-
-  async hasActivityToday(userId, subjectId, activityDate, client = null) {
+  async hasActivityToday(userId, subjectId, activityDate, schoolId, client = null) {
     const q = client || pool;
+    const where = [
+      'user_id = $1',
+      'subject_id = $2',
+      'activity_date = $3',
+    ];
+    const params = [userId, subjectId, activityDate];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`school_id = $4`);
+    }
 
     const query = `
-    SELECT 1
-    FROM subject_streak_activities
-    WHERE user_id = $1
-      AND subject_id = $2
-      AND activity_date = $3
-    LIMIT 1
-  `;
-
-    const { rows } = await q.query(query, [
-      userId,
-      subjectId,
-      activityDate,
-    ]);
-
+      SELECT 1
+      FROM subject_streak_activities
+      WHERE ${where.join(' AND ')}
+      LIMIT 1
+    `;
+    const { rows } = await q.query(query, params);
     return rows.length > 0;
   },
 
-  /**
- * Thêm bản ghi activity (idempotent nhờ UNIQUE constraint)
- */
-
-  async insertActivity(userId, subjectId, deckId, activityDate, activityType, client) {
+  async insertActivity(userId, subjectId, deckId, activityDate, activityType, schoolId, client) {
     const q = client || pool;
+    if (schoolId) {
+      const query = `
+        INSERT INTO subject_streak_activities
+          (user_id, subject_id, flashcard_deck_id, activity_date, activity_type, school_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (school_id, user_id, subject_id, activity_date) DO NOTHING
+        RETURNING *
+      `;
+      const { rows } = await q.query(query, [
+        userId,
+        subjectId,
+        deckId || null,
+        activityDate,
+        activityType || 'flashcard_deck_completed',
+        schoolId,
+      ]);
+      return rows[0] || null;
+    }
+
     const query = `
       INSERT INTO subject_streak_activities
         (user_id, subject_id, flashcard_deck_id, activity_date, activity_type)
       VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (
-    user_id,
-    subject_id,
-    flashcard_deck_id,
-    activity_date
-) DO NOTHING
+      ON CONFLICT (user_id, subject_id, flashcard_deck_id, activity_date) DO NOTHING
       RETURNING *
     `;
     const { rows } = await q.query(query, [
@@ -455,10 +672,7 @@ const LearningRepository = {
     return rows[0] || null;
   },
 
-  /**
-   * Cập nhật bản ghi subject_streaks
-   */
-  async updateStreak(userId, subjectId, data, client = null) {
+  async updateStreak(userId, subjectId, data, schoolId, client = null) {
     const q = client || pool;
     const fields = [];
     const values = [];
@@ -485,27 +699,37 @@ const LearningRepository = {
 
     fields.push(`updated_at = NOW()`);
     values.push(userId, subjectId);
+    const uIdx = idx++;
+    const sIdx = idx++;
+
+    let whereClause = `WHERE user_id = $${uIdx} AND subject_id = $${sIdx}`;
+    if (schoolId) {
+      values.push(schoolId);
+      whereClause += ` AND school_id = $${idx++}`;
+    }
 
     const query = `
       UPDATE subject_streaks
       SET ${fields.join(', ')}
-      WHERE user_id = $${idx++} AND subject_id = $${idx++}
+      ${whereClause}
       RETURNING *
     `;
     const { rows } = await q.query(query, values);
     return rows[0];
   },
 
-  /**
-   * Lấy lịch sử hoạt động học tập có phân trang
-   */
-  async findActivities(userId, { page = 1, limit = 20, subjectId = null } = {}) {
+  async findActivities(userId, { page = 1, limit = 20, subjectId = null, schoolId = null } = {}) {
     page = Number(page) || 1;
     limit = Number(limit) || 20;
     const offset = (page - 1) * limit;
 
     const params = [userId];
     const where = [`ssa.user_id = $1`];
+
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ssa.school_id = $${params.length}`);
+    }
 
     if (subjectId) {
       params.push(subjectId);
@@ -531,6 +755,7 @@ const LearningRepository = {
         TO_CHAR(ssa.activity_date, 'YYYY-MM-DD') AS activity_date,
         ssa.activity_type,
         ssa.created_at,
+        ssa.school_id,
         s.name AS subject_name,
         s.code AS subject_code,
         fd.title AS deck_title,
@@ -546,6 +771,7 @@ const LearningRepository = {
         WHERE ft.user_id = ssa.user_id
           AND ft.deck_id = ssa.flashcard_deck_id
           AND ft.status = 'submitted'
+          ${schoolId ? `AND ft.school_id = '${schoolId}'` : ''}
         ORDER BY ft.submitted_at DESC NULLS LAST
         LIMIT 1
       ) latest_test ON true
@@ -557,15 +783,17 @@ const LearningRepository = {
     return { data: rows, total, page, limit };
   },
 
-  /**
-   * Lấy dữ liệu heatmap tổng hợp theo ngày
-   */
-  async findHeatmap(userId, { subjectId = null, startDate = null, endDate = null, year = null } = {}) {
+  async findHeatmap(userId, { subjectId = null, startDate = null, endDate = null, year = null, schoolId = null } = {}) {
     const params = [userId];
     const where = [
       `ssa.user_id = $1`,
-      `ssa.activity_type = 'flashcard_deck_completed'`,
+      `ssa.activity_type IN ('flashcard_deck_completed', 'flashcard_test_passed')`,
     ];
+
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`ssa.school_id = $${params.length}`);
+    }
 
     if (subjectId) {
       params.push(subjectId);
@@ -606,41 +834,54 @@ const LearningRepository = {
     return rows;
   },
 
-  /**
-   * Kiểm tra thông tin flashcard deck (để lấy subject_id và check access)
-   */
-  async findDeckById(deckId) {
+  async findDeckById(deckId, schoolId) {
+    const where = ['fd.id = $1'];
+    const params = [deckId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`fd.school_id = $2`);
+    }
+
     const query = `
       SELECT fd.*, s.name AS subject_name, s.code AS subject_code
       FROM flashcard_decks fd
       JOIN subjects s ON fd.subject_id = s.id
-      WHERE fd.id = $1
+      WHERE ${where.join(' AND ')}
     `;
-    const { rows } = await pool.query(query, [deckId]);
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 
-  /**
-   * Kiểm tra subject tồn tại
-   */
-  async findSubjectById(subjectId) {
-    const query = `SELECT id, name, code FROM subjects WHERE id = $1 AND is_active = true`;
-    const { rows } = await pool.query(query, [subjectId]);
+  async findSubjectById(subjectId, schoolId) {
+    const where = ['id = $1', 'is_active = true'];
+    const params = [subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`school_id = $2`);
+    }
+    const query = `SELECT id, name, code FROM subjects WHERE ${where.join(' AND ')}`;
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 
-  /**
-   * Kiểm tra student có trong class_members không
-   */
-  async isUserInClass(classId, userId) {
-    const query = `
-      SELECT 1 FROM class_members
-      WHERE class_id = $1 AND student_id = $2 AND status = 'active'
-    `;
-    const { rows } = await pool.query(query, [classId, userId]);
+  async isUserInClass(classId, userId, schoolId) {
+    const where = [
+      'cm.class_id = $1',
+      'cm.student_id = $2',
+      `cm.status = 'active'`,
+    ];
+    const params = [classId, userId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`c.school_id = $3`);
+    }
+
+    const query = schoolId
+      ? `SELECT 1 FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE ${where.join(' AND ')}`
+      : `SELECT 1 FROM class_members cm WHERE ${where.join(' AND ')}`;
+    const { rows } = await pool.query(query, params);
     return rows.length > 0;
   },
 };
 
 module.exports = LearningRepository;
-

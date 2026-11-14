@@ -11,13 +11,13 @@ function sendError(error, res, next) {
 }
 
 module.exports = {
-  list: async (req, res, next) => { try { res.json({ success: true, data: await TopicsService.list(req.query.subjectId, req.user) }); } catch (e) { sendError(e, res, next); } },
+  list: async (req, res, next) => { try { res.json({ success: true, data: await TopicsService.list(req.query.subjectId, req.user, req.tenant?.schoolId || null) }); } catch (e) { sendError(e, res, next); } },
 
-  create: async (req, res, next) => { try { res.status(201).json({ success: true, data: await TopicsService.create(req.body, req.user) }); } catch (e) { sendError(e, res, next); } },
+  create: async (req, res, next) => { try { res.status(201).json({ success: true, data: await TopicsService.create(req.body, req.user, req.tenant?.schoolId || null) }); } catch (e) { sendError(e, res, next); } },
 
-  update: async (req, res, next) => { try { res.json({ success: true, data: await TopicsService.update(req.params.topicId, req.body, req.user) }); } catch (e) { sendError(e, res, next); } },
+  update: async (req, res, next) => { try { res.json({ success: true, data: await TopicsService.update(req.params.topicId, req.body, req.user, req.tenant?.schoolId || null) }); } catch (e) { sendError(e, res, next); } },
 
-  mapFlashcard: async (req, res, next) => { try { res.status(201).json({ success: true, data: await TopicsService.mapFlashcard(req.params.topicId, req.params.flashcardId, req.body.reviewStatus, req.user) }); } catch (e) { sendError(e, res, next); } },
+  mapFlashcard: async (req, res, next) => { try { res.status(201).json({ success: true, data: await TopicsService.mapFlashcard(req.params.topicId, req.params.flashcardId, req.body.reviewStatus, req.user, req.tenant?.schoolId || null) }); } catch (e) { sendError(e, res, next); } },
 
   reviewClassification: async (req, res, next) => {
     try {

@@ -3,9 +3,10 @@ const router = express.Router();
 
 const ctrl = require('./flashcardsTest.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
 
-// Tất cả endpoints yêu cầu authenticated user
-router.use(authenticate);
+// Tất cả endpoints yêu cầu authenticated user và school context
+router.use(authenticate, requireSchoolContext);
 
 // POST /api/flashcards/decks/:deckId/tests — Tạo bài kiểm tra mới cho deck
 router.post('/decks/:deckId/tests', ctrl.createTest);

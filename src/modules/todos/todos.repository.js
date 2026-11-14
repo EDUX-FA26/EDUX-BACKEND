@@ -45,56 +45,70 @@ const exec = (client) => client || pool;
 
 const TodosRepository = {
   async insert(client, d) {
+    // todos có school_id NOT NULL (FK to school_memberships)
     const { rows } = await exec(client).query(
       `INSERT INTO todos (
          user_id, title, description, status, priority, due_date, completed_at,
-         source_type, subject_id, topic_id, flashcard_deck_id, study_plan_day_id, dedupe_key
+         source_type, subject_id, topic_id, flashcard_deck_id, study_plan_day_id, dedupe_key,
+         school_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING id`,
       [
         d.userId, d.title, d.description || '', d.status, d.priority, d.dueDate || null,
         d.status === 'COMPLETED' ? new Date() : null,
         d.sourceType, d.subjectId || null, d.topicId || null,
         d.flashcardDeckId || null, d.studyPlanDayId || null, d.dedupeKey || null,
+        d.schoolId || null,
       ]
     );
     return rows[0].id;
   },
 
-  async findViewById(userId, id) {
-    const { rows } = await pool.query(`${SELECT_TODO} WHERE t.id = $1 AND t.user_id = $2`, [id, userId]);
+  async findViewById(userId, id, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND t.school_id = $3` : '';
+    const params = schoolId ? [id, userId, schoolId] : [id, userId];
+    const { rows } = await pool.query(
+      `${SELECT_TODO} WHERE t.id = $1 AND t.user_id = $2${schoolFilter}`,
+      params
+    );
     return rows[0] || null;
   },
 
-  async findRawById(client, userId, id) {
+  async findRawById(client, userId, id, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND school_id = $3` : '';
+    const params = schoolId ? [id, userId, schoolId] : [id, userId];
     const { rows } = await exec(client).query(
-      `SELECT * FROM todos WHERE id = $1 AND user_id = $2 ${client ? 'FOR UPDATE' : ''}`,
-      [id, userId]
+      `SELECT * FROM todos WHERE id = $1 AND user_id = $2${schoolFilter}${client ? ' FOR UPDATE' : ''}`,
+      params
     );
     return rows[0] || null;
   },
 
-  async findOpenByDedupeKey(userId, key) {
+  async findOpenByDedupeKey(userId, key, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND school_id = $3` : '';
+    const params = schoolId ? [userId, key, schoolId] : [userId, key];
     const { rows } = await pool.query(
       `SELECT id FROM todos
-       WHERE user_id = $1 AND dedupe_key = $2 AND status <> 'COMPLETED'`,
-      [userId, key]
+       WHERE user_id = $1 AND dedupe_key = $2 AND status <> 'COMPLETED'${schoolFilter}`,
+      params
     );
     return rows[0] || null;
   },
 
-  async findPlannerTodoByDay(userId, planDayId) {
+  async findPlannerTodoByDay(userId, planDayId, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND school_id = $3` : '';
+    const params = schoolId ? [userId, planDayId, schoolId] : [userId, planDayId];
     const { rows } = await pool.query(
       `SELECT id FROM todos
-       WHERE user_id = $1 AND study_plan_day_id = $2 AND source_type = 'STUDY_PLANNER'
+       WHERE user_id = $1 AND study_plan_day_id = $2 AND source_type = 'STUDY_PLANNER'${schoolFilter}
        ORDER BY created_at DESC LIMIT 1`,
-      [userId, planDayId]
+      params
     );
     return rows[0] || null;
   },
 
-  async update(client, userId, id, patch) {
+  async update(client, userId, id, patch, schoolId = null) {
     const sets = [];
     const params = [id, userId];
 
@@ -106,15 +120,23 @@ const TodosRepository = {
     }
     if (!sets.length) return;
 
+    const schoolFilter = schoolId ? ` AND school_id = $${params.length + 1}` : '';
+    if (schoolId) params.push(schoolId);
+
     await exec(client).query(
       `UPDATE todos SET ${sets.join(', ')}, updated_at = NOW()
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = $1 AND user_id = $2${schoolFilter}`,
       params
     );
   },
 
-  async delete(userId, id) {
-    const { rowCount } = await pool.query(`DELETE FROM todos WHERE id = $1 AND user_id = $2`, [id, userId]);
+  async delete(userId, id, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND school_id = $3` : '';
+    const params = schoolId ? [id, userId, schoolId] : [id, userId];
+    const { rowCount } = await pool.query(
+      `DELETE FROM todos WHERE id = $1 AND user_id = $2${schoolFilter}`,
+      params
+    );
     return rowCount > 0;
   },
 
@@ -125,6 +147,9 @@ const TodosRepository = {
       params.push(value);
       where.push(sql.replace('?', `$${params.length}`));
     };
+
+    // School scope
+    if (f.schoolId) add('t.school_id = ?', f.schoolId);
 
     if (f.status) add('t.status = ANY(?::text[])', f.status);
     if (f.priority) add('t.priority = ANY(?::text[])', f.priority);
@@ -169,7 +194,9 @@ const TodosRepository = {
     };
   },
 
-  async stats(userId) {
+  async stats(userId, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND school_id = $2` : '';
+    const params = schoolId ? [userId, schoolId] : [userId];
     const { rows } = await pool.query(
       `SELECT
          COUNT(*)::int AS total,
@@ -184,8 +211,8 @@ const TodosRepository = {
          COUNT(*) FILTER (WHERE status <> 'COMPLETED' AND priority = 'LOW')::int AS open_low,
          COUNT(*) FILTER (WHERE status <> 'COMPLETED' AND due_date < ${TODAY})::int AS overdue,
          COUNT(*) FILTER (WHERE status <> 'COMPLETED' AND due_date = ${TODAY})::int AS due_today
-       FROM todos WHERE user_id = $1`,
-      [userId]
+       FROM todos WHERE user_id = $1${schoolFilter}`,
+      params
     );
     const r = rows[0];
     return {
@@ -200,19 +227,24 @@ const TodosRepository = {
   },
 
   // ── Tham chiếu hợp lệ ────────────────────────────────
-  async findTopic(topicId) {
+  async findTopic(topicId, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND school_id = $2` : '';
+    const params = schoolId ? [topicId, schoolId] : [topicId];
     const { rows } = await pool.query(
-      `SELECT id, subject_id, is_active FROM topics WHERE id = $1`,
-      [topicId]
+      `SELECT id, subject_id, is_active FROM topics WHERE id = $1${schoolFilter}`,
+      params
     );
     return rows[0] || null;
   },
 
-  async findDeckAccessible(userId, deckId) {
+  async findDeckAccessible(userId, deckId, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND fd.school_id = $3` : '';
+    const params = schoolId ? [deckId, userId, schoolId] : [deckId, userId];
     const { rows } = await pool.query(
       `SELECT fd.id, fd.subject_id
        FROM flashcard_decks fd
        WHERE fd.id = $1 AND fd.is_active = true
+         ${schoolFilter}
          AND (
            fd.is_public = true
            OR fd.created_by = $2
@@ -220,13 +252,15 @@ const TodosRepository = {
              SELECT class_id FROM class_members WHERE student_id = $2 AND status = 'active'
            )
          )`,
-      [deckId, userId]
+      params
     );
     return rows[0] || null;
   },
 
   /** Ngày học của chính sinh viên này (kèm môn / chủ đề) — tham chiếu, không sao chép. */
-  async findPlanDayForUser(userId, planDayId) {
+  async findPlanDayForUser(userId, planDayId, schoolId = null) {
+    const schoolFilter = schoolId ? ` AND sp.school_id = $3` : '';
+    const params = schoolId ? [planDayId, userId, schoolId] : [planDayId, userId];
     const { rows } = await pool.query(
       `SELECT spd.id, spd.day_number, spd.topic_id, spd.activity, spd.duration_minutes,
               spd.target_questions, spd.reason,
@@ -235,19 +269,24 @@ const TodosRepository = {
        FROM study_plan_days spd
        JOIN study_plans sp ON sp.id = spd.plan_id
        JOIN topics tp ON tp.id = spd.topic_id
-       WHERE spd.id = $1 AND sp.student_id = $2`,
-      [planDayId, userId]
+       WHERE spd.id = $1 AND sp.student_id = $2${schoolFilter}`,
+      params
     );
     return rows[0] || null;
   },
 
   /** Các ngày học CHƯA nộp bài trong kế hoạch gần nhất, kèm Todo đã tạo (nếu có). */
-  async listPlanSuggestions(userId, subjectId) {
+  async listPlanSuggestions(userId, subjectId, schoolId = null) {
     const params = [userId];
     let subjectSql = '';
     if (subjectId) {
       params.push(subjectId);
       subjectSql = `AND sp.subject_id = $${params.length}`;
+    }
+    let schoolSql = '';
+    if (schoolId) {
+      params.push(schoolId);
+      schoolSql = `AND sp.school_id = $${params.length}`;
     }
 
     const { rows } = await pool.query(
@@ -272,6 +311,7 @@ const TodosRepository = {
            WHERE s.plan_day_id = spd.id AND s.student_id = sp.student_id
          )
          ${subjectSql}
+         ${schoolSql}
        ORDER BY study_date ASC, sj.name ASC
        LIMIT 30`,
       params
@@ -281,4 +321,3 @@ const TodosRepository = {
 };
 
 module.exports = TodosRepository;
-
