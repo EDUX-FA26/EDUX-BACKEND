@@ -256,7 +256,17 @@ const ClassesRepository = {
     return rows;
   },
 
-  async getSlotById(slotId) {
+  async getSlotById(slotId, schoolId) {
+    let whereCondition = 'WHERE s.id = $1';
+    let assignmentSchoolCheck = '';
+    const params = [slotId];
+
+    if (schoolId) {
+      whereCondition += ' AND s.school_id = $2';
+      assignmentSchoolCheck = 'AND a.school_id = s.school_id';
+      params.push(schoolId);
+    }
+
     const query = `
       SELECT 
         s.id, 
@@ -282,13 +292,14 @@ const ClassesRepository = {
             )
             FROM assignments a
             WHERE (a.slot_id = s.id OR a.session_id = s.id)
+              ${assignmentSchoolCheck}
           ),
           '[]'::json
         ) as assignments
       FROM sessions s
-      WHERE s.id = $1 
+      ${whereCondition}
     `;
-    const { rows } = await pool.query(query, [slotId]);
+    const { rows } = await pool.query(query, params);
     return rows[0] || null;
   },
 

@@ -137,7 +137,7 @@ const AssignmentService = {
         const assignment = await AssignmentRepository.create(assignmentData, client);
 
         // Lưu cấu hình rubric vào assignment_rubric_configs trong cùng transaction
-        const savedRubrics = await AssignmentRepository.saveRubricConfigs(assignmentId, validatedRubrics, client);
+        const savedRubrics = await AssignmentRepository.saveRubricConfigs(assignmentId, validatedRubrics, client, tenant.schoolId);
 
         // Insert materials
         const materials = [];
@@ -222,11 +222,11 @@ const AssignmentService = {
     const updatePayload = { ...data };
     delete updatePayload.rubric_configs;
 
-    const updated = await AssignmentRepository.update(id, updatePayload);
+    const updated = await AssignmentRepository.update(id, actualTenant.schoolId, updatePayload);
 
     let savedRubrics = null;
     if (validatedRubrics) {
-      savedRubrics = await AssignmentRepository.saveRubricConfigs(id, validatedRubrics);
+      savedRubrics = await AssignmentRepository.saveRubricConfigs(id, validatedRubrics, undefined, actualTenant.schoolId);
     }
 
     return { ...updated, rubric_configs: savedRubrics };
@@ -248,8 +248,8 @@ const AssignmentService = {
   /**
    * Xóa bài tập
    */
-  async deleteAssignment(id, user, options = {}) {
-    const assignment = await AssignmentRepository.findById(id);
+  async deleteAssignment(id, tenant, options = {}) {
+    const assignment = await AssignmentRepository.findById(id, tenant.schoolId);
     if (!assignment) throw new Error('ASSIGNMENT_NOT_FOUND');
 
     await this.verifyClassAccess(assignment.class_id, tenant);
@@ -259,8 +259,8 @@ const AssignmentService = {
     
     // Kiểm tra số lượng bài nộp (Submissions Guard)
     const { rows: subRows } = await pool.query(
-      'SELECT COUNT(*)::int AS count FROM submissions WHERE assignment_id = $1',
-      [id]
+      'SELECT COUNT(*)::int AS count FROM submissions WHERE assignment_id = $1 AND school_id = $2',
+      [id, tenant.schoolId]
     );
     const submissionCount = subRows[0]?.count || 0;
 
@@ -272,7 +272,7 @@ const AssignmentService = {
     }
 
     // Xóa an toàn trong DB transaction
-    const deleted = await AssignmentRepository.deleteAssignmentWithRelations(id, { force: options.force });
+    const deleted = await AssignmentRepository.deleteAssignmentWithRelations(id, tenant.schoolId, { force: options.force });
 
     // Delete files from S3 after DB delete succeeds
     if (materials && materials.length > 0) {
@@ -319,7 +319,7 @@ const AssignmentService = {
 
     // Visibility Control theo Role:
     let finalRubricConfigs;
-    if (user.role === 'student') {
+    if (tenant.role === 'student') {
       // Sinh viên: Chỉ lọc các tiêu chí đang bật (is_enabled === true) và LOẠI BỎ HOÀN TOÀN weight_percent
       finalRubricConfigs = rawRubricConfigs
         .filter(c => c.is_enabled !== false)

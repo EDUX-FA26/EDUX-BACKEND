@@ -86,6 +86,20 @@ router.post(
   SubmissionController.sanityCheck
 );
 
+// 1e. Bổ sung khai báo AI sau khi giảng viên bật AI Audit Log (chỉ cho student)
+router.patch(
+  '/:assignmentId/supplement-declarations',
+  authorizeSchoolRoles('student'),
+  validate(saveDraftDeclarationsSchema),
+  SubmissionController.supplementAiDeclarations
+);
+router.post(
+  '/:assignmentId/supplement-declarations',
+  authorizeSchoolRoles('student'),
+  validate(saveDraftDeclarationsSchema),
+  SubmissionController.supplementAiDeclarations
+);
+
 // 2. Nộp bài chính thức (Submit Final - chỉ cho student)
 router.post(
   '/:assignmentId/submit-final',

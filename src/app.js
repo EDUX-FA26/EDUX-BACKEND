@@ -62,9 +62,15 @@ app.use(express.urlencoded({ extended: true }));
 // =========================
 
 const { authenticate } = require("./middlewares/auth.middleware");
+const { requireSchoolContext } = require("./middlewares/requireSchoolContext");
+const { authorizeSchoolRoles } = require("./middlewares/authorizeSchoolRoles");
 const classesController = require("./modules/classes/classes.controller");
 const slotsRouter = express.Router();
-slotsRouter.use(authenticate);
+slotsRouter.use(
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles("school_admin", "lecturer", "student")
+);
 slotsRouter.get("/:slotId", classesController.getSlotById);
 
 // API routes

@@ -25,7 +25,7 @@ const ClassAiAdvisorController = {
         });
       }
 
-      const result = await ClassAiAdvisorService.getAiAdvisor(classId, req.user);
+      const result = await ClassAiAdvisorService.getAiAdvisor(classId, req.tenant);
       return res.status(200).json({
         success: true,
         has_data: result?.has_data ?? false,
@@ -74,7 +74,7 @@ const ClassAiAdvisorController = {
         });
       }
 
-      const result = await ClassAiAdvisorService.refreshAiAdvisor(classId, req.user);
+      const result = await ClassAiAdvisorService.refreshAiAdvisor(classId, req.tenant);
       return res.status(200).json({
         success: true,
         message: 'Làm mới phân tích AI thành công',
