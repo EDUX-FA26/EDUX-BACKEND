@@ -24,6 +24,18 @@ const postSelect = `
 `;
 
 const ForumRepository = {
+  async listAvailableSchools(userId, role) {
+    if (role === 'admin') {
+      const { rows } = await pool.query(`SELECT id, code, name, slug FROM schools WHERE status = 'active' ORDER BY name`);
+      return rows;
+    }
+    const { rows } = await pool.query(`
+      SELECT DISTINCT s.id, s.code, s.name, s.slug
+      FROM schools s JOIN school_memberships sm ON sm.school_id = s.id
+      WHERE sm.user_id = $1 AND sm.status = 'active' AND s.status = 'active'
+      ORDER BY s.name`, [userId]);
+    return rows;
+  },
   async findUserSchoolId(userId) {
     const { rows } = await pool.query(`
       SELECT school_id FROM school_memberships

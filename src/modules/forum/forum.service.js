@@ -3,10 +3,12 @@ const NotificationsRepository = require('../notifications/notifications.reposito
 const FlashcardsService = require('../flashcards/flashcards.service');
 
 const ForumService = {
+  schools(user) { return Repo.listAvailableSchools(user.id, user.role); },
   stats(user) { return Repo.getUserStats(user.id); },
   async list(user, query) {
     const schoolId = await Repo.findUserSchoolId(user.id);
-    return Repo.listPosts({ userId: user.id, role: user.role, schoolId, ...query });
+    const selectedSchoolId = user.role === 'admin' && query.schoolId ? query.schoolId : schoolId;
+    return Repo.listPosts({ ...query, userId: user.id, role: user.role, schoolId: selectedSchoolId });
   },
   async get(user, id) {
     const schoolId = await Repo.findUserSchoolId(user.id);
