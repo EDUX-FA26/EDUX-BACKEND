@@ -91,8 +91,9 @@ const ForumRepository = {
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(50, Math.max(1, Number(limit) || 10));
     const offset = (safePage - 1) * safeLimit;
-    const params = [userId, role, schoolId || null];
-    const conditions = [`($2 = 'admin' OR ($3 IS NOT NULL AND fp.school_id = $3))`, `(fp.visibility = 'PUBLIC' OR $2 = 'admin' OR EXISTS (
+    const scopedSchoolId = schoolId || '00000000-0000-0000-0000-000000000000';
+    const params = [userId, role, scopedSchoolId];
+    const conditions = [`($2 = 'admin' OR fp.school_id = $3::uuid)`, `(fp.visibility = 'PUBLIC' OR $2 = 'admin' OR EXISTS (
       SELECT 1 FROM forum_post_classes access_fpc
       LEFT JOIN class_members access_cm ON access_cm.class_id = access_fpc.class_id AND access_cm.student_id = $1 AND access_cm.status = 'active'
       LEFT JOIN classes access_c ON access_c.id = access_fpc.class_id
@@ -127,7 +128,8 @@ const ForumRepository = {
 
   async findPostById(id, userId, role, schoolId) {
     await pool.query('UPDATE forum_posts SET view_count = view_count + 1, updated_at = updated_at WHERE id = $1', [id]);
-    const result = await pool.query(`${postSelect} WHERE fp.id = $2 AND ($3 = 'admin' OR ($4 IS NOT NULL AND fp.school_id = $4)) AND (fp.visibility = 'PUBLIC' OR $3 = 'admin' OR EXISTS (SELECT 1 FROM forum_post_classes fpc_access LEFT JOIN class_members cm_access ON cm_access.class_id = fpc_access.class_id AND cm_access.student_id = $1 AND cm_access.status = 'active' LEFT JOIN classes c_access ON c_access.id = fpc_access.class_id WHERE fpc_access.post_id = fp.id AND (cm_access.student_id IS NOT NULL OR c_access.lecturer_id = $1))) GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title`, [userId, id, role, schoolId || null]);
+    const scopedSchoolId = schoolId || '00000000-0000-0000-0000-000000000000';
+    const result = await pool.query(`${postSelect} WHERE fp.id = $2 AND ($3 = 'admin' OR fp.school_id = $4::uuid) AND (fp.visibility = 'PUBLIC' OR $3 = 'admin' OR EXISTS (SELECT 1 FROM forum_post_classes fpc_access LEFT JOIN class_members cm_access ON cm_access.class_id = fpc_access.class_id AND cm_access.student_id = $1 AND cm_access.status = 'active' LEFT JOIN classes c_access ON c_access.id = fpc_access.class_id WHERE fpc_access.post_id = fp.id AND (cm_access.student_id IS NOT NULL OR c_access.lecturer_id = $1))) GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title`, [userId, id, role, scopedSchoolId]);
     if (!result.rows[0]) return null;
     const comments = await pool.query(`
       SELECT fc.id, fc.parent_id, fc.content, fc.attachments, fc.created_at, fc.updated_at,
