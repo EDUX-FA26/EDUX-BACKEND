@@ -11,11 +11,11 @@ const AssignmentRepository = {
 
     const query = `
       INSERT INTO assignments (
-        id, uuid, class_id, slot_id, session_id, title, description, instructions, deadline,
+        id, uuid, school_id, class_id, slot_id, session_id, title, description, instructions, deadline,
         max_score, weight, ai_declaration_required, min_ai_interactions,
         max_ai_interactions, allow_late_submission, publish_status, published_at, created_by
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
       ) RETURNING *;
     `;
     const values = [
@@ -155,7 +155,7 @@ const AssignmentRepository = {
   /**
    * Lấy danh sách phân trang (có filter theo class, role, trạng thái, slot_id)
    */
-  async findMany({ page = 1, limit = 10, search, class_id, slot_id, session_id, publish_status }, user) {
+  async findMany({ page = 1, limit = 10, search, class_id, slot_id, session_id, publish_status }, tenant) {
     const offset = (page - 1) * limit;
     let whereClauses = [`a.school_id = $1`];
     let values = [tenant.schoolId];
@@ -260,13 +260,16 @@ const AssignmentRepository = {
   /**
    * Xóa assignment và các quan hệ phụ thuộc an toàn trong Transaction
    */
-  async deleteAssignmentWithRelations(id, { force = false } = {}) {
+  async deleteAssignmentWithRelations(id, schoolId, { force = false } = {}) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // 1. Kiểm tra / lấy danh sách bài nộp
-      const { rows: subs } = await client.query('SELECT id FROM submissions WHERE assignment_id = $1', [id]);
+      // 1. Kiểm tra / lấy danh sách bài nộp theo đúng trường
+      const { rows: subs } = await client.query(
+        'SELECT id FROM submissions WHERE assignment_id = $1 AND school_id = $2',
+        [id, schoolId]
+      );
       const subIds = subs.map(s => s.id);
 
       if (subIds.length > 0) {
@@ -283,7 +286,7 @@ const AssignmentRepository = {
         await client.query('DELETE FROM submission_versions WHERE submission_id = ANY($1)', [subIds]);
         await client.query('DELETE FROM ai_evaluations WHERE submission_id = ANY($1)', [subIds]);
         await client.query('DELETE FROM ai_interactions WHERE submission_id = ANY($1)', [subIds]);
-        await client.query('DELETE FROM submissions WHERE assignment_id = $1', [id]);
+        await client.query('DELETE FROM submissions WHERE assignment_id = $1 AND school_id = $2', [id, schoolId]);
       }
 
       // 2. Xóa các quan hệ trực tiếp của assignment
@@ -291,10 +294,13 @@ const AssignmentRepository = {
       await client.query('DELETE FROM ai_interactions WHERE assignment_id = $1', [id]);
       await client.query('DELETE FROM class_ai_advisories WHERE assignment_id = $1', [id]);
       await client.query('DELETE FROM assignment_rubric_configs WHERE assignment_id = $1', [id]);
-      await client.query('DELETE FROM assignment_materials WHERE assignment_id = $1', [id]);
+      await client.query('DELETE FROM assignment_materials WHERE assignment_id = $1 AND school_id = $2', [id, schoolId]);
 
-      // 3. Xóa chính assignment
-      const { rows } = await client.query('DELETE FROM assignments WHERE id = $1 RETURNING *', [id]);
+      // 3. Xóa chính assignment với khóa trường
+      const { rows } = await client.query(
+        'DELETE FROM assignments WHERE id = $1 AND school_id = $2 RETURNING *',
+        [id, schoolId]
+      );
 
       await client.query('COMMIT');
       return rows[0];
@@ -324,7 +330,7 @@ const AssignmentRepository = {
   /**
    * Lưu hoặc cập nhật danh sách cấu hình Rubric
    */
-  async saveRubricConfigs(assignmentId, configs, client = pool) {
+  async saveRubricConfigs(assignmentId, configs, client = pool, schoolId = null) {
     await client.query('DELETE FROM assignment_rubric_configs WHERE assignment_id = $1', [assignmentId]);
     if (!configs || configs.length === 0) return [];
     
@@ -333,11 +339,12 @@ const AssignmentRepository = {
       const item = configs[i];
       const query = `
         INSERT INTO assignment_rubric_configs (
-          assignment_id, criterion_key, criterion_name, is_enabled, weight_percent, display_order
-        ) VALUES ($1, $2, $3, $4, $5, $6)
+          school_id, assignment_id, criterion_key, criterion_name, is_enabled, weight_percent, display_order
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *;
       `;
       const values = [
+        schoolId || item.school_id || null,
         assignmentId,
         item.criterion_key,
         item.criterion_name,

@@ -183,10 +183,14 @@ const GradingService = {
     // 8. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
     try {
       const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
-      ClassAiAdvisorService.generateAndSaveAdvisory(submission.class_id, {
-        id: submission.assignment_id,
-        title: submission.assignment_title || 'Bài tập'
-      }).catch(e => console.warn('[createGrade] Background advisor snapshot generation failed:', e.message));
+      ClassAiAdvisorService.generateAndSaveAdvisory(
+        submission.class_id,
+        {
+          id: submission.assignment_id,
+          title: submission.assignment_title || 'Bài tập'
+        },
+        tenant.schoolId
+      ).catch(e => console.warn('[createGrade] Background advisor snapshot generation failed:', e.message));
     } catch (e) {}
 
     return grade;
@@ -221,10 +225,14 @@ const GradingService = {
     // Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
     try {
       const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
-      ClassAiAdvisorService.generateAndSaveAdvisory(grade.class_id, {
-        id: grade.assignment_id,
-        title: grade.assignment_title || 'Bài tập'
-      }).catch(e => console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message));
+      ClassAiAdvisorService.generateAndSaveAdvisory(
+        grade.class_id,
+        {
+          id: grade.assignment_id,
+          title: grade.assignment_title || 'Bài tập'
+        },
+        tenant.schoolId
+      ).catch(e => console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message));
     } catch (e) {}
 
     return updated;
