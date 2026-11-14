@@ -1,4 +1,3 @@
-
 "use strict";
 
 const { pool } = require("../config/db.config");
@@ -6,16 +5,15 @@ const { pool } = require("../config/db.config");
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Middleware verify user has active platform permission (Superadmin or Manager).
+ * Must be preceded by `authenticate` middleware.
+ */
 async function requirePlatformAdmin(req, res, next) {
   try {
-    // authenticate middleware must run first.
-
     const userId = req.user?.id;
 
-    if (
-      typeof userId !== "string" ||
-      !UUID_REGEX.test(userId)
-    ) {
+    if (typeof userId !== "string" || !UUID_REGEX.test(userId)) {
       return res.status(401).json({
         success: false,
         code: "UNAUTHENTICATED",
@@ -23,14 +21,11 @@ async function requirePlatformAdmin(req, res, next) {
       });
     }
 
-    // Never trust req.user.role === "admin".
-    // Platform permission comes only from DB.
-
     const { rows } = await pool.query(
       `
-      SELECT pa.user_id
+      SELECT pa.user_id, pa.role, pa.is_active
       FROM public.platform_admins pa
-      WHERE pa.user_id = $1
+      WHERE pa.user_id = $1 AND pa.is_active = TRUE
       LIMIT 1
       `,
       [userId]
@@ -46,16 +41,12 @@ async function requirePlatformAdmin(req, res, next) {
 
     req.platformAdmin = Object.freeze({
       userId: rows[0].user_id,
+      role: rows[0].role || "manager",
     });
 
     return next();
-
   } catch (error) {
-    console.error(
-      "[PlatformAdmin] Authorization failed:",
-      error
-    );
-
+    console.error("[PlatformAdmin] Authorization failed:", error);
     return res.status(500).json({
       success: false,
       code: "PLATFORM_AUTHORIZATION_ERROR",
@@ -64,6 +55,56 @@ async function requirePlatformAdmin(req, res, next) {
   }
 }
 
+/**
+ * Middleware requiring strictly 'superadmin' role.
+ */
+function requireSuperAdmin(req, res, next) {
+  if (!req.platformAdmin) {
+    return res.status(401).json({
+      success: false,
+      code: "UNAUTHENTICATED",
+      message: "Authentication required",
+    });
+  }
+
+  if (req.platformAdmin.role !== "superadmin") {
+    return res.status(403).json({
+      success: false,
+      code: "SUPERADMIN_ACCESS_REQUIRED",
+      message: "Superadmin privileges are required for this action",
+    });
+  }
+
+  return next();
+}
+
+/**
+ * Middleware requiring one of allowed platform roles (e.g. 'superadmin', 'manager').
+ */
+function requirePlatformRoles(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.platformAdmin) {
+      return res.status(401).json({
+        success: false,
+        code: "UNAUTHENTICATED",
+        message: "Authentication required",
+      });
+    }
+
+    if (!allowedRoles.includes(req.platformAdmin.role)) {
+      return res.status(403).json({
+        success: false,
+        code: "PLATFORM_FORBIDDEN",
+        message: `Requires one of roles: ${allowedRoles.join(", ")}`,
+      });
+    }
+
+    return next();
+  };
+}
+
 module.exports = {
   requirePlatformAdmin,
+  requireSuperAdmin,
+  requirePlatformRoles,
 };

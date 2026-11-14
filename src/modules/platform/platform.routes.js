@@ -9,7 +9,10 @@ const {
 
 const {
   requirePlatformAdmin,
+  requireSuperAdmin,
+  requirePlatformRoles,
 } = require("../../middlewares/requirePlatformAdmin");
+const platformController = require("./platform.controller");
 const { validate } = require("../../middlewares/validate.middleware");
 const {
   broadcastNotificationSchema,
@@ -52,19 +55,21 @@ function createPlatformRouter({ authenticate }) {
   // Verify Super Admin permissions
   // =========================================
 
-  router.get("/me", (req, res) => {
-    return res.status(200).json({
-      success: true,
+  router.get("/me", platformController.me);
 
-      platformAdmin: {
-        userId: req.platformAdmin.userId,
-        role: "platform_admin",
-      },
-    });
-  });
+  // Superadmin owns platform identities and commercial catalogue.
+  router.get("/managers", requireSuperAdmin, platformController.listManagers);
+  router.post("/managers", requireSuperAdmin, platformController.createManager);
+  router.patch("/managers/:userId/status", requireSuperAdmin, platformController.setManagerStatus);
+  router.get("/plans", requireSuperAdmin, platformController.listPlans);
+  router.post("/plans", requireSuperAdmin, platformController.createPlan);
+  router.patch("/plans/:planId", requireSuperAdmin, platformController.updatePlan);
+  router.get("/revenue", requireSuperAdmin, platformController.revenue);
+  router.get("/audit-logs", requireSuperAdmin, platformController.auditLogs);
 
   router.post(
     "/notifications/broadcast",
+    requireSuperAdmin,
     validate(broadcastNotificationSchema),
     async (req, res, next) => {
       try {
@@ -181,6 +186,20 @@ function createPlatformRouter({ authenticate }) {
       next(error);
     }
   });
+
+  // Both platform roles can operate tenant lifecycle and inspect commercial data.
+  // These routes deliberately never receive a school context, preventing them
+  // from being used as a backdoor to learning data.
+  router.get("/schools", requirePlatformRoles("superadmin", "manager"), platformController.listSchools);
+  router.post("/schools", requirePlatformRoles("superadmin", "manager"), platformController.createSchool);
+  router.post("/schools/:schoolId/invitations", requirePlatformRoles("superadmin", "manager"), platformController.inviteSchoolAdmin);
+  router.post("/schools/:schoolId/lock", requirePlatformRoles("superadmin", "manager"), platformController.changeSchoolStatus);
+  router.post("/schools/:schoolId/unlock", requirePlatformRoles("superadmin", "manager"), platformController.changeSchoolStatus);
+  router.post("/schools/:schoolId/suspend", requirePlatformRoles("superadmin", "manager"), platformController.changeSchoolStatus);
+  router.post("/schools/:schoolId/restore", requirePlatformRoles("superadmin", "manager"), platformController.changeSchoolStatus);
+  router.post("/schools/:schoolId/delete", requirePlatformRoles("superadmin", "manager"), platformController.changeSchoolStatus);
+  router.get("/subscriptions", requirePlatformRoles("superadmin", "manager"), platformController.listContracts);
+  router.get("/transactions", requirePlatformRoles("superadmin", "manager"), platformController.listTransactions);
 
   return router;
 }

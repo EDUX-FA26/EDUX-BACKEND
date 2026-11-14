@@ -179,6 +179,21 @@ class AuthRepository {
     return rows[0] || null;
   }
 
+  async findPlatformRole(userId) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT role FROM public.platform_admins WHERE user_id = $1 AND is_active = TRUE LIMIT 1`,
+        [userId]
+      );
+      return rows[0]?.role || null;
+    } catch (error) {
+      // The table is introduced by the SaaS migration. Legacy deployments
+      // must remain able to authenticate before the migration is applied.
+      if (error.code === "42P01") return null;
+      throw error;
+    }
+  }
+
 }
 
 module.exports = new AuthRepository();

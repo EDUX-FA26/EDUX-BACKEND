@@ -222,11 +222,15 @@ class AuthService {
     // =========================================
 
     const { password_hash, ...userInfo } = user;
+    const platformRole = await authRepository.findPlatformRole(user.id);
 
     return {
       accessToken,
       refreshToken,
-      user: userInfo,
+      user: {
+        ...userInfo,
+        platform_role: platformRole,
+      },
     };
   }
 
