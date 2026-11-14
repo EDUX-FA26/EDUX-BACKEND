@@ -42,7 +42,11 @@ router.get(
 // Danh sách bài nộp của 1 assignment (cho lecturer/admin/student)
 router.get(
   '/:assignmentId/submissions',
-  authorize('admin', 'lecturer', 'student'),
+  authorizeSchoolRoles(
+    'school_admin',
+    'lecturer',
+    'student'
+  ),
   validate(queryAssignmentSubmissionsSchema, 'query'),
   SubmissionController.getAssignmentSubmissions
 );
@@ -62,10 +66,13 @@ router.patch(
 );
 
 router.put(
-  '/:id', 
-  authorize('admin', 'lecturer'), 
+  '/:id',
+  authorizeSchoolRoles(
+    'school_admin',
+    'lecturer'
+  ),
   upload.array('materials'),
-  validate(updateAssignmentSchema), 
+  validate(updateAssignmentSchema),
   AssignmentController.updateAssignment
 );
 

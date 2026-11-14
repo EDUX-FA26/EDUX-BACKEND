@@ -35,9 +35,7 @@ const {
 const {
   createPlatformRouter,
 } = require("./modules/platform/platform.routes");
-const {
-  authenticate,
-} = require("./middlewares/auth.middleware");
+
 // =========================
 // Middleware
 // =========================

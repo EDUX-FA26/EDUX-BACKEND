@@ -191,7 +191,7 @@ const SubmissionRepository = {
       SELECT 
         s.*, 
         up.full_name as student_name,
-        up.student_code as student_code,
+        smp.student_code AS student_code,
         u.email as student_email,
         a.title as assignment_title,
         g.id as grade_id,
@@ -208,6 +208,9 @@ const SubmissionRepository = {
       FROM submissions s
       JOIN users u ON s.student_id = u.id
       LEFT JOIN user_profiles up ON u.id = up.user_id
+      LEFT JOIN school_member_profiles smp
+  ON smp.user_id = s.student_id
+ AND smp.school_id = s.school_id
       LEFT JOIN assignments a ON s.assignment_id = a.id AND a.school_id = s.school_id
       LEFT JOIN LATERAL (
         SELECT id, score, max_score, feedback, rubrics
@@ -231,16 +234,16 @@ const SubmissionRepository = {
 
     // Parse JSON fields if returned as string
     if (submission.rubrics && typeof submission.rubrics === 'string') {
-      try { submission.rubrics = JSON.parse(submission.rubrics); } catch (e) {}
+      try { submission.rubrics = JSON.parse(submission.rubrics); } catch (e) { }
     }
     if (submission.ai_evaluation_data && typeof submission.ai_evaluation_data === 'string') {
-      try { submission.ai_evaluation_data = JSON.parse(submission.ai_evaluation_data); } catch (e) {}
+      try { submission.ai_evaluation_data = JSON.parse(submission.ai_evaluation_data); } catch (e) { }
     }
     if (submission.ai_rubric_scores && typeof submission.ai_rubric_scores === 'string') {
-      try { submission.ai_rubric_scores = JSON.parse(submission.ai_rubric_scores); } catch (e) {}
+      try { submission.ai_rubric_scores = JSON.parse(submission.ai_rubric_scores); } catch (e) { }
     }
     if (submission.ai_viva_questions && typeof submission.ai_viva_questions === 'string') {
-      try { submission.ai_viva_questions = JSON.parse(submission.ai_viva_questions); } catch (e) {}
+      try { submission.ai_viva_questions = JSON.parse(submission.ai_viva_questions); } catch (e) { }
     }
 
     let versionQuery = `SELECT * FROM submission_versions WHERE submission_id = $1 AND school_id = $2`;
@@ -292,15 +295,23 @@ const SubmissionRepository = {
   /**
    * Cập nhật trạng thái bài nộp
    */
-  async updateStatus(id, schoolId, status, feedback) {
+  async updateStatus(id, schoolId, status) {
     const query = `
-      UPDATE submissions
-      SET status = $1, updated_at = NOW()
-      WHERE id = $2 AND school_id = $3
-      RETURNING *;
-    `;
-    const { rows } = await pool.query(query, [status, id, schoolId]);
-    return rows[0];
+    UPDATE submissions
+    SET status = $1,
+        updated_at = NOW()
+    WHERE id = $2
+      AND school_id = $3
+    RETURNING *
+  `;
+
+    const { rows } = await pool.query(query, [
+      status,
+      id,
+      schoolId
+    ]);
+
+    return rows[0] || null;
   },
 
   /**
@@ -333,7 +344,7 @@ const SubmissionRepository = {
         SELECT DISTINCT ON (s.student_id)
           s.*,
           up.full_name as student_name,
-          up.student_code as student_code,
+          smp.student_code AS student_code,
           u.email as student_email,
           sv.files as latest_files,
           sv.note as latest_note,
@@ -343,6 +354,9 @@ const SubmissionRepository = {
         FROM submissions s
         JOIN users u ON s.student_id = u.id
         LEFT JOIN user_profiles up ON u.id = up.user_id
+        LEFT JOIN school_member_profiles smp
+  ON smp.user_id = s.student_id
+ AND smp.school_id = s.school_id
         LEFT JOIN LATERAL (
           SELECT files, note 
           FROM submission_versions 
@@ -428,8 +442,18 @@ const SubmissionRepository = {
       LIMIT 1
     ) sv ON TRUE
 
-    LEFT JOIN grades g
-      ON g.submission_id = s.id AND g.school_id = s.school_id
+   LEFT JOIN LATERAL (
+  SELECT
+    g.score,
+    g.feedback
+  FROM grades g
+  WHERE g.submission_id = s.id
+    AND g.school_id = s.school_id
+  ORDER BY
+    g.created_at DESC,
+    g.id DESC
+  LIMIT 1
+) g ON TRUE
 
     WHERE ${whereClause}
 

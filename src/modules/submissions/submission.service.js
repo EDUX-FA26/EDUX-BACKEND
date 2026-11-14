@@ -17,7 +17,7 @@ const SubmissionService = {
     for (const file of uploadedFiles) {
       const fileId = uuidv4();
       const fileKey = `submissions/${assignmentId}/${userId}/${fileId}_${file.originalname}`;
-      
+
       try {
         await s3.send(
           new PutObjectCommand({
@@ -28,7 +28,14 @@ const SubmissionService = {
           })
         );
       } catch (uploadError) {
-        console.warn('⚠️ S3 Upload failed (SeaweedFS might be down). Continuing with DB insert for testing.', uploadError.message);
+        console.error(
+          '[SUBMISSION_UPLOAD_FAILED]',
+          uploadError
+        );
+
+        const error = new Error('SUBMISSION_FILE_UPLOAD_FAILED');
+        error.status = 503;
+        throw error;
       }
 
       filesMeta.push({
@@ -113,8 +120,7 @@ const SubmissionService = {
         result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
       } else {
         // Đã có submission
-        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
-        if (lockedStatuses.includes(existingSubmission.status)) {
+        if (existingSubmission.status !== 'draft') {
           throw new Error('SUBMISSION_LOCKED');
         }
 
@@ -355,7 +361,7 @@ const SubmissionService = {
 
     const files = typeof latestVersion.files === 'string' ? JSON.parse(latestVersion.files) : latestVersion.files;
     const fileIndex = files.findIndex(f => f.id === fileId);
-    
+
     if (fileIndex === -1) throw new Error('FILE_NOT_FOUND');
     const fileToDelete = files[fileIndex];
 
@@ -370,7 +376,7 @@ const SubmissionService = {
     // Cập nhật DB
     files.splice(fileIndex, 1);
     const updatedVersion = await SubmissionRepository.updateVersionFiles(latestVersion.id, tenant.schoolId, files);
-    
+
     return updatedVersion;
   },
 
@@ -388,7 +394,7 @@ const SubmissionService = {
       }
       return submission;
     }
-    
+
     // Giảng viên / School Admin: Tuyệt đối không nhìn thấy bài đang ở trạng thái draft
     if (tenant.role === 'lecturer' || tenant.role === 'school_admin') {
       if (submission.status === 'draft') {
@@ -404,7 +410,7 @@ const SubmissionService = {
       return submission;
     }
 
-    return this.enrichSubmissionAuditData(submission);
+    throw new Error('FORBIDDEN');
   },
 
   /**
@@ -429,8 +435,11 @@ const SubmissionService = {
         throw new Error('FORBIDDEN');
       }
     }
-
-    const updated = await SubmissionRepository.updateStatus(submissionId, tenant.schoolId, body.status, body.feedback);
+    const updated = await SubmissionRepository.updateStatus(
+      submissionId,
+      tenant.schoolId,
+      body.status
+    );
     return updated;
   },
 
@@ -581,13 +590,18 @@ const SubmissionService = {
       throw new Error('FORBIDDEN');
     }
 
-    const result = await SubmissionRepository.findManyByAssignmentId(assignmentId, query);
+    const result =
+      await SubmissionRepository.findManyByAssignmentId(
+        assignmentId,
+        tenant.schoolId,
+        query
+      );
     if (result && Array.isArray(result.data)) {
       result.data = result.data.map(sub => this.enrichSubmissionAuditData(sub));
     }
     return result;
   },
-  
+
   /**
    * Lấy danh sách bài nộp của student hiện tại trong trường hiện tại
    */
@@ -697,8 +711,7 @@ const SubmissionService = {
         result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
       } else {
         // Đã có bản ghi: kiểm tra khóa
-        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
-        if (lockedStatuses.includes(existingSubmission.status)) {
+        if (existingSubmission.status !== 'draft') {
           throw new Error('SUBMISSION_LOCKED');
         }
 
@@ -825,8 +838,7 @@ const SubmissionService = {
         result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
       } else {
         // Đã có bản ghi: kiểm tra khóa
-        const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
-        if (lockedStatuses.includes(existingSubmission.status)) {
+        if (existingSubmission.status !== 'draft') {
           throw new Error('SUBMISSION_LOCKED');
         }
 
@@ -871,8 +883,7 @@ const SubmissionService = {
     const submission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, tenant.userId, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
 
-    const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
-    if (lockedStatuses.includes(submission.status)) {
+    if (submission.status !== 'draft') {
       throw new Error('SUBMISSION_LOCKED');
     }
 
