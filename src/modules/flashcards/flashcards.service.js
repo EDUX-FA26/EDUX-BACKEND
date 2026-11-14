@@ -78,6 +78,13 @@ class FlashcardsService {
     return FlashcardsRepository.publishDeck(deckId);
   }
 
+  async publishDeckForForum(deckId, user) {
+    const deck = await FlashcardsRepository.findDeckById(deckId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+    if (user.role !== 'admin' && deck.created_by !== user.id) throw new Error('FORBIDDEN');
+    return FlashcardsRepository.publishDeckForOwner(deckId, user.id);
+  }
+
   /**
    * Ghi nhận user hoàn thành phiên học flashcard.
    * LƯU Ý: Học flashcard không làm tăng chuỗi streak

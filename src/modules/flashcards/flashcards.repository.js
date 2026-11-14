@@ -202,6 +202,17 @@ const FlashcardsRepository = {
     return rows[0];
   },
 
+  async publishDeckForOwner(id, ownerId) {
+    const { rows } = await pool.query(
+      `UPDATE flashcard_decks
+       SET is_public = true, updated_at = NOW()
+       WHERE id = $1 AND created_by = $2 AND is_active = true
+       RETURNING id, title, is_public, subject_id, created_by`,
+      [id, ownerId]
+    );
+    return rows[0];
+  },
+
   // ─────────────────────────────────────────────
   // CARD
   // ─────────────────────────────────────────────

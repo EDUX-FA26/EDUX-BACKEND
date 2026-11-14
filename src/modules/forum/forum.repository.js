@@ -1,7 +1,7 @@
 const { pool } = require('../../config/db.config');
 
 const postSelect = `
-  SELECT fp.id, fp.title, fp.content, fp.visibility, fp.post_type, fp.is_anonymous, fp.attachments, fp.view_count, fp.is_pinned, fp.comments_locked,
+  SELECT fp.id, fp.title, fp.content, fp.visibility, fp.post_type, fp.is_anonymous, fp.attachments, fp.tags, fp.view_count, fp.is_pinned, fp.comments_locked,
          fp.subject_id, fp.flashcard_deck_id, fp.created_at, fp.updated_at,
          u.id AS author_id, u.role AS author_role, up.full_name AS author_name,
          s.code AS subject_code, s.name AS subject_name,
@@ -45,7 +45,12 @@ const ForumRepository = {
 
   async findAllowedClassIds({ userId, role, classIds }) {
     if (!classIds.length) return [];
-    const { rows } = await pool.query(`SELECT id FROM classes WHERE id = ANY($1::uuid[]) AND ($2 = 'admin' OR lecturer_id = $3)`, [classIds, role, userId]);
+    const { rows } = await pool.query(`
+      SELECT c.id FROM classes c
+      LEFT JOIN class_members cm ON cm.class_id = c.id AND cm.student_id = $3 AND cm.status = 'active'
+      WHERE c.id = ANY($1::uuid[])
+        AND ($2 = 'admin' OR c.lecturer_id = $3 OR cm.student_id IS NOT NULL)
+    `, [classIds, role, userId]);
     return rows.map((row) => row.id);
   },
 
@@ -69,7 +74,7 @@ const ForumRepository = {
     return rows.map((row) => row.id);
   },
 
-  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', subjectId = '', classId = '', type = '', sort = 'latest', time = 'all' }) {
+  async listPosts({ userId, role, page = 1, limit = 10, q = '', author = '', authorId = '', subjectId = '', classId = '', type = '', sort = 'latest', time = 'all' }) {
     const safePage = Math.max(1, Number(page) || 1);
     const safeLimit = Math.min(50, Math.max(1, Number(limit) || 10));
     const offset = (safePage - 1) * safeLimit;
@@ -81,7 +86,9 @@ const ForumRepository = {
       WHERE access_fpc.post_id = fp.id AND (access_cm.student_id IS NOT NULL OR access_c.lecturer_id = $1)
     ))`];
     if (q) { params.push(`%${q}%`); conditions.push(`(fp.title ILIKE $${params.length} OR fp.content ILIKE $${params.length})`); }
-    if (author === 'lecturer' || author === 'student' || author === 'admin') {
+    if (authorId) {
+      params.push(authorId); conditions.push(`fp.author_id = $${params.length}`);
+    } else if (author === 'lecturer' || author === 'student' || author === 'admin') {
       params.push(author); conditions.push(`u.role = $${params.length}`);
     } else if (author === 'anonymous') {
       conditions.push('fp.is_anonymous = true');
@@ -100,7 +107,7 @@ const ForumRepository = {
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM forum_posts fp JOIN users u ON u.id = fp.author_id LEFT JOIN user_profiles up ON up.user_id = u.id ${where}`, params);
     const limitParam = params.length + 1;
     const offsetParam = params.length + 2;
-    const orderBy = sort === 'popular' ? 'fp.view_count DESC, fp.created_at DESC' : sort === 'comments' ? 'comment_count DESC, fp.created_at DESC' : 'fp.is_pinned DESC, fp.created_at DESC';
+    const orderBy = sort === 'popular' ? 'COALESCE(fp.view_count, 0) DESC, fp.created_at DESC' : sort === 'comments' ? 'comment_count DESC, fp.created_at DESC' : 'fp.is_pinned DESC, fp.created_at DESC';
     const result = await pool.query(`${postSelect} ${where} GROUP BY fp.id, u.id, up.full_name, s.code, s.name, fd.title ORDER BY ${orderBy} LIMIT $${limitParam} OFFSET $${offsetParam}`, [...params, safeLimit, offset]);
     return { data: result.rows, page: safePage, limit: safeLimit, total: count.rows[0].total, totalPages: Math.max(1, Math.ceil(count.rows[0].total / safeLimit)) };
   },
@@ -118,11 +125,11 @@ const ForumRepository = {
     return { ...result.rows[0], comments: comments.rows };
   },
 
-  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [], postType = 'DISCUSSION', isAnonymous = false, attachments = [] }) {
+  async createPost({ authorId, title, content, subjectId, flashcardDeckId, visibility = 'PUBLIC', classIds = [], postType = 'DISCUSSION', isAnonymous = false, attachments = [], tags = [] }) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility, post_type, is_anonymous, attachments) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility, postType, isAnonymous, JSON.stringify(attachments || [])]);
+      const { rows } = await client.query(`INSERT INTO forum_posts (author_id, title, content, subject_id, flashcard_deck_id, visibility, post_type, is_anonymous, attachments, tags) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, [authorId, title, content, subjectId || null, flashcardDeckId || null, visibility, postType, isAnonymous, JSON.stringify(attachments || []), JSON.stringify(tags || [])]);
       for (const classId of classIds) await client.query('INSERT INTO forum_post_classes (post_id, class_id) VALUES ($1, $2)', [rows[0].id, classId]);
       await client.query('COMMIT');
       return rows[0];
