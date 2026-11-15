@@ -78,7 +78,8 @@ function createSchoolsRouter({ authenticate }) {
 
         WHERE sm.user_id = $1
           AND sm.status = 'active'
-          AND s.deleted_at IS NULL
+          -- Supports pre-SaaS databases where deleted_at does not yet exist.
+          AND (to_jsonb(s)->>'deleted_at') IS NULL
           AND (
             s.status = 'active'
             OR (

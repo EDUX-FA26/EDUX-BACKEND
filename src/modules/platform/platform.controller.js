@@ -16,9 +16,16 @@ function send(res, data, status = 200) {
 
 const controller = {
   me(req, res) {
-    return send(res, {
+    const identity = {
       userId: req.platformAdmin.userId,
       role: req.platformAdmin.role,
+    };
+    // Keep the pre-existing menu component compatible while returning the
+    // actual platform role needed by the new routing model.
+    return res.status(200).json({
+      success: true,
+      data: identity,
+      platformAdmin: identity,
     });
   },
 

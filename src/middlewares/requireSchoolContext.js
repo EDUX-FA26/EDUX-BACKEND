@@ -68,10 +68,15 @@ async function requireSchoolContext(req, res, next) {
         s.name AS school_name,
         s.slug AS school_slug,
         s.status AS school_status,
-        s.setup_completed,
-        s.lock_reason,
-        s.suspension_reason,
-        s.deleted_at
+
+        -- to_jsonb keeps existing Admin/Lecturer/Student accounts working
+        -- before the additive SaaS migration is applied. Missing columns
+        -- become NULL rather than making login/context selection fail.
+        COALESCE((to_jsonb(s)->>'setup_completed')::boolean, FALSE)
+          AS setup_completed,
+        to_jsonb(s)->>'lock_reason' AS lock_reason,
+        to_jsonb(s)->>'suspension_reason' AS suspension_reason,
+        (to_jsonb(s)->>'deleted_at')::timestamptz AS deleted_at
 
       FROM public.school_memberships sm
 

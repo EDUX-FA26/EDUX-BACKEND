@@ -62,7 +62,7 @@ const PlatformRepository = {
       const { rows: userRows } = await client.query(
         `
         INSERT INTO public.users (email, username, password_hash, role, is_active)
-        VALUES ($1, $2, $3, 'admin', TRUE)
+        VALUES ($1, $2, $3, 'manager', TRUE)
         RETURNING id, email, username, role, created_at
         `,
         [email, username, passwordHash]

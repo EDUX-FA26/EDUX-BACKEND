@@ -49,7 +49,7 @@ class AuthRepository {
     const query = `
       SELECT id, email, username, password_hash, role, is_active
       FROM users
-      WHERE email = $1 OR username = $1
+      WHERE LOWER(email) = LOWER($1) OR username = $1
     `;
     const result = await pool.query(query, [identifier]);
     return result.rows[0] || null;
