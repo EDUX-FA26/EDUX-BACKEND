@@ -160,7 +160,7 @@ const AssignmentMaterialService = {
   },
 
   /**
-   * Tải xuống tài liệu assignment (presigned URL)
+   * Tải xuống / xem trước tài liệu assignment (presigned URL)
    */
   async downloadMaterial(assignmentId, materialId, tenant) {
     const assignment = await verifyAssignmentAccess(assignmentId, tenant);
@@ -172,18 +172,30 @@ const AssignmentMaterialService = {
     const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    const command = new GetObjectCommand({
+    const safeFileName = encodeURIComponent(material.file_name);
+
+    const downloadCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `attachment; filename="${material.file_name}"`,
+      ResponseContentDisposition: `attachment; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
     });
 
-    // Presigned URL có hiệu lực 15 phút
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    const previewCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: material.file_key,
+      ResponseContentDisposition: `inline; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
+      ResponseContentType: material.file_type || 'application/octet-stream',
+    });
+
+    const [downloadUrl, previewUrl] = await Promise.all([
+      getSignedUrl(s3, downloadCommand, { expiresIn: 900 }),
+      getSignedUrl(s3, previewCommand, { expiresIn: 900 }),
+    ]);
 
     return {
-      url: presignedUrl,
-      download_url: presignedUrl,
+      url: downloadUrl,
+      download_url: downloadUrl,
+      preview_url: previewUrl,
       file_name: material.file_name,
       file_type: material.file_type,
       file_size: material.file_size,

@@ -25,6 +25,10 @@ const createAssignmentSchema = z.object({
   allow_late_submission: parseBoolean.default(false),
   publish_status: z.enum(['draft', 'published', 'closed']).default('draft'),
   rubric_configs: z.any().optional(),
+  materials: z.any().optional(),
+  attachments: z.any().optional(),
+  existing_materials: z.any().optional(),
+  existing_attachments: z.any().optional(),
 });
 
 const updateAssignmentSchema = z.object({
@@ -42,6 +46,10 @@ const updateAssignmentSchema = z.object({
   slot_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().nullable(),
   session_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().nullable(),
   rubric_configs: z.any().optional(),
+  materials: z.any().optional(),
+  attachments: z.any().optional(),
+  existing_materials: z.any().optional(),
+  existing_attachments: z.any().optional(),
 });
 
 const updateStatusSchema = z.object({

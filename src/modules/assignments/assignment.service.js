@@ -93,6 +93,15 @@ const AssignmentService = {
     const assignmentUuid = uuidv4(); // Unique varchar uuid
     const uploadedMaterials = [];
 
+    // Parse pre-uploaded or body metadata materials if any
+    let bodyMaterials = [];
+    if (data.materials) {
+      bodyMaterials = typeof data.materials === 'string' ? JSON.parse(data.materials) : data.materials;
+    } else if (data.attachments) {
+      bodyMaterials = typeof data.attachments === 'string' ? JSON.parse(data.attachments) : data.attachments;
+    }
+    if (!Array.isArray(bodyMaterials)) bodyMaterials = [];
+
     // 1. Upload files to S3 first
     if (files.length > 0) {
       for (const file of files) {
@@ -131,15 +140,19 @@ const AssignmentService = {
           school_id: tenant.schoolId,
           created_by: tenant.userId
         };
-        // Loại bỏ rubric_configs khỏi payload lưu bảng assignments
+        // Loại bỏ rubric_configs và file fields khỏi payload lưu bảng assignments
         delete assignmentData.rubric_configs;
+        delete assignmentData.materials;
+        delete assignmentData.attachments;
+        delete assignmentData.existing_materials;
+        delete assignmentData.existing_attachments;
 
         const assignment = await AssignmentRepository.create(assignmentData, client);
 
         // Lưu cấu hình rubric vào assignment_rubric_configs trong cùng transaction
         const savedRubrics = await AssignmentRepository.saveRubricConfigs(assignmentId, validatedRubrics, client, tenant.schoolId);
 
-        // Insert materials
+        // Insert materials from uploaded files
         const materials = [];
         for (const mat of uploadedMaterials) {
           const createdMat = await AssignmentMaterialRepository.create({
@@ -155,7 +168,24 @@ const AssignmentService = {
           materials.push(createdMat);
         }
 
-        return { ...assignment, materials, rubric_configs: savedRubrics };
+        // Insert materials from body metadata if any
+        for (const bm of bodyMaterials) {
+          if (bm.file_name && (bm.file_key || bm.file_url)) {
+            const createdMat = await AssignmentMaterialRepository.create({
+              school_id: tenant.schoolId,
+              assignment_id: assignmentId,
+              description: bm.description || '',
+              file_name: bm.file_name,
+              file_key: bm.file_key || bm.file_url,
+              file_type: bm.file_type || bm.mime_type || 'application/octet-stream',
+              file_size: bm.file_size || 0,
+              uploaded_by: tenant.userId,
+            }, client);
+            materials.push(createdMat);
+          }
+        }
+
+        return { ...assignment, materials, attachments: materials, rubric_configs: savedRubrics };
       });
 
       return result;
@@ -189,7 +219,30 @@ const AssignmentService = {
       validatedRubrics = parseAndValidateRubrics(data.rubric_configs, isAiRequired);
     }
 
-    // Nếu có upload thêm files, upload lên S3 và tạo record trong assignment_materials
+    // 1. Xử lý existing_materials / existing_attachments (nếu được truyền từ form để loại bỏ file đã xóa)
+    let rawExisting = data.existing_materials !== undefined ? data.existing_materials : data.existing_attachments;
+    if (rawExisting !== undefined) {
+      if (typeof rawExisting === 'string') {
+        try { rawExisting = JSON.parse(rawExisting); } catch (e) { rawExisting = null; }
+      }
+      if (Array.isArray(rawExisting)) {
+        const keptIds = new Set(rawExisting.map(m => m.id).filter(Boolean));
+        const { data: currentDbMaterials } = await AssignmentMaterialRepository.findByAssignmentId(id, actualTenant.schoolId, { limit: 1000 });
+        for (const curMat of currentDbMaterials || []) {
+          if (!keptIds.has(curMat.id)) {
+            // File này đã bị người dùng gỡ bỏ trong form edit -> Xóa khỏi DB và S3
+            try {
+              await s3.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: curMat.file_key }));
+            } catch (delErr) {
+              console.warn('Could not delete file from S3:', delErr.message);
+            }
+            await AssignmentMaterialRepository.delete(curMat.id, actualTenant.schoolId);
+          }
+        }
+      }
+    }
+
+    // 2. Nếu có upload thêm files trực tiếp (multipart/form-data), upload lên S3 và tạo record trong assignment_materials
     if (actualFiles && actualFiles.length > 0) {
       for (const file of actualFiles) {
         const fileKey = `assignment-materials/${id}/${uuidv4()}_${file.originalname}`;
@@ -219,8 +272,36 @@ const AssignmentService = {
       }
     }
 
+    // 3. Nếu có danh sách metadata attachments mới được truyền qua JSON body
+    let bodyMaterials = [];
+    if (data.materials) {
+      bodyMaterials = typeof data.materials === 'string' ? JSON.parse(data.materials) : data.materials;
+    } else if (data.attachments) {
+      bodyMaterials = typeof data.attachments === 'string' ? JSON.parse(data.attachments) : data.attachments;
+    }
+    if (Array.isArray(bodyMaterials)) {
+      for (const bm of bodyMaterials) {
+        if (!bm.id && bm.file_name && (bm.file_key || bm.file_url)) {
+          await AssignmentMaterialRepository.create({
+            school_id: actualTenant.schoolId,
+            assignment_id: id,
+            description: bm.description || '',
+            file_name: bm.file_name,
+            file_key: bm.file_key || bm.file_url,
+            file_type: bm.file_type || bm.mime_type || 'application/octet-stream',
+            file_size: bm.file_size || 0,
+            uploaded_by: actualTenant.userId,
+          });
+        }
+      }
+    }
+
     const updatePayload = { ...data };
     delete updatePayload.rubric_configs;
+    delete updatePayload.materials;
+    delete updatePayload.attachments;
+    delete updatePayload.existing_materials;
+    delete updatePayload.existing_attachments;
 
     const updated = await AssignmentRepository.update(id, actualTenant.schoolId, updatePayload);
 
@@ -229,7 +310,22 @@ const AssignmentService = {
       savedRubrics = await AssignmentRepository.saveRubricConfigs(id, validatedRubrics, undefined, actualTenant.schoolId);
     }
 
-    return { ...updated, rubric_configs: savedRubrics };
+    // Lấy lại danh sách tài liệu mới nhất để trả về cho Frontend
+    const { data: updatedMaterials } = await AssignmentMaterialRepository.findByAssignmentId(id, actualTenant.schoolId, { limit: 1000 });
+    const formattedMaterials = (updatedMaterials || []).map(m => ({
+      ...m,
+      file_url: m.file_key,
+      url: `/api/assignments/${id}/materials/${m.id}/download`,
+      download_url: `/api/assignments/${id}/materials/${m.id}/download`,
+      preview_url: `/api/assignments/${id}/materials/${m.id}/download?disposition=inline`,
+    }));
+
+    return {
+      ...updated,
+      materials: formattedMaterials,
+      attachments: formattedMaterials,
+      rubric_configs: savedRubrics
+    };
   },
 
   /**
@@ -306,7 +402,14 @@ const AssignmentService = {
     }
 
     // Get materials
-    const { data: materials } = await AssignmentMaterialRepository.findByAssignmentId(id, tenant.schoolId, { limit: 100 });
+    const { data: rawMaterials } = await AssignmentMaterialRepository.findByAssignmentId(id, tenant.schoolId, { limit: 100 });
+    const materials = (rawMaterials || []).map(m => ({
+      ...m,
+      file_url: m.file_key,
+      url: `/api/assignments/${id}/materials/${m.id}/download`,
+      download_url: `/api/assignments/${id}/materials/${m.id}/download`,
+      preview_url: `/api/assignments/${id}/materials/${m.id}/download?disposition=inline`,
+    }));
 
     // Get rubric configs
     let rawRubricConfigs = await AssignmentRepository.getRubricConfigs(id);
@@ -380,6 +483,7 @@ const AssignmentService = {
       subject: subjectObj,
       course: subjectObj,
       materials,
+      attachments: materials,
       rubric_configs: finalRubricConfigs
     };
   },

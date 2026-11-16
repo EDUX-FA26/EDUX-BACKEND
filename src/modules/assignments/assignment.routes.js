@@ -27,7 +27,7 @@ router.use(authenticate, requireSchoolContext);
 router.post(
   '/', 
   authorizeSchoolRoles('school_admin', 'lecturer'), 
-  upload.array('materials'), 
+  upload.any(), 
   validate(createAssignmentSchema), 
   AssignmentController.createAssignment
 );
@@ -60,7 +60,7 @@ router.get(
 router.patch(
   '/:id', 
   authorizeSchoolRoles('school_admin', 'lecturer'), 
-  upload.array('materials'),
+  upload.any(),
   validate(updateAssignmentSchema), 
   AssignmentController.updateAssignment
 );
@@ -71,7 +71,7 @@ router.put(
     'school_admin',
     'lecturer'
   ),
-  upload.array('materials'),
+  upload.any(),
   validate(updateAssignmentSchema),
   AssignmentController.updateAssignment
 );
