@@ -10,6 +10,7 @@ router.get('/stats/me', controller.stats);
 router.get('/posts', controller.list);
 router.get('/posts/:id', controller.get);
 router.post('/posts', controller.create);
+router.patch('/posts/:id', controller.update);
 router.delete('/posts/:id', controller.remove);
 router.post('/posts/:id/like', controller.like);
 router.post('/posts/:id/comments', controller.comment);

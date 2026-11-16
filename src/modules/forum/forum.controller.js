@@ -8,6 +8,7 @@ const ForumController = {
   list: async (req, res, next) => { try { return ok(res, await Service.list(scopedUser(req), req.query), 'Forum posts'); } catch (e) { return next(e); } },
   get: async (req, res, next) => { try { const data = await Service.get(scopedUser(req), req.params.id); return data ? ok(res, data, 'Forum post') : res.status(404).json({ success: false, message: 'Forum post not found' }); } catch (e) { return next(e); } },
   create: async (req, res, next) => { try { return ok(res, await Service.create(scopedUser(req), req.body), 'Forum post created', 201); } catch (e) { return next(e); } },
+  update: async (req, res, next) => { try { return ok(res, await Service.update(scopedUser(req), req.params.id, req.body), 'Forum post updated'); } catch (e) { return next(e); } },
   remove: async (req, res, next) => { try { return ok(res, await Service.remove(scopedUser(req), req.params.id), 'Forum post deleted'); } catch (e) { return next(e); } },
   like: async (req, res, next) => { try { return ok(res, await Service.like(scopedUser(req), req.params.id), 'Like updated'); } catch (e) { return next(e); } },
   comment: async (req, res, next) => { try { return ok(res, await Service.comment(scopedUser(req), req.params.id, req.body), 'Comment added', 201); } catch (e) { return next(e); } },

@@ -166,6 +166,21 @@ const ForumRepository = {
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   },
 
+  async updatePost(id, authorId, schoolId, { title, content, attachments, tags }) {
+    const { rows } = await pool.query(
+      `UPDATE forum_posts
+       SET title = $3,
+           content = $4,
+           attachments = $5::jsonb,
+           tags = $6::jsonb,
+           updated_at = NOW()
+       WHERE id = $1 AND author_id = $2 AND school_id = $7::uuid
+       RETURNING id`,
+      [id, authorId, title, content, JSON.stringify(attachments || []), JSON.stringify(tags || []), schoolId]
+    );
+    return rows[0] || null;
+  },
+
   async deletePost(id, userId, isAdmin) {
     const result = await pool.query(`DELETE FROM forum_posts WHERE id = $1 AND ($3 = true OR author_id = $2) RETURNING id`, [id, userId, isAdmin]);
     return result.rows[0] || null;
