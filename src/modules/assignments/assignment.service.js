@@ -5,6 +5,7 @@ const { pool, withTransaction } = require('../../config/db.config');
 const AssignmentRepository = require('./assignment.repository');
 const AssignmentMaterialRepository = require('../assignment-materials/assignmentMaterial.repository');
 const { DEFAULT_RUBRIC_CONFIGS } = require('./assignment.constants');
+const { decodeUtf8Filename, sanitizeStorageFilename } = require('../../utils/file.util');
 
 function parseAndValidateRubrics(rawRubrics, aiDeclarationRequired = true) {
   let configs = rawRubrics;
@@ -105,7 +106,9 @@ const AssignmentService = {
     // 1. Upload files to S3 first
     if (files.length > 0) {
       for (const file of files) {
-        const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${file.originalname}`;
+        const cleanFileName = decodeUtf8Filename(file.originalname);
+        const safeStorageName = sanitizeStorageFilename(cleanFileName);
+        const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${safeStorageName}`;
         
         try {
           await s3.send(
@@ -121,7 +124,7 @@ const AssignmentService = {
         }
         
         uploadedMaterials.push({
-          file_name: file.originalname,
+          file_name: cleanFileName,
           file_key: fileKey,
           file_type: file.mimetype,
           file_size: file.size,
@@ -171,11 +174,12 @@ const AssignmentService = {
         // Insert materials from body metadata if any
         for (const bm of bodyMaterials) {
           if (bm.file_name && (bm.file_key || bm.file_url)) {
+            const cleanBmName = decodeUtf8Filename(bm.file_name);
             const createdMat = await AssignmentMaterialRepository.create({
               school_id: tenant.schoolId,
               assignment_id: assignmentId,
               description: bm.description || '',
-              file_name: bm.file_name,
+              file_name: cleanBmName,
               file_key: bm.file_key || bm.file_url,
               file_type: bm.file_type || bm.mime_type || 'application/octet-stream',
               file_size: bm.file_size || 0,
@@ -245,7 +249,9 @@ const AssignmentService = {
     // 2. Nếu có upload thêm files trực tiếp (multipart/form-data), upload lên S3 và tạo record trong assignment_materials
     if (actualFiles && actualFiles.length > 0) {
       for (const file of actualFiles) {
-        const fileKey = `assignment-materials/${id}/${uuidv4()}_${file.originalname}`;
+        const cleanFileName = decodeUtf8Filename(file.originalname);
+        const safeStorageName = sanitizeStorageFilename(cleanFileName);
+        const fileKey = `assignment-materials/${id}/${uuidv4()}_${safeStorageName}`;
         try {
           await s3.send(
             new PutObjectCommand({
@@ -263,7 +269,7 @@ const AssignmentService = {
           school_id: actualTenant.schoolId,
           assignment_id: id,
           description: '',
-          file_name: file.originalname,
+          file_name: cleanFileName,
           file_key: fileKey,
           file_type: file.mimetype,
           file_size: file.size,
@@ -282,11 +288,12 @@ const AssignmentService = {
     if (Array.isArray(bodyMaterials)) {
       for (const bm of bodyMaterials) {
         if (!bm.id && bm.file_name && (bm.file_key || bm.file_url)) {
+          const cleanBmName = decodeUtf8Filename(bm.file_name);
           await AssignmentMaterialRepository.create({
             school_id: actualTenant.schoolId,
             assignment_id: id,
             description: bm.description || '',
-            file_name: bm.file_name,
+            file_name: cleanBmName,
             file_key: bm.file_key || bm.file_url,
             file_type: bm.file_type || bm.mime_type || 'application/octet-stream',
             file_size: bm.file_size || 0,
@@ -314,6 +321,7 @@ const AssignmentService = {
     const { data: updatedMaterials } = await AssignmentMaterialRepository.findByAssignmentId(id, actualTenant.schoolId, { limit: 1000 });
     const formattedMaterials = (updatedMaterials || []).map(m => ({
       ...m,
+      file_name: decodeUtf8Filename(m.file_name),
       file_url: m.file_key,
       url: `/api/assignments/${id}/materials/${m.id}/download`,
       download_url: `/api/assignments/${id}/materials/${m.id}/download`,
@@ -405,6 +413,7 @@ const AssignmentService = {
     const { data: rawMaterials } = await AssignmentMaterialRepository.findByAssignmentId(id, tenant.schoolId, { limit: 100 });
     const materials = (rawMaterials || []).map(m => ({
       ...m,
+      file_name: decodeUtf8Filename(m.file_name),
       file_url: m.file_key,
       url: `/api/assignments/${id}/materials/${m.id}/download`,
       download_url: `/api/assignments/${id}/materials/${m.id}/download`,

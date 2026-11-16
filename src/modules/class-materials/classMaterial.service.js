@@ -8,6 +8,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const ClassMaterialRepository = require('./classMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition } = require('../../utils/file.util');
 
 /**
  * Kiểm tra quyền truy cập vào lớp học theo trường hiện tại.
@@ -54,6 +55,13 @@ const ClassMaterialService = {
       page: query.page,
       limit: query.limit,
     });
+    if (result && Array.isArray(result.data)) {
+      result.data = result.data.map(m => ({
+        ...m,
+        title: decodeUtf8Filename(m.title),
+        file_name: decodeUtf8Filename(m.file_name)
+      }));
+    }
     return result;
   },
 
@@ -67,7 +75,9 @@ const ClassMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `class-materials/${classId}/${uuidv4()}_${file.originalname}`;
+    const cleanFileName = decodeUtf8Filename(file.originalname);
+    const safeStorageName = sanitizeStorageFilename(cleanFileName);
+    const fileKey = `class-materials/${classId}/${uuidv4()}_${safeStorageName}`;
 
     await s3.send(
       new PutObjectCommand({
@@ -78,13 +88,15 @@ const ClassMaterialService = {
       })
     );
 
+    const cleanTitle = body.title ? decodeUtf8Filename(body.title) : cleanFileName;
+
     const material = await ClassMaterialRepository.create({
       school_id: tenant.schoolId,
       class_id: classId,
       slot_id: body.slot_id || null,
-      title: body.title,
+      title: cleanTitle,
       description: body.description || '',
-      file_name: file.originalname,
+      file_name: cleanFileName,
       file_key: fileKey,
       file_type: file.mimetype,
       file_size: file.size,
@@ -112,7 +124,9 @@ const ClassMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `class-materials/slots/${slotId}/${uuidv4()}_${file.originalname}`;
+    const cleanFileName = decodeUtf8Filename(file.originalname);
+    const safeStorageName = sanitizeStorageFilename(cleanFileName);
+    const fileKey = `class-materials/slots/${slotId}/${uuidv4()}_${safeStorageName}`;
 
     await s3.send(
       new PutObjectCommand({
@@ -123,13 +137,15 @@ const ClassMaterialService = {
       })
     );
 
+    const cleanTitle = body.title ? decodeUtf8Filename(body.title) : cleanFileName;
+
     const material = await ClassMaterialRepository.create({
       school_id: tenant.schoolId,
       class_id: session.class_id,
       slot_id: slotId,
-      title: body.title || file.originalname,
+      title: cleanTitle,
       description: body.description || '',
-      file_name: file.originalname,
+      file_name: cleanFileName,
       file_key: fileKey,
       file_type: file.mimetype,
       file_size: file.size,
@@ -153,8 +169,12 @@ const ClassMaterialService = {
 
     await verifyClassAccess(session.class_id, tenant);
 
-    const materials = await ClassMaterialRepository.findBySlotId(slotId, tenant.schoolId);
-    return materials;
+    const rawMaterials = await ClassMaterialRepository.findBySlotId(slotId, tenant.schoolId);
+    return (rawMaterials || []).map(m => ({
+      ...m,
+      title: decodeUtf8Filename(m.title),
+      file_name: decodeUtf8Filename(m.file_name)
+    }));
   },
 
   /**
@@ -166,7 +186,11 @@ const ClassMaterialService = {
 
     await verifyClassAccess(material.class_id, tenant);
 
-    return material;
+    return {
+      ...material,
+      title: decodeUtf8Filename(material.title),
+      file_name: decodeUtf8Filename(material.file_name)
+    };
   },
 
   /**
@@ -220,18 +244,18 @@ const ClassMaterialService = {
 
     await verifyClassAccess(material.class_id, tenant);
 
-    const safeFileName = encodeURIComponent(material.file_name);
+    const cleanFileName = decodeUtf8Filename(material.file_name);
 
     const downloadCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `attachment; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'attachment'),
     });
 
     const previewCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `inline; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'inline'),
       ResponseContentType: material.file_type || 'application/octet-stream',
     });
 
@@ -244,7 +268,7 @@ const ClassMaterialService = {
       url: downloadUrl,
       download_url: downloadUrl,
       preview_url: previewUrl,
-      file_name: material.file_name,
+      file_name: cleanFileName,
       file_type: material.file_type,
       file_size: material.file_size,
     };

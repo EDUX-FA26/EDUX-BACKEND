@@ -8,6 +8,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const AssignmentMaterialRepository = require('./assignmentMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition } = require('../../utils/file.util');
 
 /**
  * Lấy thông tin assignment + class theo trường hiện tại, kiểm tra quyền truy cập.
@@ -63,6 +64,12 @@ const AssignmentMaterialService = {
       page: query.page,
       limit: query.limit,
     });
+    if (result && Array.isArray(result.data)) {
+      result.data = result.data.map(m => ({
+        ...m,
+        file_name: decodeUtf8Filename(m.file_name)
+      }));
+    }
     return result;
   },
 
@@ -76,7 +83,9 @@ const AssignmentMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${file.originalname}`;
+    const cleanFileName = decodeUtf8Filename(file.originalname);
+    const safeStorageName = sanitizeStorageFilename(cleanFileName);
+    const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${safeStorageName}`;
 
     await s3.send(
       new PutObjectCommand({
@@ -91,7 +100,7 @@ const AssignmentMaterialService = {
       school_id: tenant.schoolId,
       assignment_id: assignmentId,
       description: body.description || '',
-      file_name: file.originalname,
+      file_name: cleanFileName,
       file_key: fileKey,
       file_type: file.mimetype,
       file_size: file.size,
@@ -172,18 +181,18 @@ const AssignmentMaterialService = {
     const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    const safeFileName = encodeURIComponent(material.file_name);
+    const cleanFileName = decodeUtf8Filename(material.file_name);
 
     const downloadCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `attachment; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'attachment'),
     });
 
     const previewCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `inline; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'inline'),
       ResponseContentType: material.file_type || 'application/octet-stream',
     });
 
@@ -196,7 +205,7 @@ const AssignmentMaterialService = {
       url: downloadUrl,
       download_url: downloadUrl,
       preview_url: previewUrl,
-      file_name: material.file_name,
+      file_name: cleanFileName,
       file_type: material.file_type,
       file_size: material.file_size,
     };

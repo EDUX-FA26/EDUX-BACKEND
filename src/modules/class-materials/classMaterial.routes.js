@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const { upload } = require('../../middlewares/upload.middleware');
 
 const classMaterialController = require('./classMaterial.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
@@ -12,7 +12,7 @@ const {
   listClassMaterialsQuery,
 } = require('./classMaterial.validation');
 
-const upload = multer({ storage: multer.memoryStorage() });
+
 
 // -----------------------------------------------------------------------
 // Router A: routes gắn vào /api/classes/:classId/materials
