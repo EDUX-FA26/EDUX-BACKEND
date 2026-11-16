@@ -43,8 +43,14 @@ const flashcardsSchemas = {
     explanation: z.string().optional().default(''),
     difficulty:  z.enum(['easy', 'medium', 'hard']).default('medium'),
     position:    z.number().int().min(0).optional(),
+    topicId:     z.string().uuid('Vui lòng chọn Canonical Topic hợp lệ (UUID)').optional().nullable(),
+    topic_id:    z.string().uuid().optional().nullable(),
     topicName:   z.string().trim().max(255).optional().nullable(),
-    topicId:     z.string().uuid().optional().nullable(),
+  }).refine(data => {
+    return Boolean(data.topicId || data.topic_id);
+  }, {
+    message: 'Câu hỏi mới bắt buộc phải chọn Canonical Topic chuẩn (topicId)',
+    path: ['topicId'],
   }).refine(data => {
     if (data.type === 'multiple_choice') {
       return Array.isArray(data.options) && data.options.length >= 2;
@@ -55,7 +61,7 @@ const flashcardsSchemas = {
     path: ['options'],
   }),
 
-  // PUT /api/flashcards/:id
+  // PUT /api/flashcards/decks/:deckId/cards/:cardId
   updateCard: z.object({
     type:        z.enum(['multiple_choice']).optional(),
     question:    z.string().min(1).optional(),
@@ -65,8 +71,30 @@ const flashcardsSchemas = {
     difficulty:  z.enum(['easy', 'medium', 'hard']).optional(),
     position:    z.number().int().min(0).optional(),
     is_active:   z.boolean().optional(),
-    topicName:   z.string().trim().max(255).optional().nullable(),
     topicId:     z.string().uuid().optional().nullable(),
+    topic_id:    z.string().uuid().optional().nullable(),
+    topicName:   z.string().trim().max(255).optional().nullable(),
+  }),
+
+  // ── EXCEL IMPORT ──────────────────────────────────────────
+
+  confirmImport: z.object({
+    previewId: z.string().min(1, 'previewId là bắt buộc'),
+    idempotencyKey: z.string().optional(),
+    rows: z.array(
+      z.object({
+        rowNumber: z.number().int().min(2, 'rowNumber tối thiểu là 2'),
+        topicId: z.string().uuid('topicId phải là UUID hợp lệ'),
+      })
+    ).min(1, 'Cần ít nhất một dòng câu hỏi được xác nhận Topic'),
+  }),
+
+  // POST /api/flashcards/decks/:deckId/topic-suggestions
+  topicSuggestions: z.object({
+    rawTopic: z.string().trim().max(255).optional().default(''),
+    question: z.string().trim().max(4000).optional().default(''),
+    answer: z.string().trim().max(4000).optional().default(''),
+    limit: z.coerce.number().int().min(1).max(10).default(3).optional(),
   }),
 
   // ── REVIEW ────────────────────────────────────────────────

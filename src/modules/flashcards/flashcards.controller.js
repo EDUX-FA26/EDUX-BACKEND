@@ -138,6 +138,26 @@ const FlashcardsController = {
     } catch (error) {
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'TOPIC_REQUIRED') return res.status(400).json({ success: false, message: 'Vui lòng chọn Canonical Topic hợp lệ cho thẻ' });
+      if (error.message === 'TOPIC_NOT_FOUND') return res.status(404).json({ success: false, message: 'Topic không tồn tại trong trường' });
+      if (error.message === 'TOPIC_SUBJECT_MISMATCH') return res.status(409).json({ success: false, message: 'Topic không thuộc môn học của bộ thẻ' });
+      if (error.message === 'TOPIC_NOT_ELIGIBLE') return res.status(409).json({ success: false, message: 'Topic chưa được duyệt, đang tạm dừng hoặc không phải Topic chuẩn (Flat Model)' });
+      next(error);
+    }
+  },
+
+  async getTopicSuggestions(req, res, next) {
+    try {
+      const data = await FlashcardsService.getTopicSuggestions(
+        req.params.deckId,
+        req.body,
+        req.user,
+        req.tenant
+      );
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       next(error);
     }
   },
@@ -160,6 +180,15 @@ const FlashcardsController = {
     } catch (error) {
       if (error.message === 'CARD_NOT_FOUND') return res.status(404).json({ success: false, message: 'Card not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'CANNOT_CHANGE_TOPIC_WITH_REVIEWS' || error.message === 'CANNOT_MODIFY_REVIEWED_CARD') {
+        return res.status(400).json({
+          success: false,
+          message: 'Thẻ đã có lịch sử ôn tập. Không thể thay đổi nội dung (câu hỏi, đáp án, lựa chọn) hoặc Topic để bảo toàn dữ liệu học tập.',
+        });
+      }
+      if (error.message === 'TOPIC_NOT_FOUND') return res.status(404).json({ success: false, message: 'Topic không tồn tại trong trường' });
+      if (error.message === 'TOPIC_SUBJECT_MISMATCH') return res.status(409).json({ success: false, message: 'Topic không thuộc môn học của bộ thẻ' });
+      if (error.message === 'TOPIC_NOT_ELIGIBLE') return res.status(409).json({ success: false, message: 'Topic chưa được duyệt, đang tạm dừng hoặc không phải Topic chuẩn' });
       next(error);
     }
   },
@@ -245,11 +274,88 @@ const FlashcardsController = {
     }
   },
 
+  // POST /api/flashcards/decks/:deckId/import/preview
+  async previewImport(req, res, next) {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel để tải lên' });
+      }
+      const data = await FlashcardsService.previewCardsFromExcel(
+        req.params.deckId,
+        req.file.buffer,
+        req.user,
+        req.tenant
+      );
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'EMPTY_WORKBOOK') return res.status(400).json({ success: false, message: 'File Excel không có sheet nào' });
+      if (error.message === 'FILE_TOO_LARGE') return res.status(400).json({ success: false, message: 'Dung lượng file vượt quá giới hạn (tối đa 10MB)' });
+      if (error.message === 'ROW_LIMIT_EXCEEDED') return res.status(400).json({ success: false, message: 'Số dòng vượt quá giới hạn (tối đa 500 dòng)' });
+      if (error.message === 'EMPTY_CONTENT') return res.status(400).json({ success: false, message: 'File Excel không có dữ liệu câu hỏi hợp lệ' });
+      next(error);
+    }
+  },
+
+  // POST /api/flashcards/decks/:deckId/import/confirm
+  async confirmImport(req, res, next) {
+    try {
+      const data = await FlashcardsService.confirmCardsImport(
+        req.params.deckId,
+        req.body,
+        req.user,
+        req.tenant
+      );
+      res.status(200).json({ success: true, data });
+    } catch (error) {
+      if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.code === 'CONFIRM_IN_PROGRESS' || error.message?.startsWith('CONFIRM_IN_PROGRESS')) {
+        return res.status(409).json({ success: false, message: 'Yêu cầu import đang được xử lý, vui lòng chờ trong giây lát.' });
+      }
+      if (error.message === 'PREVIEW_NOT_FOUND' || error.message === 'PREVIEW_EXPIRED') {
+        return res.status(410).json({ success: false, message: 'Phiên preview đã hết hạn hoặc không tồn tại. Vui lòng tải lên lại.' });
+      }
+      if (
+        error.message === 'PREVIEW_DECK_MISMATCH' ||
+        error.message === 'PREVIEW_SCHOOL_MISMATCH' ||
+        error.message === 'PREVIEW_USER_MISMATCH' ||
+        error.message === 'PREVIEW_ACCESS_DENIED'
+      ) {
+        return res.status(403).json({ success: false, message: 'Phiên preview không hợp lệ hoặc bạn không có quyền truy cập.' });
+      }
+      if (error.code === 'DUPLICATE_ROW_NUMBER' || error.message?.startsWith('DUPLICATE_ROW_NUMBER')) {
+        return res.status(422).json({ success: false, message: 'Danh sách xác nhận có dòng bị gửi trùng lặp (duplicate rowNumber).' });
+      }
+      if (error.code === 'INVALID_ROW_NUMBER' || error.message?.startsWith('INVALID_ROW_NUMBER') || error.code === 'INVALID_ROW_FORMAT' || error.message?.startsWith('INVALID_ROW_FORMAT')) {
+        return res.status(422).json({ success: false, message: 'Dòng câu hỏi không tồn tại hoặc không hợp lệ trong phiên xem trước.' });
+      }
+      if (error.code === 'ROW_TOPIC_MISSING' || error.message?.startsWith('ROW_TOPIC_MISSING')) {
+        return res.status(422).json({ success: false, message: 'Tất cả các dòng import đều phải được gắn Canonical Topic.' });
+      }
+      if (error.message === 'TOPIC_NOT_FOUND') return res.status(404).json({ success: false, message: 'Topic không tồn tại trong môn học của trường' });
+      if (error.message === 'TOPIC_SUBJECT_MISMATCH') return res.status(409).json({ success: false, message: 'Topic không thuộc môn học của bộ thẻ' });
+      if (error.message === 'TOPIC_NOT_ELIGIBLE') return res.status(409).json({ success: false, message: 'Một hoặc nhiều Topic chưa được duyệt hoặc đã ngừng hoạt động' });
+      next(error);
+    }
+  },
+
   // POST /api/flashcards/decks/:deckId/cards/import-excel
   async importCardsFromExcel(req, res, next) {
     try {
       if (!req.file) {
         return res.status(400).json({ success: false, message: 'Vui lòng chọn file Excel để tải lên' });
+      }
+
+      if (req.query?.preview === 'true') {
+        const data = await FlashcardsService.previewCardsFromExcel(
+          req.params.deckId,
+          req.file.buffer,
+          req.user,
+          req.tenant
+        );
+        return res.status(200).json({ success: true, data });
       }
 
       const defaultTopicName = req.body?.topicName || req.body?.defaultTopicName || null;
@@ -264,11 +370,24 @@ const FlashcardsController = {
 
       res.status(result.success ? 200 : 422).json(result);
     } catch (error) {
+      if (error.code === 'DIRECT_IMPORT_DEPRECATED' || error.message?.startsWith('DIRECT_IMPORT_DEPRECATED')) {
+        return res.status(400).json({
+          success: false,
+          message: 'Luồng import trực tiếp đã ngừng hỗ trợ. Vui lòng sử dụng tính năng Preview và Confirm để gán Canonical Topic.',
+        });
+      }
       if (error.message === 'DECK_NOT_FOUND') return res.status(404).json({ success: false, message: 'Deck not found' });
       if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
       if (error.message === 'EMPTY_WORKBOOK') return res.status(400).json({ success: false, message: 'File Excel không có sheet nào' });
+      if (error.message === 'FILE_TOO_LARGE') return res.status(400).json({ success: false, message: 'Dung lượng file vượt quá giới hạn (tối đa 10MB)' });
+      if (error.message === 'ROW_LIMIT_EXCEEDED') return res.status(400).json({ success: false, message: 'Số dòng vượt quá giới hạn (tối đa 500 dòng)' });
+      if (error.message === 'EMPTY_CONTENT') return res.status(400).json({ success: false, message: 'File Excel không có dữ liệu câu hỏi hợp lệ' });
       next(error);
     }
+  },
+
+  async importCards(req, res, next) {
+    return this.importCardsFromExcel(req, res, next);
   },
 };
 

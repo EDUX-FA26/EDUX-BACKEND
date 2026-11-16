@@ -210,16 +210,44 @@ const FlashcardsRepository = {
       `SELECT fc.id, fc.type, fc.question, fc.options, fc.answer, fc.explanation, fc.difficulty, fc.position, fc.is_active, fc.created_at, fc.updated_at, fc.school_id,
               (
                 SELECT t.id FROM flashcard_topics ft
-                JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
+                JOIN topics t ON t.id = ft.topic_id
                 WHERE ft.flashcard_id = fc.id
                 ORDER BY ft.created_at DESC LIMIT 1
               ) AS topic_id,
               (
                 SELECT t.name FROM flashcard_topics ft
-                JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
+                JOIN topics t ON t.id = ft.topic_id
                 WHERE ft.flashcard_id = fc.id
                 ORDER BY ft.created_at DESC LIMIT 1
-              ) AS topic_name
+              ) AS topic_name,
+              (
+                SELECT t.code FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_code,
+              (
+                SELECT t.status FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_status,
+              (
+                SELECT t.review_required FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_review_required,
+              (
+                SELECT t.is_active FROM flashcard_topics ft
+                JOIN topics t ON t.id = ft.topic_id
+                WHERE ft.flashcard_id = fc.id
+                ORDER BY ft.created_at DESC LIMIT 1
+              ) AS topic_is_active,
+              (
+                SELECT COUNT(*)::int FROM flashcard_reviews fr
+                WHERE fr.flashcard_id = fc.id
+              ) AS review_count
        FROM flashcards fc
        WHERE fc.deck_id = $1 AND fc.is_active = true
        ORDER BY fc.position ASC, fc.created_at ASC`,
@@ -312,36 +340,57 @@ const FlashcardsRepository = {
   // ─────────────────────────────────────────────
 
   async findCardById(id, schoolId) {
+    const topicSubqueries = `
+      (
+        SELECT t.id FROM flashcard_topics ft
+        JOIN topics t ON t.id = ft.topic_id
+        WHERE ft.flashcard_id = fc.id
+        ORDER BY ft.created_at DESC LIMIT 1
+      ) AS topic_id,
+      (
+        SELECT t.name FROM flashcard_topics ft
+        JOIN topics t ON t.id = ft.topic_id
+        WHERE ft.flashcard_id = fc.id
+        ORDER BY ft.created_at DESC LIMIT 1
+      ) AS topic_name,
+      (
+        SELECT t.code FROM flashcard_topics ft
+        JOIN topics t ON t.id = ft.topic_id
+        WHERE ft.flashcard_id = fc.id
+        ORDER BY ft.created_at DESC LIMIT 1
+      ) AS topic_code,
+      (
+        SELECT t.status FROM flashcard_topics ft
+        JOIN topics t ON t.id = ft.topic_id
+        WHERE ft.flashcard_id = fc.id
+        ORDER BY ft.created_at DESC LIMIT 1
+      ) AS topic_status,
+      (
+        SELECT t.review_required FROM flashcard_topics ft
+        JOIN topics t ON t.id = ft.topic_id
+        WHERE ft.flashcard_id = fc.id
+        ORDER BY ft.created_at DESC LIMIT 1
+      ) AS topic_review_required,
+      (
+        SELECT t.is_active FROM flashcard_topics ft
+        JOIN topics t ON t.id = ft.topic_id
+        WHERE ft.flashcard_id = fc.id
+        ORDER BY ft.created_at DESC LIMIT 1
+      ) AS topic_is_active,
+      (
+        SELECT COUNT(*)::int FROM flashcard_reviews fr
+        WHERE fr.flashcard_id = fc.id
+      ) AS review_count
+    `;
+
     const query = schoolId
       ? `SELECT fc.*, fd.title AS deck_title, fd.created_by AS deck_owner_id, fd.subject_id,
-                (
-                  SELECT t.id FROM flashcard_topics ft
-                  JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
-                  WHERE ft.flashcard_id = fc.id
-                  ORDER BY ft.created_at DESC LIMIT 1
-                ) AS topic_id,
-                (
-                  SELECT t.name FROM flashcard_topics ft
-                  JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
-                  WHERE ft.flashcard_id = fc.id
-                  ORDER BY ft.created_at DESC LIMIT 1
-                ) AS topic_name
+                ${topicSubqueries}
          FROM flashcards fc
          JOIN flashcard_decks fd ON fc.deck_id = fd.id
          WHERE fc.id = $1 AND fc.school_id = $2`
       : `SELECT fc.*, fd.title AS deck_title, fd.created_by AS deck_owner_id, fd.subject_id,
-                (
-                  SELECT t.id FROM flashcard_topics ft
-                  JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
-                  WHERE ft.flashcard_id = fc.id
-                  ORDER BY ft.created_at DESC LIMIT 1
-                ) AS topic_id,
-                (
-                  SELECT t.name FROM flashcard_topics ft
-                  JOIN topics t ON t.id = ft.topic_id AND t.is_active = true
-                  WHERE ft.flashcard_id = fc.id
-                  ORDER BY ft.created_at DESC LIMIT 1
-                ) AS topic_name
+                ${topicSubqueries}
          FROM flashcards fc
          JOIN flashcard_decks fd ON fc.deck_id = fd.id
          WHERE fc.id = $1`;
@@ -350,43 +399,8 @@ const FlashcardsRepository = {
     return rows[0];
   },
 
-  async findOrCreateTopic({ subjectId, name, userId, schoolId }, client = pool) {
-    const trimmed = String(name || '').trim();
-    if (!trimmed) return null;
-
-    if (schoolId) {
-      const existing = await client.query(
-        `SELECT id, name FROM topics WHERE subject_id = $1 AND school_id = $2 AND lower(name) = lower($3) LIMIT 1`,
-        [subjectId, schoolId, trimmed]
-      );
-      if (existing.rows[0]) {
-        return existing.rows[0];
-      }
-
-      const created = await client.query(
-        `INSERT INTO topics (subject_id, name, created_by, is_active, school_id)
-         VALUES ($1, $2, $3, true, $4)
-         RETURNING id, name`,
-        [subjectId, trimmed, userId || null, schoolId]
-      );
-      return created.rows[0];
-    }
-
-    const existing = await client.query(
-      `SELECT id, name FROM topics WHERE subject_id = $1 AND lower(name) = lower($2) LIMIT 1`,
-      [subjectId, trimmed]
-    );
-    if (existing.rows[0]) {
-      return existing.rows[0];
-    }
-
-    const created = await client.query(
-      `INSERT INTO topics (subject_id, name, created_by, is_active)
-       VALUES ($1, $2, $3, true)
-       RETURNING id, name`,
-      [subjectId, trimmed, userId || null]
-    );
-    return created.rows[0];
+  async findOrCreateTopic() {
+    throw new Error('FIND_OR_CREATE_TOPIC_DEPRECATED: Tự tạo topic tự do đã bị vô hiệu hóa trong Phase 3. Mọi câu hỏi phải gắn với Canonical Topic chuẩn.');
   },
 
   async setCardTopic({ flashcardId, topicId, userId, schoolId }, client = pool) {
@@ -437,7 +451,49 @@ const FlashcardsRepository = {
     return rows[0].next_pos;
   },
 
-  async createCard({ deck_id, type, question, options, answer, explanation, difficulty, position, topic_name, topic_id, userId, subject_id, school_id }) {
+  async findCanonicalTopicById(topicId, schoolId, subjectId) {
+    const query = `
+      SELECT id, name, code, status, review_required, is_active, parent_id, school_id, subject_id
+      FROM topics
+      WHERE id = $1 AND school_id = $2 AND subject_id = $3
+    `;
+    const { rows } = await pool.query(query, [topicId, schoolId, subjectId]);
+    return rows[0] || null;
+  },
+
+  async getApprovedCanonicalTopicsForSubject(schoolId, subjectId) {
+    const query = `
+      SELECT t.id, t.name, t.code, t.description,
+             array_agg(ta.alias) FILTER (WHERE ta.alias IS NOT NULL) AS aliases
+      FROM topics t
+      LEFT JOIN topic_aliases ta ON ta.topic_id = t.id AND ta.school_id = t.school_id
+      WHERE t.school_id = $1 AND t.subject_id = $2
+        AND t.status = 'approved'
+        AND (t.review_required = false OR t.review_required IS NULL)
+        AND t.is_active = true
+        AND t.parent_id IS NULL
+      GROUP BY t.id
+      ORDER BY t.name ASC
+    `;
+    const { rows } = await pool.query(query, [schoolId, subjectId]);
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      code: r.code,
+      description: r.description,
+      aliases: r.aliases || [],
+    }));
+  },
+
+  async getCardReviewCount(cardId, schoolId) {
+    const query = schoolId
+      ? `SELECT COUNT(*)::int AS count FROM flashcard_reviews WHERE flashcard_id = $1 AND school_id = $2`
+      : `SELECT COUNT(*)::int AS count FROM flashcard_reviews WHERE flashcard_id = $1`;
+    const { rows } = await pool.query(query, schoolId ? [cardId, schoolId] : [cardId]);
+    return rows[0]?.count || 0;
+  },
+
+  async createCard({ deck_id, type, question, options, answer, explanation, difficulty, position, topic_id, userId, subject_id, school_id }) {
     return withTransaction(async (client) => {
       const { rows } = await client.query(
         `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position, school_id)
@@ -457,30 +513,29 @@ const FlashcardsRepository = {
       );
       const card = rows[0];
 
-      let resolvedTopicId = topic_id;
-      let resolvedTopicName = topic_name;
+      let topicName = null;
+      let topicCode = null;
 
-      if (!resolvedTopicId && topic_name && subject_id) {
-        const topic = await FlashcardsRepository.findOrCreateTopic({ subjectId: subject_id, name: topic_name, userId, schoolId: school_id }, client);
-        if (topic) {
-          resolvedTopicId = topic.id;
-          resolvedTopicName = topic.name;
+      if (topic_id) {
+        await FlashcardsRepository.setCardTopic({ flashcardId: card.id, topicId: topic_id, userId, schoolId: school_id }, client);
+        const topicRes = await client.query(`SELECT id, name, code FROM topics WHERE id = $1`, [topic_id]);
+        if (topicRes.rows[0]) {
+          topicName = topicRes.rows[0].name;
+          topicCode = topicRes.rows[0].code;
         }
-      }
-
-      if (resolvedTopicId) {
-        await FlashcardsRepository.setCardTopic({ flashcardId: card.id, topicId: resolvedTopicId, userId, schoolId: school_id }, client);
       }
 
       return {
         ...card,
-        topic_id: resolvedTopicId || null,
-        topic_name: resolvedTopicName || null,
+        topic_id: topic_id || null,
+        topic_name: topicName || null,
+        topic_code: topicCode || null,
       };
     });
   },
 
-  async updateCard(id, data, { userId, subject_id, topic_name, topic_id, school_id } = {}) {
+  async updateCard(id, data, { userId, subject_id, topic_name, topic_id, school_id, schoolId } = {}) {
+    const sId = school_id || schoolId;
     return withTransaction(async (client) => {
       const fields = [];
       const values = [];
@@ -500,8 +555,8 @@ const FlashcardsRepository = {
         values.push(id);
         const idIdx = idx++;
         let whereClause = `WHERE id = $${idIdx}`;
-        if (schoolId) {
-          values.push(schoolId);
+        if (sId) {
+          values.push(sId);
           whereClause += ` AND school_id = $${idx++}`;
         }
         const { rows } = await client.query(
@@ -510,36 +565,77 @@ const FlashcardsRepository = {
         );
         card = rows[0];
       } else {
-        const query = schoolId
+        const query = sId
           ? 'SELECT * FROM flashcards WHERE id = $1 AND school_id = $2'
           : 'SELECT * FROM flashcards WHERE id = $1';
-        const params = schoolId ? [id, schoolId] : [id];
+        const params = sId ? [id, sId] : [id];
         const { rows } = await client.query(query, params);
         card = rows[0];
       }
 
       if (!card) return null;
 
-      let resolvedTopicId = topic_id;
-      let resolvedTopicName = topic_name;
+      let resolvedTopicId = card.topic_id;
+      let resolvedTopicName = card.topic_name;
+      let resolvedTopicCode = card.topic_code;
 
-      if (topic_name !== undefined || topic_id !== undefined) {
-        if (!resolvedTopicId && topic_name && subject_id) {
-          const topic = await FlashcardsRepository.findOrCreateTopic({ subjectId: subject_id, name: topic_name, userId, schoolId }, client);
-          if (topic) {
-            resolvedTopicId = topic.id;
-            resolvedTopicName = topic.name;
-          }
+      if (topic_id !== undefined) {
+        await FlashcardsRepository.setCardTopic({ flashcardId: id, topicId: topic_id || null, userId, schoolId: sId }, client);
+        resolvedTopicId = topic_id || null;
+        if (resolvedTopicId) {
+          const topicRes = await client.query(`SELECT id, name, code FROM topics WHERE id = $1`, [resolvedTopicId]);
+          resolvedTopicName = topicRes.rows[0]?.name || null;
+          resolvedTopicCode = topicRes.rows[0]?.code || null;
+        } else {
+          resolvedTopicName = null;
+          resolvedTopicCode = null;
         }
-
-        await FlashcardsRepository.setCardTopic({ flashcardId: id, topicId: resolvedTopicId || null, userId, schoolId }, client);
       }
 
       return {
         ...card,
-        topic_id: resolvedTopicId ?? card.topic_id,
-        topic_name: resolvedTopicName ?? card.topic_name,
+        topic_id: resolvedTopicId,
+        topic_name: resolvedTopicName,
+        topic_code: resolvedTopicCode,
       };
+    });
+  },
+
+  async createCardsBatchWithTopics(cards, { subject_id, userId, school_id }) {
+    return withTransaction(async (client) => {
+      const inserted = [];
+      for (const card of cards) {
+        const { rows } = await client.query(
+          `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position, school_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING *`,
+          [
+            card.deck_id,
+            card.type || 'multiple_choice',
+            card.question,
+            JSON.stringify(card.options || []),
+            card.answer,
+            card.explanation || '',
+            card.difficulty || 'medium',
+            card.position,
+            school_id || card.school_id,
+          ]
+        );
+        const newCard = rows[0];
+
+        if (card.topic_id) {
+          await FlashcardsRepository.setCardTopic({
+            flashcardId: newCard.id,
+            topicId: card.topic_id,
+            userId,
+            schoolId: school_id || card.school_id,
+          }, client);
+          newCard.topic_id = card.topic_id;
+        }
+
+        inserted.push(newCard);
+      }
+      return inserted;
     });
   },
 
@@ -782,51 +878,8 @@ const FlashcardsRepository = {
   },
 
   async createCardsBatch(cards, { subject_id, userId, school_id } = {}) {
-    if (!cards || cards.length === 0) return [];
-    return withTransaction(async (client) => {
-      const inserted = [];
-      for (const card of cards) {
-        const { rows } = await client.query(
-          `INSERT INTO flashcards (deck_id, type, question, options, answer, explanation, difficulty, position, school_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-           RETURNING *`,
-          [
-            card.deck_id,
-            card.type || 'multiple_choice',
-            card.question,
-            JSON.stringify(card.options || []),
-            card.answer,
-            card.explanation || '',
-            card.difficulty || 'medium',
-            card.position,
-            school_id || card.school_id,
-          ]
-        );
-        const newCard = rows[0];
-
-        if (card.topic_name && subject_id) {
-          const topic = await FlashcardsRepository.findOrCreateTopic({
-            subjectId: subject_id,
-            name: card.topic_name,
-            userId,
-            schoolId: school_id || card.school_id
-          }, client);
-          if (topic) {
-            await FlashcardsRepository.setCardTopic({
-              flashcardId: newCard.id,
-              topicId: topic.id,
-              userId,
-              schoolId: school_id || card.school_id
-            }, client);
-            newCard.topic_id = topic.id;
-            newCard.topic_name = topic.name;
-          }
-        }
-
-        inserted.push(newCard);
-      }
-      return inserted;
-    });
+    // Delegate to safe canonical batch insert (no auto topic creation)
+    return FlashcardsRepository.createCardsBatchWithTopics(cards, { subject_id, userId, school_id });
   },
 };
 

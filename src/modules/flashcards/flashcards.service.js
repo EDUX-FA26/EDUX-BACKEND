@@ -1,5 +1,118 @@
+const crypto = require('crypto');
 const ExcelJS = require('exceljs');
 const FlashcardsRepository = require('./flashcards.repository');
+const TopicMatchingService = require('../topics/topicMatching.service');
+
+const memoryPreviewStore = new Map();
+const memoryIdempotencyStore = new Map();
+const activeConfirmLocks = new Set();
+
+let redisClient = null;
+try {
+  const { redis } = require('../../config/redis.config');
+  redisClient = redis;
+} catch (e) {}
+
+async function acquireConfirmLock(lockKey, ttlSeconds = 60) {
+  if (activeConfirmLocks.has(lockKey)) {
+    return false;
+  }
+  activeConfirmLocks.add(lockKey);
+
+  try {
+    if (redisClient && redisClient.isOpen) {
+      const setSuccess = await redisClient.set(`flashcard_lock:${lockKey}`, '1', {
+        NX: true,
+        EX: ttlSeconds,
+      });
+      if (!setSuccess) {
+        activeConfirmLocks.delete(lockKey);
+        return false;
+      }
+    }
+  } catch (e) {}
+
+  return true;
+}
+
+async function releaseConfirmLock(lockKey) {
+  activeConfirmLocks.delete(lockKey);
+  try {
+    if (redisClient && redisClient.isOpen) {
+      await redisClient.del(`flashcard_lock:${lockKey}`);
+    }
+  } catch (e) {}
+}
+
+async function getIdempotencyResult(idempotencyKey) {
+  if (!idempotencyKey) return null;
+  try {
+    if (redisClient && redisClient.isOpen) {
+      const cached = await redisClient.get(`flashcard_import_idempotency:${idempotencyKey}`);
+      if (cached) return JSON.parse(cached);
+    }
+  } catch (e) {}
+  const entry = memoryIdempotencyStore.get(idempotencyKey);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    memoryIdempotencyStore.delete(idempotencyKey);
+    return null;
+  }
+  return entry.result;
+}
+
+async function savePreview(previewId, data, ttlSeconds = 1800) {
+  memoryPreviewStore.set(previewId, { data, expiresAt: Date.now() + ttlSeconds * 1000 });
+  try {
+    if (redisClient && redisClient.isOpen) {
+      await redisClient.setEx(`flashcard_import_preview:${previewId}`, ttlSeconds, JSON.stringify(data));
+    }
+  } catch (e) {}
+}
+
+async function getPreview(previewId) {
+  try {
+    if (redisClient && redisClient.isOpen) {
+      const cached = await redisClient.get(`flashcard_import_preview:${previewId}`);
+      if (cached) return JSON.parse(cached);
+    }
+  } catch (e) {}
+  const entry = memoryPreviewStore.get(previewId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    memoryPreviewStore.delete(previewId);
+    return null;
+  }
+  return entry.data;
+}
+
+async function markPreviewCommitted(previewId, resultData = null, idempotencyKey = null) {
+  const entry = memoryPreviewStore.get(previewId);
+  if (entry) {
+    entry.data.committed = true;
+    if (resultData) entry.data.committedResult = resultData;
+  }
+  if (idempotencyKey && resultData) {
+    memoryIdempotencyStore.set(idempotencyKey, {
+      result: resultData,
+      expiresAt: Date.now() + 86400 * 1000,
+    });
+  }
+  try {
+    if (redisClient && redisClient.isOpen) {
+      const cached = await redisClient.get(`flashcard_import_preview:${previewId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        parsed.committed = true;
+        if (resultData) parsed.committedResult = resultData;
+        await redisClient.setEx(`flashcard_import_preview:${previewId}`, 86400, JSON.stringify(parsed));
+      }
+      if (idempotencyKey && resultData) {
+        await redisClient.setEx(`flashcard_import_idempotency:${idempotencyKey}`, 86400, JSON.stringify(resultData));
+      }
+    }
+  } catch (e) {}
+}
 
 class FlashcardsService {
 
@@ -184,10 +297,32 @@ class FlashcardsService {
       throw new Error('FORBIDDEN');
     }
 
-    const position = data.position ?? (await FlashcardsRepository.getNextPosition(deckId, schoolId));
+    const topicId = data.topicId || data.topic_id;
+    if (!topicId) {
+      const error = new Error('TOPIC_REQUIRED');
+      error.status = 400;
+      throw error;
+    }
 
-    const topicName = data.topicName !== undefined ? data.topicName : (data.topic_name || null);
-    const topicId = data.topicId !== undefined ? data.topicId : (data.topic_id || null);
+    const topic = await FlashcardsRepository.findCanonicalTopicById(topicId, schoolId, deck.subject_id);
+    if (!topic) {
+      const error = new Error('TOPIC_NOT_FOUND');
+      error.status = 404;
+      throw error;
+    }
+
+    if (
+      topic.status !== 'approved' ||
+      topic.review_required === true ||
+      topic.is_active === false ||
+      topic.parent_id !== null
+    ) {
+      const error = new Error('TOPIC_NOT_ELIGIBLE');
+      error.status = 409;
+      throw error;
+    }
+
+    const position = data.position ?? (await FlashcardsRepository.getNextPosition(deckId, schoolId));
 
     return FlashcardsRepository.createCard({
       deck_id: deckId,
@@ -195,11 +330,10 @@ class FlashcardsService {
       question: data.question,
       options: data.options || [],
       answer: data.answer,
-      explanation: data.explanation,
+      explanation: data.explanation || '',
       difficulty: data.difficulty,
       position,
-      topic_name: topicName,
-      topic_id: topicId,
+      topic_id: topic.id,
       userId: user.id,
       subject_id: deck.subject_id,
       school_id: schoolId,
@@ -227,8 +361,58 @@ class FlashcardsService {
       throw new Error('FORBIDDEN');
     }
 
-    const topicName = data.topicName !== undefined ? data.topicName : data.topic_name;
     const topicId = data.topicId !== undefined ? data.topicId : data.topic_id;
+
+    const reviewCount = await FlashcardsRepository.getCardReviewCount(cardId, schoolId);
+    if (reviewCount > 0) {
+      const isTopicChanged = topicId !== undefined && topicId !== card.topic_id;
+      const isQuestionChanged = data.question !== undefined && data.question.trim() !== (card.question || '').trim();
+      const isAnswerChanged = data.answer !== undefined && data.answer.trim() !== (card.answer || '').trim();
+      const isTypeChanged = data.type !== undefined && data.type !== card.type;
+
+      let isOptionsChanged = false;
+      if (data.options !== undefined) {
+        const normExisting = Array.isArray(card.options) ? card.options.map((o) => (typeof o === 'object' && o.text ? String(o.text).trim() : String(o).trim())) : [];
+        const normNew = Array.isArray(data.options) ? data.options.map((o) => (typeof o === 'object' && o.text ? String(o.text).trim() : String(o).trim())) : [];
+        if (normExisting.length !== normNew.length || normExisting.some((opt, i) => opt !== normNew[i])) {
+          isOptionsChanged = true;
+        }
+      }
+
+      if (isTopicChanged && !isQuestionChanged && !isAnswerChanged && !isTypeChanged && !isOptionsChanged) {
+        const error = new Error('CANNOT_CHANGE_TOPIC_WITH_REVIEWS');
+        error.status = 400;
+        throw error;
+      }
+
+      if (isTopicChanged || isQuestionChanged || isAnswerChanged || isTypeChanged || isOptionsChanged) {
+        const error = new Error('CANNOT_MODIFY_REVIEWED_CARD');
+        error.status = 400;
+        throw error;
+      }
+    }
+
+    if (topicId !== undefined && topicId !== card.topic_id) {
+      if (topicId) {
+        const topic = await FlashcardsRepository.findCanonicalTopicById(topicId, schoolId, card.subject_id);
+        if (!topic) {
+          const error = new Error('TOPIC_NOT_FOUND');
+          error.status = 404;
+          throw error;
+        }
+
+        if (
+          topic.status !== 'approved' ||
+          topic.review_required === true ||
+          topic.is_active === false ||
+          topic.parent_id !== null
+        ) {
+          const error = new Error('TOPIC_NOT_ELIGIBLE');
+          error.status = 409;
+          throw error;
+        }
+      }
+    }
 
     const updated = await FlashcardsRepository.updateCard(
       cardId,
@@ -236,7 +420,6 @@ class FlashcardsService {
       {
         userId: user.id,
         subject_id: card.subject_id,
-        topic_name: topicName,
         topic_id: topicId,
         school_id: schoolId,
       }
@@ -377,7 +560,7 @@ class FlashcardsService {
     return workbook;
   }
 
-  async importCardsFromExcel(deckId, fileBuffer, user, tenant, { defaultTopicName } = {}) {
+  async previewCardsFromExcel(deckId, fileBuffer, user, tenant) {
     const schoolId = tenant?.schoolId;
     const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
     if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
@@ -388,16 +571,59 @@ class FlashcardsService {
     }
 
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(fileBuffer);
-    const worksheet = workbook.worksheets[0];
-    if (!worksheet) throw new Error('EMPTY_WORKBOOK');
+    const isZip = fileBuffer.length > 2 && fileBuffer[0] === 0x50 && fileBuffer[1] === 0x4B;
+    if (isZip) {
+      await workbook.xlsx.load(fileBuffer);
+    } else {
+      const { Readable } = require('stream');
+      await workbook.csv.read(Readable.from([fileBuffer.toString('utf8')]));
+    }
 
-    const rawCards = [];
-    const errors = [];
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      const err = new Error('EMPTY_WORKBOOK');
+      err.status = 400;
+      throw err;
+    }
+
+    let colMap = {
+      question: 1,
+      optA: 2,
+      optB: 3,
+      optC: 4,
+      optD: 5,
+      answer: 6,
+      explanation: 7,
+      difficulty: 8,
+      topic: 9,
+    };
+
+    const headerRow = worksheet.getRow(1);
+    if (headerRow) {
+      headerRow.eachCell((cell, colNumber) => {
+        const val = String(cell.value || '').toLowerCase().trim();
+        if (val.includes('câu hỏi') || val.includes('question')) colMap.question = colNumber;
+        else if (val.includes('lựa chọn a') || val === 'a' || val.includes('option a')) colMap.optA = colNumber;
+        else if (val.includes('lựa chọn b') || val === 'b' || val.includes('option b')) colMap.optB = colNumber;
+        else if (val.includes('lựa chọn c') || val === 'c' || val.includes('option c')) colMap.optC = colNumber;
+        else if (val.includes('lựa chọn d') || val === 'd' || val.includes('option d')) colMap.optD = colNumber;
+        else if (val.includes('đáp án') || val.includes('answer') || val.includes('correct')) colMap.answer = colNumber;
+        else if (val.includes('giải thích') || val.includes('explanation')) colMap.explanation = colNumber;
+        else if (val.includes('độ khó') || val.includes('difficulty')) colMap.difficulty = colNumber;
+        else if (val.includes('chủ đề') || val.includes('topic')) colMap.topic = colNumber;
+      });
+    }
+
+    const catalogTopics = await FlashcardsRepository.getApprovedCanonicalTopicsForSubject(
+      schoolId,
+      deck.subject_id
+    );
+
+    const rawParsedRows = [];
     let totalProcessedRows = 0;
 
     worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return; // Header
+      if (rowNumber === 1) return;
 
       const rowValues = Array.isArray(row.values) ? row.values.slice(1) : [];
       const hasAnyValue = rowValues.some((v) => v !== null && v !== undefined && String(v).trim() !== '');
@@ -406,26 +632,27 @@ class FlashcardsService {
       totalProcessedRows++;
 
       const getCellText = (colIndex) => {
+        if (!colIndex) return '';
         const val = row.getCell(colIndex).value;
         if (val === null || val === undefined) return '';
         if (typeof val === 'object' && val.text) return String(val.text).trim();
         return String(val).trim();
       };
 
-      const question = getCellText(1);
-      const optA = getCellText(2);
-      const optB = getCellText(3);
-      const optC = getCellText(4);
-      const optD = getCellText(5);
-      const rawAns = getCellText(6);
-      const explanation = getCellText(7);
-      const rawDiff = getCellText(8).toLowerCase();
-      const topicName = getCellText(9) || defaultTopicName || null;
+      const question = getCellText(colMap.question);
+      const optA = getCellText(colMap.optA);
+      const optB = getCellText(colMap.optB);
+      const optC = getCellText(colMap.optC);
+      const optD = getCellText(colMap.optD);
+      const rawAns = getCellText(colMap.answer);
+      const explanation = getCellText(colMap.explanation);
+      const rawDiff = getCellText(colMap.difficulty).toLowerCase();
+      const rawTopic = getCellText(colMap.topic);
 
-      const rowErrors = [];
-      if (!question) rowErrors.push('Thiếu câu hỏi');
-      if (!optA || !optB) rowErrors.push('Cần ít nhất 2 lựa chọn (A và B)');
-      if (!rawAns) rowErrors.push('Thiếu đáp án đúng');
+      const validationErrors = [];
+      if (!question) validationErrors.push('Thiếu nội dung câu hỏi');
+      if (!optA || !optB) validationErrors.push('Cần ít nhất 2 lựa chọn (A và B)');
+      if (!rawAns) validationErrors.push('Thiếu đáp án đúng');
 
       let difficulty = 'medium';
       if (['easy', 'medium', 'hard'].includes(rawDiff)) {
@@ -444,63 +671,337 @@ class FlashcardsService {
         const found = options.find((o) => o.key === upperAns);
         if (found) {
           resolvedAnswer = found.text;
+        } else {
+          validationErrors.push(`Đáp án '${upperAns}' không tương ứng với lựa chọn nào`);
+        }
+      } else {
+        const matchingOpts = options.filter(
+          (o) => o.text.trim().toLowerCase() === rawAns.trim().toLowerCase()
+        );
+        if (matchingOpts.length === 1) {
+          resolvedAnswer = matchingOpts[0].text;
+        } else if (matchingOpts.length === 0 && rawAns) {
+          validationErrors.push('Đáp án đúng không khớp với bất kỳ lựa chọn nào trong các phương án A-D');
         }
       }
 
-      if (rowErrors.length > 0) {
-        errors.push({ row: rowNumber, errors: rowErrors });
-        return;
-      }
-
-      rawCards.push({
+      rawParsedRows.push({
+        rowNumber,
         question,
         options,
         answer: resolvedAnswer,
         explanation,
         difficulty,
-        topic_name: topicName,
+        rawTopic: rawTopic || '',
+        validationErrors,
       });
     });
 
-    if (rawCards.length === 0) {
-      return {
-        success: false,
-        message: 'Không tìm thấy dòng dữ liệu hợp lệ nào để nhập.',
-        total_rows: totalProcessedRows,
-        imported_count: 0,
-        errors,
-        cards: [],
-      };
+    const rows = [];
+    for (const item of rawParsedRows) {
+      const matchResult = await TopicMatchingService.matchTopic({
+        rawTopic: item.rawTopic,
+        question: item.question,
+        answer: item.answer,
+        explanation: item.explanation,
+        catalogTopics,
+        limit: 3,
+        useAI: false, // Excel batch preview dùng Tier A + Tier B thuần deterministic / lexical
+      });
+
+      rows.push({
+        rowNumber: item.rowNumber,
+        question: item.question,
+        options: item.options,
+        answer: item.answer,
+        explanation: item.explanation,
+        difficulty: item.difficulty,
+        rawTopic: item.rawTopic,
+        validationErrors: item.validationErrors,
+        candidates: matchResult.candidates || [],
+        suggestedTopicId: matchResult.suggestedTopicId || null,
+        confirmedTopicId: null, // Bắt buộc Lecturer phải xác nhận!
+        matchType: matchResult.candidates[0]?.matchType || matchResult.status || 'no_match',
+        isAmbiguous: matchResult.isAmbiguous || false,
+        matchReason: matchResult.candidates[0]?.reason || matchResult.reason || '',
+      });
     }
 
-    let nextPos = await FlashcardsRepository.getNextPosition(deckId, schoolId);
-    const cardsToInsert = rawCards.map((c) => ({
-      deck_id: deckId,
-      type: 'multiple_choice',
-      question: c.question,
-      options: c.options,
-      answer: c.answer,
-      explanation: c.explanation,
-      difficulty: c.difficulty,
-      position: nextPos++,
-      topic_name: c.topic_name,
-      school_id: schoolId,
-    }));
+    if (rows.length === 0) {
+      const err = new Error('EMPTY_IMPORT_DATA');
+      err.status = 400;
+      err.message = 'Không tìm thấy dòng câu hỏi hợp lệ nào trong file Excel';
+      throw err;
+    }
 
-    const inserted = await FlashcardsRepository.createCardsBatch(cardsToInsert, {
-      subject_id: deck.subject_id,
+    const previewId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 1800 * 1000).toISOString();
+
+    const previewData = {
+      previewId,
+      deckId,
+      schoolId,
       userId: user.id,
-      school_id: schoolId,
+      subjectId: deck.subject_id,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+      rows,
+      totalRows: totalProcessedRows,
+    };
+
+    await savePreview(previewId, previewData, 1800);
+
+    const validRowsCount = rows.filter((r) => r.validationErrors.length === 0).length;
+    const invalidRowsCount = rows.filter((r) => r.validationErrors.length > 0).length;
+
+    return {
+      previewId,
+      expiresAt,
+      totalRows: totalProcessedRows,
+      validRowsCount,
+      invalidRowsCount,
+      rows,
+      catalogTopics,
+    };
+  }
+
+  async getTopicSuggestions(deckId, { rawTopic = '', question = '', answer = '', limit = 3 }, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
+      throw new Error('FORBIDDEN');
+    }
+
+    const catalogTopics = await FlashcardsRepository.getApprovedCanonicalTopicsForSubject(
+      schoolId,
+      deck.subject_id
+    );
+
+    const matchResult = await TopicMatchingService.matchTopic({
+      rawTopic,
+      question,
+      answer,
+      catalogTopics,
+      limit,
+      useAI: true,
     });
 
     return {
-      success: true,
-      message: `Đã nhập thành công ${inserted.length}/${totalProcessedRows} thẻ từ file Excel`,
-      total_rows: totalProcessedRows,
-      imported_count: inserted.length,
-      errors,
-      cards: inserted,
+      status: matchResult.status,
+      confirmedTopicId: null,
+      suggestedTopicId: matchResult.suggestedTopicId,
+      isAmbiguous: matchResult.isAmbiguous,
+      candidates: matchResult.candidates,
+      reason: matchResult.reason,
     };
+  }
+
+  async confirmCardsImport(deckId, { previewId, rows, idempotencyKey }, user, tenant) {
+    const schoolId = tenant?.schoolId;
+    const deck = await FlashcardsRepository.findDeckById(deckId, schoolId);
+    if (!deck || !deck.is_active) throw new Error('DECK_NOT_FOUND');
+
+    const role = tenant?.role || user?.role;
+    if (role !== 'school_admin' && role !== 'admin' && deck.created_by !== user.id) {
+      throw new Error('FORBIDDEN');
+    }
+
+    const preview = await getPreview(previewId);
+    if (!preview) {
+      const err = new Error('PREVIEW_EXPIRED');
+      err.status = 410;
+      err.message = 'Phiên xem trước đã hết hạn hoặc không tồn tại. Vui lòng tải lại file Excel.';
+      throw err;
+    }
+
+    if (preview.schoolId !== schoolId || preview.userId !== user.id) {
+      const err = new Error('PREVIEW_ACCESS_DENIED: Bạn không có quyền truy cập phiên xem trước này');
+      err.code = 'PREVIEW_ACCESS_DENIED';
+      err.status = 403;
+      throw err;
+    }
+
+    if (preview.deckId !== deckId) {
+      const err = new Error('PREVIEW_DECK_MISMATCH: Phiên xem trước không thuộc bộ thẻ này');
+      err.code = 'PREVIEW_DECK_MISMATCH';
+      err.status = 403;
+      throw err;
+    }
+
+    if (idempotencyKey) {
+      const cached = await getIdempotencyResult(idempotencyKey);
+      if (cached) {
+        return {
+          success: true,
+          alreadyCommitted: true,
+          idempotent: true,
+          message: 'Dữ liệu đã được import thành công trước đó (Idempotent)',
+          ...cached,
+        };
+      }
+    }
+
+    if (preview.committed) {
+      const resultData = preview.committedResult || {
+        importedCount: preview.rows?.length || 0,
+      };
+      return {
+        success: true,
+        alreadyCommitted: true,
+        idempotent: true,
+        message: 'Dữ liệu đã được import thành công trước đó (Idempotent)',
+        ...resultData,
+      };
+    }
+
+    const lockKey = `confirm:${previewId}`;
+    const acquired = await acquireConfirmLock(lockKey, 60);
+    if (!acquired) {
+      const err = new Error('CONFIRM_IN_PROGRESS: Yêu cầu import đang được xử lý, vui lòng chờ trong giây lát.');
+      err.code = 'CONFIRM_IN_PROGRESS';
+      err.status = 409;
+      throw err;
+    }
+
+    try {
+      const validPreviewRows = preview.rows.filter(
+        (r) => !r.validationErrors || r.validationErrors.length === 0
+      );
+      const validRowNumbersSet = new Set(validPreviewRows.map((r) => r.rowNumber));
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        const err = new Error('ROW_TOPIC_MISSING: Danh sách xác nhận Topic rỗng');
+        err.code = 'ROW_TOPIC_MISSING';
+        err.status = 422;
+        throw err;
+      }
+
+      const seenRowNumbers = new Set();
+      const rowConfirmMap = new Map();
+
+      for (const item of rows) {
+        if (!item || typeof item.rowNumber !== 'number') {
+          const err = new Error('INVALID_ROW_FORMAT: Định dạng dòng xác nhận không hợp lệ');
+          err.code = 'INVALID_ROW_FORMAT';
+          err.status = 422;
+          throw err;
+        }
+
+        if (seenRowNumbers.has(item.rowNumber)) {
+          const err = new Error(`DUPLICATE_ROW_NUMBER: Dòng ${item.rowNumber} bị gửi trùng lặp trong danh sách xác nhận`);
+          err.code = 'DUPLICATE_ROW_NUMBER';
+          err.status = 422;
+          throw err;
+        }
+        seenRowNumbers.add(item.rowNumber);
+
+        if (!validRowNumbersSet.has(item.rowNumber)) {
+          const err = new Error(`INVALID_ROW_NUMBER: Dòng ${item.rowNumber} không tồn tại hoặc có lỗi trong phiên xem trước`);
+          err.code = 'INVALID_ROW_NUMBER';
+          err.status = 422;
+          throw err;
+        }
+
+        if (!item.topicId) {
+          const err = new Error(`ROW_TOPIC_MISSING: Dòng ${item.rowNumber} chưa được chọn Topic chuẩn`);
+          err.code = 'ROW_TOPIC_MISSING';
+          err.status = 422;
+          throw err;
+        }
+
+        rowConfirmMap.set(item.rowNumber, item.topicId);
+      }
+
+      if (seenRowNumbers.size !== validPreviewRows.length) {
+        const missingRowNumbers = validPreviewRows
+          .filter((r) => !seenRowNumbers.has(r.rowNumber))
+          .map((r) => r.rowNumber);
+        const err = new Error(`ROW_TOPIC_MISSING: Còn thiếu xác nhận Topic cho các dòng: ${missingRowNumbers.join(', ')}`);
+        err.code = 'ROW_TOPIC_MISSING';
+        err.status = 422;
+        throw err;
+      }
+
+      const uniqueTopicIds = Array.from(new Set(Array.from(rowConfirmMap.values())));
+      const topicCheckMap = new Map();
+
+      for (const tid of uniqueTopicIds) {
+        const t = await FlashcardsRepository.findCanonicalTopicById(tid, schoolId, deck.subject_id);
+        if (
+          !t ||
+          t.status !== 'approved' ||
+          t.review_required === true ||
+          t.is_active === false ||
+          t.parent_id !== null
+        ) {
+          const err = new Error('TOPIC_NOT_ELIGIBLE');
+          err.status = 409;
+          throw err;
+        }
+        topicCheckMap.set(tid, t);
+      }
+
+      const validCardsToInsert = [];
+      let nextPos = await FlashcardsRepository.getNextPosition(deckId, schoolId);
+
+      for (const r of validPreviewRows) {
+        const confirmedTid = rowConfirmMap.get(r.rowNumber);
+
+        validCardsToInsert.push({
+          deck_id: deckId,
+          type: 'multiple_choice',
+          question: r.question,
+          options: r.options,
+          answer: r.answer,
+          explanation: r.explanation || '',
+          difficulty: r.difficulty || 'medium',
+          position: nextPos++,
+          topic_id: confirmedTid,
+          school_id: schoolId,
+        });
+      }
+
+      if (validCardsToInsert.length === 0) {
+        const err = new Error('NO_VALID_CARDS');
+        err.status = 400;
+        err.message = 'Không có câu hỏi hợp lệ nào để import';
+        throw err;
+      }
+
+      const inserted = await FlashcardsRepository.createCardsBatchWithTopics(validCardsToInsert, {
+        subject_id: deck.subject_id,
+        userId: user.id,
+        school_id: schoolId,
+      });
+
+      const resultPayload = {
+        importedCount: inserted.length,
+        cards: inserted,
+      };
+
+      await markPreviewCommitted(previewId, resultPayload, idempotencyKey);
+
+      return {
+        success: true,
+        message: `Đã nhập thành công ${inserted.length} thẻ Flashcard`,
+        ...resultPayload,
+      };
+    } finally {
+      await releaseConfirmLock(lockKey);
+    }
+  }
+
+  async importCardsFromExcel(deckId, fileBuffer, user, tenant, { preview = false } = {}) {
+    if (preview) {
+      return this.previewCardsFromExcel(deckId, fileBuffer, user, tenant);
+    }
+    const err = new Error('DIRECT_IMPORT_DEPRECATED: Luồng import Flashcard yêu cầu xem trước và xác nhận Canonical Topic (Preview & Confirm). Vui lòng dùng endpoint /import/preview và /import/confirm.');
+    err.code = 'DIRECT_IMPORT_DEPRECATED';
+    err.status = 400;
+    throw err;
   }
 
   // ─────────────────────────────────────────────

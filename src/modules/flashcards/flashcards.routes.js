@@ -13,6 +13,8 @@ const {
   createCard,
   updateCard,
   submitReview,
+  confirmImport,
+  topicSuggestions,
 } = require('./flashcards.validation');
 
 // Toàn bộ routes yêu cầu đăng nhập và xác thực trường học
@@ -45,8 +47,25 @@ const upload = multer({
 
 // GET  /api/flashcards/template/excel               — Tải file Excel mẫu
 router.get('/template/excel', ctrl.downloadExcelTemplate);
+router.get('/decks/:deckId/import/template', ctrl.downloadExcelTemplate);
 
-// POST /api/flashcards/decks/:deckId/cards/import-excel — Import cards từ file Excel
+// POST /api/flashcards/decks/:deckId/import/preview — Upload Excel & Preview
+router.post(
+  '/decks/:deckId/import/preview',
+  authorizeWrite,
+  upload.single('file'),
+  ctrl.previewImport
+);
+
+// POST /api/flashcards/decks/:deckId/import/confirm — Confirm và lưu cards
+router.post(
+  '/decks/:deckId/import/confirm',
+  authorizeWrite,
+  validate(confirmImport),
+  ctrl.confirmImport
+);
+
+// POST /api/flashcards/decks/:deckId/cards/import-excel — Import cards từ file Excel (hỗ trợ cả preview query)
 router.post(
   '/decks/:deckId/cards/import-excel',
   authorizeWrite,
@@ -84,6 +103,14 @@ router.put('/decks/:deckId/class-access', authorizeWrite, ctrl.setClassAccess);
 
 // POST   /api/flashcards/decks/:deckId/cards — UC66 Tạo card
 router.post('/decks/:deckId/cards', authorizeWrite, validate(createCard), ctrl.createCard);
+
+// POST   /api/flashcards/decks/:deckId/topic-suggestions — Gợi ý Canonical Topic theo ngữ cảnh
+router.post(
+  '/decks/:deckId/topic-suggestions',
+  authorizeWrite,
+  validate(topicSuggestions),
+  ctrl.getTopicSuggestions
+);
 
 // POST   /api/flashcards/decks/:deckId/complete — Hoàn thành flashcard deck (tăng streak)
 router.post('/decks/:deckId/complete', ctrl.completeDeck);
