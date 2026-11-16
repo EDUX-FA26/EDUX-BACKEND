@@ -53,7 +53,30 @@ const ClassesRepository = {
       s.code AS subject_code,
       sem.name AS semester_name,
       sem.code AS semester_code,
-      u.full_name AS lecturer_name
+      u.full_name AS lecturer_name,
+      (
+        SELECT COUNT(*)::int
+        FROM sessions ses
+        WHERE ses.class_id = c.id
+          AND ses.school_id = c.school_id
+      ) AS total_slots,
+      COALESCE(
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', ses.id,
+              'slot_number', ses.session_no,
+              'title', ses.title,
+              'date', ses.learning_date,
+              'time', COALESCE(ses.slot_time, '09:30-11:45')
+            ) ORDER BY ses.session_no ASC
+          )
+          FROM sessions ses
+          WHERE ses.class_id = c.id
+            AND ses.school_id = c.school_id
+        ),
+        '[]'::json
+      ) AS slots
     FROM classes c
     JOIN subjects s
       ON c.subject_id = s.id
