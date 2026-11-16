@@ -1,8 +1,10 @@
 const router = require('express').Router();
 const controller = require('./forum.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
 
 router.use(authenticate);
+router.use(requireSchoolContext);
 router.get('/schools', controller.schools);
 router.get('/stats/me', controller.stats);
 router.get('/posts', controller.list);
