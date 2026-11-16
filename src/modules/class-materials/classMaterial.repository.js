@@ -48,17 +48,32 @@ const ClassMaterialRepository = {
   },
 
   /**
-   * Tạo mới tài liệu lớp
+   * Lấy danh sách tài liệu của một buổi học (slot) theo school_id
    */
-  async create({ school_id, class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by }) {
+  async findBySlotId(slotId, schoolId) {
+    const query = `
+      SELECT cm.*, up.full_name AS uploaded_by_name
+      FROM class_materials cm
+      LEFT JOIN user_profiles up ON cm.uploaded_by = up.user_id
+      WHERE cm.slot_id = $1 AND cm.school_id = $2
+      ORDER BY cm.created_at ASC
+    `;
+    const { rows } = await pool.query(query, [slotId, schoolId]);
+    return rows;
+  },
+
+  /**
+   * Tạo mới tài liệu lớp / slot
+   */
+  async create({ school_id, class_id, slot_id = null, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by }) {
     const query = `
       INSERT INTO class_materials
-        (school_id, class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        (school_id, class_id, slot_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `;
     const { rows } = await pool.query(query, [
-      school_id, class_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by
+      school_id, class_id, slot_id, title, description, file_name, file_key, file_type, file_size, is_private, uploaded_by
     ]);
     return rows[0];
   },

@@ -56,12 +56,62 @@ const ClassMaterialController = {
   },
 
   /**
+   * UC-MATERIAL-UPLOAD-AND-PREVIEW — POST /api/lecturer/slots/:slotId/materials
+   * Upload tài liệu gắn với Slot buổi học
+   */
+  async uploadSlotMaterial(req, res, next) {
+    try {
+      const { slotId } = req.params;
+      if (!req.file) {
+        return res.status(400).json({ success: false, message: 'No file uploaded' });
+      }
+      const material = await ClassMaterialService.uploadSlotMaterial(slotId, req.body, req.file, req.tenant);
+      res.status(201).json({ success: true, data: material });
+    } catch (error) {
+      if (error.message === 'SLOT_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Slot not found' });
+      }
+      if (error.message === 'CLASS_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Class not found' });
+      }
+      if (error.message === 'FORBIDDEN') {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+      next(error);
+    }
+  },
+
+  /**
+   * UC-MATERIAL-UPLOAD-AND-PREVIEW — GET /api/classes/:classId/slots/:slotId/materials hoặc GET /api/slots/:slotId/materials
+   * Lấy danh sách tài liệu gắn với Slot
+   */
+  async listSlotMaterials(req, res, next) {
+    try {
+      const { slotId } = req.params;
+      const materials = await ClassMaterialService.listSlotMaterials(slotId, req.tenant);
+      res.status(200).json({ success: true, data: materials });
+    } catch (error) {
+      if (error.message === 'SLOT_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Slot not found' });
+      }
+      if (error.message === 'CLASS_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Class not found' });
+      }
+      if (error.message === 'FORBIDDEN') {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+      next(error);
+    }
+  },
+
+  /**
    * UC17 — GET /api/materials/classes/:id
    * Lấy chi tiết 1 tài liệu lớp
    */
   async getMaterialById(req, res, next) {
     try {
-      const material = await ClassMaterialService.getMaterialById(req.params.id, req.tenant);
+      const materialId = req.params.materialId || req.params.id;
+      const material = await ClassMaterialService.getMaterialById(materialId, req.tenant);
       res.status(200).json({ success: true, data: material });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
@@ -83,7 +133,8 @@ const ClassMaterialController = {
    */
   async updateMaterial(req, res, next) {
     try {
-      const updated = await ClassMaterialService.updateMaterial(req.params.id, req.body, req.tenant);
+      const materialId = req.params.materialId || req.params.id;
+      const updated = await ClassMaterialService.updateMaterial(materialId, req.body, req.tenant);
       res.status(200).json({ success: true, data: updated });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
@@ -105,7 +156,8 @@ const ClassMaterialController = {
    */
   async deleteMaterial(req, res, next) {
     try {
-      const deleted = await ClassMaterialService.deleteMaterial(req.params.id, req.tenant);
+      const materialId = req.params.materialId || req.params.id;
+      const deleted = await ClassMaterialService.deleteMaterial(materialId, req.tenant);
       res.status(200).json({ success: true, message: 'Material deleted successfully', data: deleted });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
@@ -127,7 +179,8 @@ const ClassMaterialController = {
    */
   async downloadMaterial(req, res, next) {
     try {
-      const result = await ClassMaterialService.downloadMaterial(req.params.id, req.tenant);
+      const materialId = req.params.materialId || req.params.id;
+      const result = await ClassMaterialService.downloadMaterial(materialId, req.tenant);
       res.status(200).json({ success: true, data: result });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {

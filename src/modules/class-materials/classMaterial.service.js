@@ -81,17 +81,80 @@ const ClassMaterialService = {
     const material = await ClassMaterialRepository.create({
       school_id: tenant.schoolId,
       class_id: classId,
+      slot_id: body.slot_id || null,
       title: body.title,
       description: body.description || '',
       file_name: file.originalname,
       file_key: fileKey,
       file_type: file.mimetype,
       file_size: file.size,
-      is_private: body.is_private !== undefined ? body.is_private : true,
+      is_private: body.is_private !== undefined ? body.is_private : false,
       uploaded_by: tenant.userId,
     });
 
     return material;
+  },
+
+  /**
+   * UC-MATERIAL-UPLOAD-AND-PREVIEW — Upload tài liệu gắn với một buổi học (Slot / Session)
+   */
+  async uploadSlotMaterial(slotId, body, file, tenant) {
+    const { rows: sessionRows } = await pool.query(
+      'SELECT id, class_id, school_id FROM sessions WHERE id = $1 AND school_id = $2',
+      [slotId, tenant.schoolId]
+    );
+    const session = sessionRows[0];
+    if (!session) throw new Error('SLOT_NOT_FOUND');
+
+    await verifyClassAccess(session.class_id, tenant);
+
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
+      throw new Error('FORBIDDEN');
+    }
+
+    const fileKey = `class-materials/slots/${slotId}/${uuidv4()}_${file.originalname}`;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: fileKey,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+      })
+    );
+
+    const material = await ClassMaterialRepository.create({
+      school_id: tenant.schoolId,
+      class_id: session.class_id,
+      slot_id: slotId,
+      title: body.title || file.originalname,
+      description: body.description || '',
+      file_name: file.originalname,
+      file_key: fileKey,
+      file_type: file.mimetype,
+      file_size: file.size,
+      is_private: false,
+      uploaded_by: tenant.userId,
+    });
+
+    return material;
+  },
+
+  /**
+   * UC-MATERIAL-UPLOAD-AND-PREVIEW — Lấy danh sách tài liệu của một buổi học (Slot / Session)
+   */
+  async listSlotMaterials(slotId, tenant) {
+    const { rows: sessionRows } = await pool.query(
+      'SELECT id, class_id, school_id FROM sessions WHERE id = $1 AND school_id = $2',
+      [slotId, tenant.schoolId]
+    );
+    const session = sessionRows[0];
+    if (!session) throw new Error('SLOT_NOT_FOUND');
+
+    await verifyClassAccess(session.class_id, tenant);
+
+    const materials = await ClassMaterialRepository.findBySlotId(slotId, tenant.schoolId);
+    return materials;
   },
 
   /**
@@ -149,7 +212,7 @@ const ClassMaterialService = {
   },
 
   /**
-   * UC18 — Tải xuống tài liệu lớp (presigned URL)
+   * UC18 — Tải xuống / Xem trước tài liệu lớp (presigned URL)
    */
   async downloadMaterial(materialId, tenant) {
     const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
@@ -157,18 +220,30 @@ const ClassMaterialService = {
 
     await verifyClassAccess(material.class_id, tenant);
 
-    const command = new GetObjectCommand({
+    const safeFileName = encodeURIComponent(material.file_name);
+
+    const downloadCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `attachment; filename="${material.file_name}"`,
+      ResponseContentDisposition: `attachment; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
     });
 
-    // Presigned URL có hiệu lực 15 phút
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    const previewCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: material.file_key,
+      ResponseContentDisposition: `inline; filename="${material.file_name}"; filename*=UTF-8''${safeFileName}`,
+      ResponseContentType: material.file_type || 'application/octet-stream',
+    });
+
+    const [downloadUrl, previewUrl] = await Promise.all([
+      getSignedUrl(s3, downloadCommand, { expiresIn: 900 }),
+      getSignedUrl(s3, previewCommand, { expiresIn: 900 }),
+    ]);
 
     return {
-      url: presignedUrl,
-      download_url: presignedUrl,
+      url: downloadUrl,
+      download_url: downloadUrl,
+      preview_url: previewUrl,
       file_name: material.file_name,
       file_type: material.file_type,
       file_size: material.file_size,

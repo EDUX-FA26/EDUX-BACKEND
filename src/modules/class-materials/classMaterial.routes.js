@@ -74,5 +74,73 @@ materialIdRouter.delete(
   classMaterialController.deleteMaterial
 );
 
-module.exports = { classIdRouter, materialIdRouter };
+// -----------------------------------------------------------------------
+// Router C: routes gắn vào /api/slots và /api/classes/:classId/slots
+// -----------------------------------------------------------------------
+const slotMaterialsRouter = express.Router({ mergeParams: true });
+slotMaterialsRouter.use(authenticate, requireSchoolContext);
+
+// GET  /api/slots/:slotId/materials (hoặc /api/classes/:classId/slots/:slotId/materials)
+slotMaterialsRouter.get(
+  '/:slotId/materials',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
+  classMaterialController.listSlotMaterials
+);
+
+// POST /api/slots/:slotId/materials (hoặc /api/classes/:classId/slots/:slotId/materials)
+slotMaterialsRouter.post(
+  '/:slotId/materials',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  upload.single('file'),
+  classMaterialController.uploadSlotMaterial
+);
+
+// -----------------------------------------------------------------------
+// Router D: routes gắn vào /api/lecturer/slots
+// -----------------------------------------------------------------------
+const lecturerSlotsRouter = express.Router({ mergeParams: true });
+lecturerSlotsRouter.use(authenticate, requireSchoolContext);
+
+// POST /api/lecturer/slots/:slotId/materials
+lecturerSlotsRouter.post(
+  '/:slotId/materials',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  upload.single('file'),
+  classMaterialController.uploadSlotMaterial
+);
+
+// GET  /api/lecturer/slots/:slotId/materials
+lecturerSlotsRouter.get(
+  '/:slotId/materials',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  classMaterialController.listSlotMaterials
+);
+
+// -----------------------------------------------------------------------
+// Router E: routes gắn vào /api/lecturer/materials
+// -----------------------------------------------------------------------
+const lecturerMaterialsRouter = express.Router();
+lecturerMaterialsRouter.use(authenticate, requireSchoolContext);
+
+// DELETE /api/lecturer/materials/:materialId
+lecturerMaterialsRouter.delete(
+  '/:materialId',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  classMaterialController.deleteMaterial
+);
+
+// GET    /api/lecturer/materials/:materialId/download
+lecturerMaterialsRouter.get(
+  '/:materialId/download',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  classMaterialController.downloadMaterial
+);
+
+module.exports = {
+  classIdRouter,
+  materialIdRouter,
+  slotMaterialsRouter,
+  lecturerSlotsRouter,
+  lecturerMaterialsRouter,
+};
 
