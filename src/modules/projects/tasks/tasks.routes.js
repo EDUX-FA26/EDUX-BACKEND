@@ -23,94 +23,77 @@ const controller = require("./tasks.controller");
 // Chỉ sinh viên thuộc Project mới được thao tác.
 // Kiểm tra membership cụ thể nằm trong Service.
 
-router.use(
-    authorizeSchoolRoles("student")
-);
 
 // ==========================================
-// TASK LIST
+// READ-ONLY ROUTES
+// Student / Lecturer / School Admin
 // ==========================================
 
-// GET /api/projects/:projectId/tasks
 router.get(
     "/",
+    authorizeSchoolRoles(
+        "student",
+        "lecturer",
+        "school_admin"
+    ),
     controller.getTasks
 );
 
-// ==========================================
-// CREATE TASK
-// ==========================================
-
-// POST /api/projects/:projectId/tasks
-router.post(
-    "/",
-    controller.createTask
-);
-
-// ==========================================
-// KANBAN REORDER
-// ==========================================
-
-// PATCH /api/projects/:projectId/tasks/reorder
-router.patch(
-    "/reorder",
-    controller.reorderTasks
-);
-
-// ==========================================
-// TASK DETAIL
-// ==========================================
-
-// GET /api/projects/:projectId/tasks/:taskId
 router.get(
     "/:taskId",
+    authorizeSchoolRoles(
+        "student",
+        "lecturer",
+        "school_admin"
+    ),
     controller.getTask
 );
 
 // ==========================================
-// UPDATE TASK
+// STUDENT WRITE ROUTES
 // ==========================================
 
-// PATCH /api/projects/:projectId/tasks/:taskId
+router.post(
+    "/",
+    authorizeSchoolRoles("student"),
+    controller.createTask
+);
+
+router.patch(
+    "/reorder",
+    authorizeSchoolRoles("student"),
+    controller.reorderTasks
+);
+
 router.patch(
     "/:taskId",
+    authorizeSchoolRoles("student"),
     controller.updateTask
 );
 
-// ==========================================
-// ASSIGN TASK
-// ==========================================
-
-// PATCH /api/projects/:projectId/tasks/:taskId/assignee
 router.patch(
     "/:taskId/assignee",
+    authorizeSchoolRoles("student"),
     controller.assignTask
 );
 
-// ==========================================
-// UPDATE TASK STATUS
-// ==========================================
-
-// PATCH /api/projects/:projectId/tasks/:taskId/status
 router.patch(
     "/:taskId/status",
+    authorizeSchoolRoles("student"),
     controller.updateTaskStatus
 );
 
-// PATCH /api/projects/:projectId/tasks/:taskId/move
 router.patch(
     "/:taskId/move",
+    authorizeSchoolRoles("student"),
     controller.moveTask
 );
 
-// ==========================================
-// DELETE TASK
-// ==========================================
-
-// DELETE /api/projects/:projectId/tasks/:taskId
 router.delete(
     "/:taskId",
+    authorizeSchoolRoles("student"),
     controller.deleteTask
 );
+
 
 module.exports = router;
