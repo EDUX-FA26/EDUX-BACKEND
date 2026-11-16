@@ -194,6 +194,10 @@ const SubmissionRepository = {
         smp.student_code AS student_code,
         u.email as student_email,
         a.title as assignment_title,
+        a.class_id,
+        c.subject_id,
+        s_subj.name as subject_name,
+        s_subj.code as subject_code,
         g.id as grade_id,
         g.score,
         g.max_score,
@@ -212,6 +216,8 @@ const SubmissionRepository = {
   ON smp.user_id = s.student_id
  AND smp.school_id = s.school_id
       LEFT JOIN assignments a ON s.assignment_id = a.id AND a.school_id = s.school_id
+      LEFT JOIN classes c ON a.class_id = c.id AND c.school_id = s.school_id
+      LEFT JOIN subjects s_subj ON c.subject_id = s_subj.id
       LEFT JOIN LATERAL (
         SELECT id, score, max_score, feedback, rubrics
         FROM grades
@@ -245,6 +251,26 @@ const SubmissionRepository = {
     if (submission.ai_viva_questions && typeof submission.ai_viva_questions === 'string') {
       try { submission.ai_viva_questions = JSON.parse(submission.ai_viva_questions); } catch (e) { }
     }
+
+    let courseTopics = [];
+    if (submission.subject_id) {
+      try {
+        const topicQuery = `
+          SELECT id, subject_id, name, description, parent_id, is_active
+          FROM topics
+          WHERE subject_id = $1 AND is_active = TRUE AND school_id = $2
+          ORDER BY name ASC
+        `;
+        const { rows: tRows } = await pool.query(topicQuery, [submission.subject_id, schoolId]);
+        courseTopics = tRows || [];
+      } catch (err) {
+        courseTopics = [];
+      }
+    }
+    submission.course_topics = courseTopics;
+    submission.has_course_topics = courseTopics.length > 0;
+    submission.recommended_topics =
+      submission.ai_evaluation_data?.recommended_topics || [];
 
     let versionQuery = `SELECT * FROM submission_versions WHERE submission_id = $1 AND school_id = $2`;
     if (!includeHistory) {

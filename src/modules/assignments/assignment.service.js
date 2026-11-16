@@ -353,11 +353,29 @@ const AssignmentService = {
       course: subjectObj
     };
 
+    let courseTopics = [];
+    if (assignment.subject_id) {
+      try {
+        const topicQuery = `
+          SELECT id, subject_id, name, description, parent_id, is_active
+          FROM topics
+          WHERE subject_id = $1 AND is_active = TRUE AND school_id = $2
+          ORDER BY name ASC
+        `;
+        const { rows: tRows } = await pool.query(topicQuery, [assignment.subject_id, tenant.schoolId]);
+        courseTopics = tRows || [];
+      } catch (err) {
+        courseTopics = [];
+      }
+    }
+
     return {
       ...assignment,
       class_name: assignment.class_code,
       course_name: assignment.subject_name,
       course_code: assignment.subject_code,
+      course_topics: courseTopics,
+      has_course_topics: courseTopics.length > 0,
       class: classObj,
       subject: subjectObj,
       course: subjectObj,

@@ -378,6 +378,12 @@ const GradingService = {
             cachedData.audit_integrity.risk_level = rLevel === 'high' ? 'HIGH_RISK' : (rLevel === 'medium' ? 'MEDIUM_RISK' : 'LOW_RISK');
           }
 
+          cachedData.course_topics = auditData.courseTopics || [];
+          cachedData.has_course_topics = Boolean(auditData.hasCourseTopics);
+          if (!cachedData.recommended_topics) {
+            cachedData.recommended_topics = [];
+          }
+
           console.log(`[ART-AI] Returning locked evaluation snapshot from DB for submission ${submissionId}`);
           return cachedData;
         }
@@ -637,6 +643,7 @@ const GradingService = {
         activeRubrics: finalActiveRubrics,
         rubricConfigs: finalActiveRubrics,
         aiDeclarationRequired: isAiRequired,
+        courseTopics: auditData.courseTopics || [],
       });
     } catch (evalErr) {
       console.warn(`[ART-AI] evaluateRubricWithGemini thất bại (${evalErr.status || evalErr.message}). Tự động kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng...`);
@@ -647,11 +654,18 @@ const GradingService = {
         activeRubrics: finalActiveRubrics,
         rubricConfigs: finalActiveRubrics,
         aiDeclarationRequired: isAiRequired,
+        courseTopics: auditData.courseTopics || [],
       });
     }
 
     // BƯỚC 3: CƠ CHẾ PHÒNG VỆ HẬU KỲ (BACKEND SCORING GUARDRAILS)
     result = applyScoringGuardrails(result, finalActiveRubrics, isAiRequired);
+
+    result.course_topics = auditData.courseTopics || [];
+    result.has_course_topics = Boolean(auditData.hasCourseTopics);
+    if (!result.recommended_topics) {
+      result.recommended_topics = [];
+    }
 
     // 9. Lưu kết quả snapshot vào DB để cố định, không bị tự động thay đổi điểm số khi reload
     try {
