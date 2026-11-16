@@ -182,6 +182,103 @@ async function requireProjectAccess(
     };
 }
 
+
+// ==========================================
+// READ-ONLY PROJECT ACCESS
+// Student / Lecturer / School Admin
+// ==========================================
+
+async function requireReadProjectAccess(
+    projectId,
+    tenant
+) {
+    if (
+        !tenant ||
+        !validId(tenant.schoolId) ||
+        !validId(tenant.userId)
+    ) {
+        throw new Error("FORBIDDEN");
+    }
+
+    if (!validId(projectId)) {
+        throw new Error("INVALID_TASK_DATA");
+    }
+
+    const allowedRoles = [
+        "student",
+        "lecturer",
+        "school_admin",
+    ];
+
+    if (!allowedRoles.includes(tenant.role)) {
+        throw new Error("FORBIDDEN");
+    }
+
+    const project = await TasksRepository.findProject(
+        projectId,
+        tenant.schoolId
+    );
+
+    if (!project) {
+        throw new Error("PROJECT_NOT_FOUND");
+    }
+
+    if (project.status !== "active") {
+        throw new Error("PROJECT_NOT_ACTIVE");
+    }
+
+    // ======================================
+    // STUDENT
+    // ======================================
+
+    if (tenant.role === "student") {
+        const member =
+            await TasksRepository.findProjectMember(
+                projectId,
+                tenant.userId,
+                tenant.schoolId
+            );
+
+        if (!member) {
+            throw new Error("FORBIDDEN");
+        }
+
+        return project;
+    }
+
+    // ======================================
+    // LECTURER
+    // ======================================
+
+    if (tenant.role === "lecturer") {
+        const isLecturer =
+            await TasksRepository.isProjectLecturer(
+                projectId,
+                tenant.userId,
+                tenant.schoolId
+            );
+
+        if (!isLecturer) {
+            throw new Error("FORBIDDEN");
+        }
+
+        return project;
+    }
+
+    // ======================================
+    // SCHOOL ADMIN
+    // ======================================
+
+    if (tenant.role === "school_admin") {
+        // findProject() đã kiểm tra schoolId
+        // từ trusted tenant context.
+        return project;
+    }
+
+    throw new Error("FORBIDDEN");
+}
+
+
 // ==========================================
 // TASK ACCESS
 // ==========================================
@@ -328,7 +425,7 @@ const TasksService = {
     // ======================================
 
     async getTasks(projectId, tenant) {
-        await requireProjectAccess(
+        await requireReadProjectAccess(
             projectId,
             tenant
         );
@@ -348,11 +445,24 @@ const TasksService = {
         taskId,
         tenant
     ) {
-        const { task } = await requireTask(
-            taskId,
+        if (!validId(taskId)) {
+            throw new Error("INVALID_TASK_DATA");
+        }
+
+        await requireReadProjectAccess(
             projectId,
             tenant
         );
+
+        const task = await TasksRepository.findById(
+            taskId,
+            projectId,
+            tenant.schoolId
+        );
+
+        if (!task) {
+            throw new Error("TASK_NOT_FOUND");
+        }
 
         return task;
     },
