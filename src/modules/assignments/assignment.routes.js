@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const { upload } = require('../../middlewares/upload.middleware');
 
 const AssignmentController = {
   ...require('./assignment.controller')
@@ -18,7 +18,7 @@ const assignmentMaterialRoutes = require('../assignment-materials/assignmentMate
 const SubmissionController = require('../submissions/submission.controller');
 const { queryAssignmentSubmissionsSchema } = require('../submissions/submission.validation');
 
-const upload = multer({ storage: multer.memoryStorage() });
+
 
 const router = express.Router();
 router.use(authenticate, requireSchoolContext);
@@ -27,7 +27,7 @@ router.use(authenticate, requireSchoolContext);
 router.post(
   '/', 
   authorizeSchoolRoles('school_admin', 'lecturer'), 
-  upload.array('materials'), 
+  upload.any(), 
   validate(createAssignmentSchema), 
   AssignmentController.createAssignment
 );
@@ -60,7 +60,7 @@ router.get(
 router.patch(
   '/:id', 
   authorizeSchoolRoles('school_admin', 'lecturer'), 
-  upload.array('materials'),
+  upload.any(),
   validate(updateAssignmentSchema), 
   AssignmentController.updateAssignment
 );
@@ -71,7 +71,7 @@ router.put(
     'school_admin',
     'lecturer'
   ),
-  upload.array('materials'),
+  upload.any(),
   validate(updateAssignmentSchema),
   AssignmentController.updateAssignment
 );

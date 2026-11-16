@@ -10,7 +10,13 @@ const notificationsRoutes = require("./modules/notifications/notifications.route
 const dashboardRoutes = require("./modules/dashboards/dashboard.routes");
 const flashcardsRoutes = require("./modules/flashcards/flashcards.routes");
 const flashcardsTestRoutes = require("./modules/flashcards-test/flashcardsTest.routes");
-const { classIdRouter: classMaterialsRouter, materialIdRouter: materialClassesRouter } = require("./modules/class-materials/classMaterial.routes");
+const {
+  classIdRouter: classMaterialsRouter,
+  materialIdRouter: materialClassesRouter,
+  slotMaterialsRouter,
+  lecturerSlotsRouter,
+  lecturerMaterialsRouter,
+} = require("./modules/class-materials/classMaterial.routes");
 const assignmentsRoutes = require("./modules/assignments/assignment.routes");
 const assignmentMaterialsRouter = require("./modules/assignment-materials/assignmentMaterial.routes");
 const { gradesRouter, gradebooksRouter, gradingRouter } = require("./modules/grading/grading.routes");
@@ -97,7 +103,13 @@ app.use('/api/projects', projectsRoutes);
 // Module 7 — Learning Materials
 // A. Class Materials
 app.use("/api/classes/:classId/materials", classMaterialsRouter);
+app.use("/api/classes/:classId/slots", slotMaterialsRouter);
+app.use("/api/student/classes/:classId/slots", slotMaterialsRouter);
 app.use("/api/materials/classes", materialClassesRouter);
+app.use("/api/slots", slotMaterialsRouter);
+app.use("/api/student/slots", slotMaterialsRouter);
+app.use("/api/lecturer/slots", lecturerSlotsRouter);
+app.use("/api/lecturer/materials", lecturerMaterialsRouter);
 
 // B. Assignments & Assignment Materials
 app.use("/api/assignments", assignmentsRoutes);

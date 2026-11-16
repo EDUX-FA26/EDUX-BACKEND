@@ -8,6 +8,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const ClassMaterialRepository = require('./classMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition } = require('../../utils/file.util');
 
 /**
  * Kiểm tra quyền truy cập vào lớp học theo trường hiện tại.
@@ -54,6 +55,13 @@ const ClassMaterialService = {
       page: query.page,
       limit: query.limit,
     });
+    if (result && Array.isArray(result.data)) {
+      result.data = result.data.map(m => ({
+        ...m,
+        title: decodeUtf8Filename(m.title),
+        file_name: decodeUtf8Filename(m.file_name)
+      }));
+    }
     return result;
   },
 
@@ -67,7 +75,9 @@ const ClassMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `class-materials/${classId}/${uuidv4()}_${file.originalname}`;
+    const cleanFileName = decodeUtf8Filename(file.originalname);
+    const safeStorageName = sanitizeStorageFilename(cleanFileName);
+    const fileKey = `class-materials/${classId}/${uuidv4()}_${safeStorageName}`;
 
     await s3.send(
       new PutObjectCommand({
@@ -78,20 +88,93 @@ const ClassMaterialService = {
       })
     );
 
+    const cleanTitle = body.title ? decodeUtf8Filename(body.title) : cleanFileName;
+
     const material = await ClassMaterialRepository.create({
       school_id: tenant.schoolId,
       class_id: classId,
-      title: body.title,
+      slot_id: body.slot_id || null,
+      title: cleanTitle,
       description: body.description || '',
-      file_name: file.originalname,
+      file_name: cleanFileName,
       file_key: fileKey,
       file_type: file.mimetype,
       file_size: file.size,
-      is_private: body.is_private !== undefined ? body.is_private : true,
+      is_private: body.is_private !== undefined ? body.is_private : false,
       uploaded_by: tenant.userId,
     });
 
     return material;
+  },
+
+  /**
+   * UC-MATERIAL-UPLOAD-AND-PREVIEW — Upload tài liệu gắn với một buổi học (Slot / Session)
+   */
+  async uploadSlotMaterial(slotId, body, file, tenant) {
+    const { rows: sessionRows } = await pool.query(
+      'SELECT id, class_id, school_id FROM sessions WHERE id = $1 AND school_id = $2',
+      [slotId, tenant.schoolId]
+    );
+    const session = sessionRows[0];
+    if (!session) throw new Error('SLOT_NOT_FOUND');
+
+    await verifyClassAccess(session.class_id, tenant);
+
+    if (tenant.role !== 'lecturer' && tenant.role !== 'school_admin') {
+      throw new Error('FORBIDDEN');
+    }
+
+    const cleanFileName = decodeUtf8Filename(file.originalname);
+    const safeStorageName = sanitizeStorageFilename(cleanFileName);
+    const fileKey = `class-materials/slots/${slotId}/${uuidv4()}_${safeStorageName}`;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: fileKey,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+      })
+    );
+
+    const cleanTitle = body.title ? decodeUtf8Filename(body.title) : cleanFileName;
+
+    const material = await ClassMaterialRepository.create({
+      school_id: tenant.schoolId,
+      class_id: session.class_id,
+      slot_id: slotId,
+      title: cleanTitle,
+      description: body.description || '',
+      file_name: cleanFileName,
+      file_key: fileKey,
+      file_type: file.mimetype,
+      file_size: file.size,
+      is_private: false,
+      uploaded_by: tenant.userId,
+    });
+
+    return material;
+  },
+
+  /**
+   * UC-MATERIAL-UPLOAD-AND-PREVIEW — Lấy danh sách tài liệu của một buổi học (Slot / Session)
+   */
+  async listSlotMaterials(slotId, tenant) {
+    const { rows: sessionRows } = await pool.query(
+      'SELECT id, class_id, school_id FROM sessions WHERE id = $1 AND school_id = $2',
+      [slotId, tenant.schoolId]
+    );
+    const session = sessionRows[0];
+    if (!session) throw new Error('SLOT_NOT_FOUND');
+
+    await verifyClassAccess(session.class_id, tenant);
+
+    const rawMaterials = await ClassMaterialRepository.findBySlotId(slotId, tenant.schoolId);
+    return (rawMaterials || []).map(m => ({
+      ...m,
+      title: decodeUtf8Filename(m.title),
+      file_name: decodeUtf8Filename(m.file_name)
+    }));
   },
 
   /**
@@ -103,7 +186,11 @@ const ClassMaterialService = {
 
     await verifyClassAccess(material.class_id, tenant);
 
-    return material;
+    return {
+      ...material,
+      title: decodeUtf8Filename(material.title),
+      file_name: decodeUtf8Filename(material.file_name)
+    };
   },
 
   /**
@@ -149,7 +236,7 @@ const ClassMaterialService = {
   },
 
   /**
-   * UC18 — Tải xuống tài liệu lớp (presigned URL)
+   * UC18 — Tải xuống / Xem trước tài liệu lớp (presigned URL)
    */
   async downloadMaterial(materialId, tenant) {
     const material = await ClassMaterialRepository.findById(materialId, tenant.schoolId);
@@ -157,19 +244,31 @@ const ClassMaterialService = {
 
     await verifyClassAccess(material.class_id, tenant);
 
-    const command = new GetObjectCommand({
+    const cleanFileName = decodeUtf8Filename(material.file_name);
+
+    const downloadCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `attachment; filename="${material.file_name}"`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'attachment'),
     });
 
-    // Presigned URL có hiệu lực 15 phút
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    const previewCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: material.file_key,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'inline'),
+      ResponseContentType: material.file_type || 'application/octet-stream',
+    });
+
+    const [downloadUrl, previewUrl] = await Promise.all([
+      getSignedUrl(s3, downloadCommand, { expiresIn: 900 }),
+      getSignedUrl(s3, previewCommand, { expiresIn: 900 }),
+    ]);
 
     return {
-      url: presignedUrl,
-      download_url: presignedUrl,
-      file_name: material.file_name,
+      url: downloadUrl,
+      download_url: downloadUrl,
+      preview_url: previewUrl,
+      file_name: cleanFileName,
       file_type: material.file_type,
       file_size: material.file_size,
     };

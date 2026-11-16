@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const { upload } = require('../../middlewares/upload.middleware');
 
 const assignmentMaterialController = require('./assignmentMaterial.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
@@ -12,7 +12,7 @@ const {
   listAssignmentMaterialsQuery,
 } = require('./assignmentMaterial.validation');
 
-const upload = multer({ storage: multer.memoryStorage() });
+
 
 // -----------------------------------------------------------------------
 // Router: gắn vào /api/assignments/:assignmentId/materials
