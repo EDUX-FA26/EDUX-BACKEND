@@ -37,17 +37,60 @@ const StudyPlannerSubmissionService = {
             throw makeError('SUBJECT_ACCESS_FORBIDDEN', 403);
         }
 
-        const questions = day.contentStatus === 'ready'
-            ? await ContentRepository.findPublicDayQuestions(
-                planDayId
-            )
-            : [];
-
         const submission =
             await SubmissionRepository.findSubmission(
                 planDayId,
                 studentId
             );
+
+        // 1. Ngày đã hoàn thành (đã nộp bài): giữ nguyên kết quả, điểm số và câu hỏi lịch sử
+        if (submission) {
+            const questions = await ContentRepository.findPublicDayQuestions(planDayId);
+            return {
+                planDayId,
+                day: day.day,
+                topicId: day.topicId,
+                topicName: day.topicName,
+                activity: day.activity,
+                contentStatus: day.contentStatus,
+                targetQuestions: day.targetQuestions,
+                questionCount: questions.length,
+                submitted: true,
+                questions,
+            };
+        }
+
+        // 2. Ngày chưa làm: kiểm tra xem Topic có còn hoạt động và hợp lệ không
+        const isTopicActive = await LearningRepository.isTopicActiveInSubject(
+            day.topicId,
+            day.subjectId,
+            schoolId
+        );
+
+        if (!isTopicActive) {
+            if (day.contentStatus !== 'unavailable') {
+                await ContentRepository.markDayUnavailable(planDayId, studentId);
+                day.contentStatus = 'unavailable';
+            }
+            return {
+                planDayId,
+                day: day.day,
+                topicId: day.topicId,
+                topicName: day.topicName,
+                activity: day.activity,
+                contentStatus: 'unavailable',
+                targetQuestions: day.targetQuestions,
+                questionCount: 0,
+                submitted: false,
+                questions: [],
+            };
+        }
+
+        const questions = day.contentStatus === 'ready'
+            ? await ContentRepository.findPublicDayQuestions(
+                planDayId
+            )
+            : [];
 
         return {
             planDayId,
@@ -58,8 +101,8 @@ const StudyPlannerSubmissionService = {
             contentStatus: day.contentStatus,
             targetQuestions: day.targetQuestions,
             questionCount: questions.length,
-            submitted: Boolean(submission),
-            questions
+            submitted: false,
+            questions,
         };
     },
 

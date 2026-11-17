@@ -301,14 +301,20 @@ const LearningRepository = {
   },
 
   async findActiveTopicsBySubject(subjectId, schoolId) {
-    const where = ['subject_id = $1', 'is_active = true'];
+    const where = [
+      'subject_id = $1',
+      'is_active = true',
+      `status = 'approved'`,
+      '(review_required = false OR review_required IS NULL)',
+      'parent_id IS NULL',
+    ];
     const params = [subjectId];
     if (schoolId) {
       params.push(schoolId);
       where.push(`school_id = $2`);
     }
     const { rows } = await pool.query(
-      `SELECT id, name, parent_id
+      `SELECT id, name, code, parent_id
        FROM topics WHERE ${where.join(' AND ')}
        ORDER BY name ASC`,
       params
@@ -328,7 +334,6 @@ const LearningRepository = {
       params.push(schoolId);
       where.push(`ft.school_id = $${params.length}`);
       where.push(`fd.school_id = $${params.length}`);
-      where.push(`t.school_id = $${params.length}`);
       where.push(`(
         fd.is_public = true
         OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
@@ -352,17 +357,181 @@ const LearningRepository = {
     }
 
     const { rows } = await pool.query(
-      `SELECT fct.topic_id, fta.id AS answer_id, fta.flashcard_id, fta.is_correct, ft.submitted_at
+      `WITH card_canonical_topic AS (
+         SELECT DISTINCT ON (fct.flashcard_id)
+           fct.flashcard_id,
+           fct.topic_id
+         FROM flashcard_topics fct
+         JOIN flashcards fc ON fc.id = fct.flashcard_id AND fc.is_active = true
+         JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+         JOIN topics t ON t.id = fct.topic_id
+           AND t.subject_id = fd.subject_id
+           AND t.status = 'approved'
+           AND (t.review_required = false OR t.review_required IS NULL)
+           AND t.parent_id IS NULL
+           AND t.is_active = true
+           ${schoolId ? `AND t.school_id = $${params.length} AND fct.school_id = $${params.length} AND fc.school_id = $${params.length}` : ''}
+         WHERE fct.review_status = 'approved'
+           AND fd.subject_id = $2
+         ORDER BY fct.flashcard_id, fct.created_at DESC, fct.topic_id DESC
+       )
+       SELECT DISTINCT ON (fta.id)
+         cct.topic_id,
+         fta.id AS answer_id,
+         fta.flashcard_id,
+         fta.is_correct,
+         ft.submitted_at
        FROM flashcard_tests ft
        JOIN flashcard_test_answers fta ON fta.test_id = ft.id
        JOIN flashcards fc ON fc.id = fta.flashcard_id AND fc.is_active = true
        JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
-       JOIN flashcard_topics fct ON fct.flashcard_id = fc.id AND fct.review_status = 'approved'
-       JOIN topics t ON t.id = fct.topic_id AND t.subject_id = fd.subject_id AND t.is_active = true
-       WHERE ${where.join(' AND ')}`,
+       JOIN card_canonical_topic cct ON cct.flashcard_id = fc.id
+       WHERE ${where.join(' AND ')}
+       ORDER BY fta.id, ft.submitted_at DESC`,
       params
     );
     return rows;
+  },
+
+  async findTopicReviewCountsBySubject(studentId, subjectId, schoolId) {
+    const where = ['fr.user_id = $1', 'fd.subject_id = $2'];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`fr.school_id = $${params.length}`);
+      where.push(`fd.school_id = $${params.length}`);
+    }
+
+    if (schoolId) {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+      )`);
+    } else {
+      where.push(`(
+        fd.is_public = true
+        OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+        OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+      )`);
+    }
+
+    const { rows } = await pool.query(
+      `WITH card_canonical_topic AS (
+         SELECT DISTINCT ON (fct.flashcard_id)
+           fct.flashcard_id,
+           fct.topic_id
+         FROM flashcard_topics fct
+         JOIN flashcards fc ON fc.id = fct.flashcard_id AND fc.is_active = true
+         JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+         JOIN topics t ON t.id = fct.topic_id
+           AND t.subject_id = fd.subject_id
+           AND t.status = 'approved'
+           AND (t.review_required = false OR t.review_required IS NULL)
+           AND t.parent_id IS NULL
+           AND t.is_active = true
+           ${schoolId ? `AND t.school_id = $${params.length} AND fct.school_id = $${params.length} AND fc.school_id = $${params.length}` : ''}
+         WHERE fct.review_status = 'approved'
+           AND fd.subject_id = $2
+         ORDER BY fct.flashcard_id, fct.created_at DESC, fct.topic_id DESC
+       )
+       SELECT
+         cct.topic_id,
+         COUNT(fr.id)::int AS total_reviews,
+         MAX(fr.reviewed_at) AS last_reviewed_at
+       FROM flashcard_reviews fr
+       JOIN flashcards fc ON fc.id = fr.flashcard_id AND fc.is_active = true
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+       JOIN card_canonical_topic cct ON cct.flashcard_id = fc.id
+       WHERE ${where.join(' AND ')}
+       GROUP BY cct.topic_id`,
+      params
+    );
+    return rows;
+  },
+
+  async findUnclassifiedEventsCountBySubject(studentId, subjectId, schoolId) {
+    const quizWhere = [
+      'ft.user_id = $1',
+      `ft.status = 'submitted'`,
+      'fd.subject_id = $2',
+      `fc.type = 'multiple_choice'`,
+    ];
+    const reviewWhere = [
+      'fr.user_id = $1',
+      'fd.subject_id = $2',
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      quizWhere.push(`ft.school_id = $${params.length}`);
+      quizWhere.push(`fd.school_id = $${params.length}`);
+      reviewWhere.push(`fr.school_id = $${params.length}`);
+      reviewWhere.push(`fd.school_id = $${params.length}`);
+    }
+
+    const accessWhere = schoolId
+      ? `(
+          fd.is_public = true
+          OR fd.class_id IN (SELECT class_id FROM class_members cm JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND c.school_id = $${params.length})
+          OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id JOIN classes c ON c.id = cm.class_id WHERE cm.student_id = $1 AND cm.status = 'active' AND fdca.school_id = $${params.length} AND c.school_id = $${params.length})
+        )`
+      : `(
+          fd.is_public = true
+          OR fd.class_id IN (SELECT class_id FROM class_members WHERE student_id = $1 AND status = 'active')
+          OR fd.id IN (SELECT fdca.deck_id FROM flashcard_deck_class_access fdca JOIN class_members cm ON cm.class_id = fdca.class_id WHERE cm.student_id = $1 AND cm.status = 'active')
+        )`;
+
+    quizWhere.push(accessWhere);
+    reviewWhere.push(accessWhere);
+
+    const { rows } = await pool.query(
+      `WITH card_canonical_topic AS (
+         SELECT DISTINCT ON (fct.flashcard_id)
+           fct.flashcard_id,
+           fct.topic_id
+         FROM flashcard_topics fct
+         JOIN flashcards fc ON fc.id = fct.flashcard_id AND fc.is_active = true
+         JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+         JOIN topics t ON t.id = fct.topic_id
+           AND t.subject_id = fd.subject_id
+           AND t.status = 'approved'
+           AND (t.review_required = false OR t.review_required IS NULL)
+           AND t.parent_id IS NULL
+           AND t.is_active = true
+           ${schoolId ? `AND t.school_id = $${params.length} AND fct.school_id = $${params.length} AND fc.school_id = $${params.length}` : ''}
+         WHERE fct.review_status = 'approved'
+           AND fd.subject_id = $2
+         ORDER BY fct.flashcard_id, fct.created_at DESC, fct.topic_id DESC
+       )
+       SELECT
+         (
+           SELECT COUNT(DISTINCT fta.id)::int
+           FROM flashcard_tests ft
+           JOIN flashcard_test_answers fta ON fta.test_id = ft.id
+           JOIN flashcards fc ON fc.id = fta.flashcard_id AND fc.is_active = true
+           JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+           WHERE ${quizWhere.join(' AND ')}
+             AND fc.id NOT IN (SELECT flashcard_id FROM card_canonical_topic)
+         ) AS unclassified_quiz_answers,
+         (
+           SELECT COUNT(DISTINCT fr.id)::int
+           FROM flashcard_reviews fr
+           JOIN flashcards fc ON fc.id = fr.flashcard_id AND fc.is_active = true
+           JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+           WHERE ${reviewWhere.join(' AND ')}
+             AND fc.id NOT IN (SELECT flashcard_id FROM card_canonical_topic)
+         ) AS unclassified_reviews`,
+      params
+    );
+    const row = rows[0] || {};
+    const unclassifiedQuizAnswers = Number(row.unclassified_quiz_answers || 0);
+    const unclassifiedReviews = Number(row.unclassified_reviews || 0);
+    return {
+      unclassifiedQuizAnswers,
+      unclassifiedReviews,
+      totalUnclassifiedEvents: unclassifiedQuizAnswers + unclassifiedReviews,
+    };
   },
 
   async findTopicAttemptBreakdownBySubject(studentId, subjectId, schoolId) {
@@ -881,6 +1050,102 @@ const LearningRepository = {
       : `SELECT 1 FROM class_members cm WHERE ${where.join(' AND ')}`;
     const { rows } = await pool.query(query, params);
     return rows.length > 0;
+  },
+
+  async isTopicActiveInSubject(topicId, subjectId, schoolId = null) {
+    const where = [
+      'id = $1',
+      'subject_id = $2',
+      'is_active = true',
+      `status = 'approved'`,
+      '(review_required = false OR review_required IS NULL)',
+      'parent_id IS NULL',
+    ];
+    const params = [topicId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`school_id = $3`);
+    }
+    const { rows } = await pool.query(
+      `SELECT 1 FROM topics WHERE ${where.join(' AND ')} LIMIT 1`,
+      params
+    );
+    return rows.length > 0;
+  },
+
+  async findAccessibleCardCountsByTopics(studentId, subjectId, schoolId = null, topicIds = []) {
+    if (!studentId || !subjectId) return new Map();
+
+    const params = [studentId, subjectId];
+    let cteSchoolFilter = '';
+    let outerSchoolFilter = '';
+    let accessSchoolFilter = '';
+    let topicFilter = '';
+
+    if (schoolId) {
+      params.push(schoolId);
+      const schoolIdx = params.length;
+      cteSchoolFilter = `AND fd.school_id = $${schoolIdx} AND fc.school_id = $${schoolIdx} AND t.school_id = $${schoolIdx} AND fct.school_id = $${schoolIdx}`;
+      outerSchoolFilter = `AND fd.school_id = $${schoolIdx} AND fc.school_id = $${schoolIdx}`;
+      accessSchoolFilter = `AND c.school_id = $${schoolIdx}`;
+    }
+
+    if (Array.isArray(topicIds) && topicIds.length > 0) {
+      params.push(topicIds);
+      topicFilter = `AND cct.topic_id = ANY($${params.length})`;
+    }
+
+    const { rows } = await pool.query(
+      `WITH card_canonical_topic AS (
+         SELECT DISTINCT ON (fct.flashcard_id)
+           fct.flashcard_id,
+           fct.topic_id
+         FROM flashcard_topics fct
+         JOIN flashcards fc ON fc.id = fct.flashcard_id AND fc.is_active = true AND fc.type = 'multiple_choice'
+         JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+         JOIN topics t ON t.id = fct.topic_id
+           AND t.subject_id = fd.subject_id
+           AND t.status = 'approved'
+           AND (t.review_required = false OR t.review_required IS NULL)
+           AND t.parent_id IS NULL
+           AND t.is_active = true
+           ${cteSchoolFilter}
+         WHERE fct.review_status = 'approved'
+           AND fd.subject_id = $2
+         ORDER BY fct.flashcard_id, fct.created_at DESC, fct.topic_id DESC
+       )
+       SELECT
+         cct.topic_id,
+         COUNT(DISTINCT fc.id)::int AS accessible_card_count
+       FROM card_canonical_topic cct
+       JOIN flashcards fc ON fc.id = cct.flashcard_id AND fc.is_active = true AND fc.type = 'multiple_choice'
+       JOIN flashcard_decks fd ON fd.id = fc.deck_id AND fd.is_active = true
+       WHERE fd.subject_id = $2
+         ${outerSchoolFilter}
+         ${topicFilter}
+         AND (
+           fd.is_public = true
+           OR fd.class_id IN (
+             SELECT cm.class_id FROM class_members cm
+             JOIN classes c ON c.id = cm.class_id
+             WHERE cm.student_id = $1 AND cm.status = 'active'
+             ${accessSchoolFilter}
+           )
+           OR fd.id IN (
+             SELECT fdca.deck_id FROM flashcard_deck_class_access fdca
+             JOIN class_members cm ON cm.class_id = fdca.class_id
+             JOIN classes c ON c.id = cm.class_id
+             WHERE cm.student_id = $1 AND cm.status = 'active'
+             ${accessSchoolFilter}
+           )
+         )
+       GROUP BY cct.topic_id`,
+      params
+    );
+
+    const countMap = new Map();
+    rows.forEach(r => countMap.set(r.topic_id, Number(r.accessible_card_count) || 0));
+    return countMap;
   },
 };
 
