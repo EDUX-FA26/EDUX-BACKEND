@@ -8,19 +8,19 @@ const clients = new Map();
  * Tự động sửa các lỗi gõ nhầm (ví dụ: gemini-3-5-flash-lite -> gemini-3.5-flash-lite, gemini-2-5 -> gemini-2.5)
  * Fallback an toàn về model ổn định (gemini-3.5-flash-lite hoặc gemini-2.5-flash-lite)
  */
-function normalizeGeminiModel(rawModel, fallback = 'gemini-3.5-flash-lite') {
+function normalizeGeminiModel(rawModel, fallback = 'gemini-2.5-flash') {
   if (!rawModel || typeof rawModel !== 'string') return fallback;
   let m = rawModel.trim();
-  // Sửa lỗi gõ nhầm dấu gạch nối
-  m = m.replace(/^gemini-3-5-/i, 'gemini-3.5-')
+  // Sửa lỗi gõ nhầm dấu gạch nối hoặc model giả định 3.5 về 2.5
+  m = m.replace(/^gemini-3-5-/i, 'gemini-2.5-')
+       .replace(/^gemini-3.5-/i, 'gemini-2.5-')
        .replace(/^gemini-2-5-/i, 'gemini-2.5-')
        .replace(/^gemini-1-5-/i, 'gemini-1.5-');
 
   const validModels = [
-    'gemini-3.5-flash-lite',
-    'gemini-3.5-flash',
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.0-flash',
     'gemini-1.5-flash'
   ];
 
@@ -86,15 +86,32 @@ async function callGeminiWithRetry(promptFn, maxRetries = 4, initialDelay = 1500
 
 async function askGemini(prompt) {
   const ai = await getGeminiClient();
-  const activeModel = normalizeGeminiModel(process.env.GEMINI_MODEL, 'gemini-3.5-flash-lite');
-  console.log(`[ART-AI Debug] >>> Đang gọi Gemini với Model: "${activeModel}" (env GEMINI_MODEL="${process.env.GEMINI_MODEL}")`);
+  const primaryModel = normalizeGeminiModel(process.env.GEMINI_MODEL, 'gemini-2.5-flash');
+  const candidateModels = Array.from(new Set([
+    primaryModel,
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+  ]));
 
-  const response = await callGeminiWithRetry(() => ai.models.generateContent({
-    model: activeModel,
-    contents: prompt
-  }), 3);
+  let lastError = null;
+  for (const activeModel of candidateModels) {
+    try {
+      console.log(`[ART-AI Debug] >>> Đang gọi Gemini với Model: "${activeModel}"`);
+      const response = await callGeminiWithRetry(() => ai.models.generateContent({
+        model: activeModel,
+        contents: prompt
+      }), 2, 800);
 
-  return response.text;
+      return response.text;
+    } catch (err) {
+      lastError = err;
+      console.warn(`[ART-AI Debug] Model "${activeModel}" gặp sự cố (${err.message}). Thử fallback model kế tiếp...`);
+    }
+  }
+
+  throw lastError;
 }
 
 const CANONICAL_RUBRIC_MAP = {
