@@ -5,6 +5,7 @@ const StudyPlannerService = require('./studyPlanner.service');
 const StudyPlannerContentService = require('./studyPlannerContent.service');
 const StudyPlannerSubmissionService =
   require('./studyPlannerSubmission.service');
+const StudyPlanAiService = require('./studyPlanAi.service');
 
 const LearningController = {
   /**
@@ -652,6 +653,83 @@ const LearningController = {
       );
       return res.status(200).json({ success: true, data });
     } catch (error) {
+      return next(error);
+    }
+  },
+
+  /**
+   * Phase 5C — GET /api/learning/study-plan/ai-insights?planId=...
+   * Lấy giải thích và hướng dẫn 7 ngày cho kế hoạch học tập (Read-only Learning Coach)
+   */
+  async getStudyPlanAiInsights(req, res, next) {
+    try {
+      if (req.user.role !== 'student') {
+        return res.status(403).json({ success: false, message: 'Student access is required' });
+      }
+
+      const { planId } = req.query;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(planId || '')) {
+        return res.status(400).json({ success: false, message: 'Valid planId is required' });
+      }
+
+      const data = await StudyPlanAiService.getPlanAiInsights(
+        planId,
+        req.user.id,
+        req.tenant?.schoolId || null
+      );
+
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      if (error.message === 'PLAN_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Study plan not found' });
+      }
+      if (error.message === 'SUBJECT_ACCESS_FORBIDDEN') {
+        return res.status(403).json({ success: false, message: 'Subject access forbidden' });
+      }
+      if (error.message === 'PLAN_NOT_READY' || error.message === 'INVALID_REQUEST_PARAMETERS') {
+        return res.status(400).json({ success: false, message: error.message });
+      }
+      return next(error);
+    }
+  },
+
+  /**
+   * Phase 5C — GET /api/learning/study-plan/days/:planDayId/ai-feedback
+   * Lấy phản hồi AI sau khi sinh viên đã nộp bài 1 ngày học
+   */
+  async getStudyPlanDayAiFeedback(req, res, next) {
+    try {
+      if (req.user.role !== 'student') {
+        return res.status(403).json({ success: false, message: 'Student access is required' });
+      }
+
+      const { planDayId } = req.params;
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(planDayId || '')) {
+        return res.status(400).json({ success: false, message: 'Valid planDayId is required' });
+      }
+
+      const data = await StudyPlanAiService.getDayAiFeedback(
+        planDayId,
+        req.user.id,
+        req.tenant?.schoolId || null
+      );
+
+      return res.status(200).json({ success: true, data });
+    } catch (error) {
+      if (error.message === 'PLAN_DAY_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Study plan day not found' });
+      }
+      if (error.message === 'SUBJECT_ACCESS_FORBIDDEN') {
+        return res.status(403).json({ success: false, message: 'Subject access forbidden' });
+      }
+      if (error.message === 'FEEDBACK_NOT_AVAILABLE') {
+        return res.status(409).json({ success: false, message: 'FEEDBACK_NOT_AVAILABLE' });
+      }
+      if (error.message === 'INVALID_REQUEST_PARAMETERS') {
+        return res.status(400).json({ success: false, message: error.message });
+      }
       return next(error);
     }
   },

@@ -15,6 +15,10 @@ const {
 } = require('./learning.validation');
 
 
+const {
+  studyPlanAiQuerySchema,
+} = require('./studyPlanAi.schema');
+
 const studyPlanDayParams = z.object({
   planDayId: z.string().uuid()
 }).strict();
@@ -87,6 +91,20 @@ router.get(
   '/study-plan/days/:planDayId/result',
   validate(studyPlanDayParams, 'params'),
   ctrl.getStudyPlanDayResult
+);
+
+// Phase 5C - AI Personalization: Giải thích kế hoạch 7 ngày (Read-only)
+router.get(
+  '/study-plan/ai-insights',
+  validate(studyPlanAiQuerySchema, 'query'),
+  ctrl.getStudyPlanAiInsights
+);
+
+// Phase 5C - AI Personalization: Nhận xét sau khi sinh viên đã nộp bài một ngày học
+router.get(
+  '/study-plan/days/:planDayId/ai-feedback',
+  validate(studyPlanDayParams, 'params'),
+  ctrl.getStudyPlanDayAiFeedback
 );
 // ─────────────────────────────────────────────
 // STREAK ROUTES
