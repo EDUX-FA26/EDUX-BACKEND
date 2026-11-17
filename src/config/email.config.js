@@ -40,35 +40,46 @@ const EmailService = {
     return getTransporter().verify();
   },
 
-  async sendEmail({ to, subject, message }) {
-    if (
-      typeof to !== 'string' ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)
-    ) {
-      throw new Error('INVALID_EMAIL_ADDRESS');
+  async sendEmail({ to, bcc, subject, message, html }) {
+    if (!to && !bcc) {
+      throw new Error('RECIPIENT_REQUIRED');
     }
 
-    const info = await getTransporter().sendMail({
+    const mailOptions = {
       from: {
         name: 'EduX Learning System',
         address: process.env.EMAIL,
       },
-      to,
       subject,
       text: message,
-    });
+    };
 
-    const accepted = (info.accepted || []).some(
-      address => address.toLowerCase() === to.toLowerCase()
-    );
-
-    if (!accepted) {
-      throw new Error('EMAIL_NOT_ACCEPTED');
+    if (to) {
+      if (typeof to === 'string') {
+        mailOptions.to = to;
+      } else if (Array.isArray(to)) {
+        mailOptions.to = to.filter(addr => typeof addr === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)).join(', ');
+      }
     }
+
+    if (bcc) {
+      if (typeof bcc === 'string') {
+        mailOptions.bcc = bcc;
+      } else if (Array.isArray(bcc)) {
+        mailOptions.bcc = bcc.filter(addr => typeof addr === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)).join(', ');
+      }
+    }
+
+    if (html) {
+      mailOptions.html = html;
+    }
+
+    const info = await getTransporter().sendMail(mailOptions);
 
     return {
       accepted: true,
       messageId: info.messageId,
+      acceptedRecipients: info.accepted || [],
     };
   },
 };

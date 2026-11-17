@@ -7,7 +7,65 @@ const PlatformRepository = {
   // MANAGERS MANAGEMENT
   // =========================================================================
 
-  async listManagers() {
+  async listManagers({ page, limit, search, status } = {}) {
+    // If no pagination/search parameters are provided, return all managers for backward compatibility
+    if (!page && !limit && !search && status === undefined) {
+      const { rows } = await pool.query(
+        `
+        SELECT
+          pa.user_id AS id,
+          pa.role,
+          pa.is_active,
+          pa.created_at,
+          pa.updated_at,
+          u.email,
+          u.username,
+          u.last_login_at,
+          up.full_name,
+          up.avatar_url,
+          gb.email AS granted_by_email
+        FROM public.platform_admins pa
+        INNER JOIN public.users u ON u.id = pa.user_id
+        LEFT JOIN public.user_profiles up ON up.user_id = u.id
+        LEFT JOIN public.users gb ON gb.id = pa.granted_by
+        ORDER BY pa.role ASC, pa.created_at DESC
+        `
+      );
+      return rows;
+    }
+
+    const curPage = Math.max(1, Number(page) || 1);
+    const curLimit = Math.max(1, Number(limit) || 20);
+    const offset = (curPage - 1) * curLimit;
+    const whereConditions = ["pa.role = 'manager'"];
+    const params = [];
+
+    if (status !== undefined && status !== "" && status !== null) {
+      const isActive = status === "true" || status === true;
+      params.push(isActive);
+      whereConditions.push(`pa.is_active = $${params.length}`);
+    }
+
+    if (search) {
+      params.push(`%${search.trim()}%`);
+      whereConditions.push(`(u.email ILIKE $${params.length} OR u.username ILIKE $${params.length} OR up.full_name ILIKE $${params.length})`);
+    }
+
+    const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total
+       FROM public.platform_admins pa
+       INNER JOIN public.users u ON u.id = pa.user_id
+       LEFT JOIN public.user_profiles up ON up.user_id = u.id
+       ${whereClause}`,
+      params
+    );
+    const total = countResult.rows[0]?.total || 0;
+
+    params.push(curLimit);
+    params.push(offset);
+
     const { rows } = await pool.query(
       `
       SELECT
@@ -26,10 +84,22 @@ const PlatformRepository = {
       INNER JOIN public.users u ON u.id = pa.user_id
       LEFT JOIN public.user_profiles up ON up.user_id = u.id
       LEFT JOIN public.users gb ON gb.id = pa.granted_by
-      ORDER BY pa.role ASC, pa.created_at DESC
-      `
+      ${whereClause}
+      ORDER BY pa.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+      `,
+      params
     );
-    return rows;
+
+    return {
+      items: rows,
+      pagination: {
+        page: curPage,
+        limit: curLimit,
+        total,
+        totalPages: Math.ceil(total / curLimit) || 1,
+      },
+    };
   },
 
   async findManagerById(userId) {
@@ -114,17 +184,20 @@ const PlatformRepository = {
     return rows[0] || null;
   },
 
-  async updateManager(userId, { email, username, fullName }) {
+  async updateManager(userId, { email, username, fullName, passwordHash }) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       const { rows } = await client.query(
         `UPDATE public.users u
-         SET email = COALESCE($2, u.email), username = COALESCE($3, u.username), updated_at = NOW()
+         SET email = COALESCE($2, u.email),
+             username = COALESCE($3, u.username),
+             password_hash = COALESCE($4, u.password_hash),
+             updated_at = NOW()
          FROM public.platform_admins pa
          WHERE pa.user_id = u.id AND pa.user_id = $1 AND pa.role = 'manager'
          RETURNING u.id, u.email, u.username`,
-        [userId, email ?? null, username ?? null]
+        [userId, email ?? null, username ?? null, passwordHash ?? null]
       );
       if (!rows[0]) { await client.query("ROLLBACK"); return null; }
       if (fullName !== undefined) {
@@ -150,25 +223,28 @@ const PlatformRepository = {
   // =========================================================================
 
   async listPlans(includeInactive = false) {
-    const where = includeInactive ? "" : "WHERE is_active = TRUE";
+    const where = includeInactive ? "" : "WHERE sp.is_active = TRUE";
     const { rows } = await pool.query(
       `
       SELECT
-        id,
-        name,
-        description,
-        price_monthly,
-        price_yearly,
-        student_limit,
-        storage_limit_gb,
-        ai_requests_limit,
-        features,
-        is_active,
-        created_at,
-        updated_at
-      FROM public.subscription_plans
+        sp.id,
+        sp.name,
+        sp.description,
+        sp.price_monthly,
+        sp.price_yearly,
+        sp.student_limit,
+        sp.storage_limit_gb,
+        sp.ai_requests_limit,
+        sp.features,
+        sp.is_active,
+        sp.created_at,
+        sp.updated_at,
+        COUNT(DISTINCT ss.school_id) FILTER (WHERE ss.status = 'active')::int AS active_school_count
+      FROM public.subscription_plans sp
+      LEFT JOIN public.school_subscriptions ss ON ss.plan_id = sp.id
       ${where}
-      ORDER BY price_monthly ASC
+      GROUP BY sp.id
+      ORDER BY sp.price_monthly ASC
       `
     );
     return rows;
@@ -254,6 +330,25 @@ const PlatformRepository = {
     return rows[0] || null;
   },
 
+  async deletePlan(id) {
+    const { rows: used } = await pool.query(
+      `SELECT 1 FROM public.school_subscriptions WHERE plan_id = $1 LIMIT 1`,
+      [id]
+    );
+    if (used[0]) {
+      const { rows } = await pool.query(
+        `UPDATE public.subscription_plans SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING *`,
+        [id]
+      );
+      return { action: "deactivated", plan: rows[0] };
+    }
+    const { rows } = await pool.query(
+      `DELETE FROM public.subscription_plans WHERE id = $1 RETURNING *`,
+      [id]
+    );
+    return { action: "deleted", plan: rows[0] };
+  },
+
   // =========================================================================
   // SCHOOLS / TENANTS MANAGEMENT
   // =========================================================================
@@ -263,7 +358,7 @@ const PlatformRepository = {
     const whereConditions = [];
     const params = [];
 
-    if (!includeDeleted) {
+    if (!includeDeleted && status !== "deleted") {
       whereConditions.push("s.deleted_at IS NULL");
     }
 
@@ -644,7 +739,7 @@ const PlatformRepository = {
   // CONTRACTS & SUBSCRIPTIONS
   // =========================================================================
 
-  async listContracts({ page = 1, limit = 20, status, schoolId } = {}) {
+  async listContracts({ page = 1, limit = 20, status, schoolId, search } = {}) {
     const offset = (Math.max(1, page) - 1) * limit;
     const whereConditions = [];
     const params = [];
@@ -659,12 +754,21 @@ const PlatformRepository = {
       whereConditions.push(`ss.school_id = $${params.length}`);
     }
 
+    if (search) {
+      params.push(`%${search.trim()}%`);
+      whereConditions.push(`(s.name ILIKE $${params.length} OR s.code ILIKE $${params.length} OR p.name ILIKE $${params.length})`);
+    }
+
     const whereClause = whereConditions.length > 0
       ? `WHERE ${whereConditions.join(" AND ")}`
       : "";
 
     const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM public.school_subscriptions ss ${whereClause}`,
+      `SELECT COUNT(*)::int AS total 
+       FROM public.school_subscriptions ss 
+       INNER JOIN public.schools s ON s.id = ss.school_id
+       INNER JOIN public.subscription_plans p ON p.id = ss.plan_id
+       ${whereClause}`,
       params
     );
     const total = countResult.rows[0]?.total || 0;
@@ -713,7 +817,7 @@ const PlatformRepository = {
   // TRANSACTIONS
   // =========================================================================
 
-  async listTransactions({ page = 1, limit = 20, status, schoolId } = {}) {
+  async listTransactions({ page = 1, limit = 20, status, schoolId, search } = {}) {
     const offset = (Math.max(1, page) - 1) * limit;
     const whereConditions = [];
     const params = [];
@@ -728,12 +832,20 @@ const PlatformRepository = {
       whereConditions.push(`pt.school_id = $${params.length}`);
     }
 
+    if (search) {
+      params.push(`%${search.trim()}%`);
+      whereConditions.push(`(s.name ILIKE $${params.length} OR s.code ILIKE $${params.length} OR pt.order_reference ILIKE $${params.length} OR pt.transaction_reference ILIKE $${params.length})`);
+    }
+
     const whereClause = whereConditions.length > 0
       ? `WHERE ${whereConditions.join(" AND ")}`
       : "";
 
     const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM public.payment_transactions pt ${whereClause}`,
+      `SELECT COUNT(*)::int AS total 
+       FROM public.payment_transactions pt 
+       INNER JOIN public.schools s ON s.id = pt.school_id
+       ${whereClause}`,
       params
     );
     const total = countResult.rows[0]?.total || 0;
@@ -756,6 +868,7 @@ const PlatformRepository = {
         pt.status,
         pt.order_reference,
         pt.transaction_reference,
+        pt.refunded_amount,
         pt.vnp_pay_date,
         pt.vnp_bank_code,
         pt.vnp_response_code,
@@ -787,49 +900,64 @@ const PlatformRepository = {
   // =========================================================================
 
   async getRevenueReports() {
-    // 1. Total revenue
+    // 1. Total revenue & refunds
     const totalRes = await pool.query(
       `
       SELECT
-        COALESCE(SUM(amount), 0)::numeric(15, 2) AS total_revenue,
+        COALESCE(SUM(amount), 0)::numeric(15, 2) AS total_gross_revenue,
+        COALESCE(SUM(refunded_amount), 0)::numeric(15, 2) AS total_refunded,
+        (COALESCE(SUM(amount), 0) - COALESCE(SUM(refunded_amount), 0))::numeric(15, 2) AS total_revenue,
         COUNT(*)::int AS total_successful_payments
       FROM public.payment_transactions
-      WHERE status = 'success'
+      WHERE status IN ('success', 'refunded')
       `
     );
 
-    // 2. Revenue by plan
+    // 2. Pending & processed refunds
+    const refundPendingRes = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'requested')::int AS pending_refunds_count,
+         COALESCE(SUM(amount) FILTER (WHERE status = 'requested'), 0)::numeric(15, 2) AS pending_refunds_amount,
+         COUNT(*) FILTER (WHERE status = 'succeeded')::int AS successful_refunds_count
+       FROM public.payment_refunds`
+    );
+
+    // 3. Revenue by plan
     const planRes = await pool.query(
       `
       SELECT
         COALESCE(p.name, 'Chưa xác định') AS plan_name,
         COALESCE(p.id, pt.plan_id) AS plan_id,
         COUNT(pt.id)::int AS transaction_count,
-        COALESCE(SUM(pt.amount), 0)::numeric(15, 2) AS revenue
+        COALESCE(SUM(pt.amount), 0)::numeric(15, 2) AS gross_revenue,
+        COALESCE(SUM(pt.refunded_amount), 0)::numeric(15, 2) AS refunded_amount,
+        (COALESCE(SUM(pt.amount), 0) - COALESCE(SUM(pt.refunded_amount), 0))::numeric(15, 2) AS revenue
       FROM public.payment_transactions pt
       LEFT JOIN public.subscription_plans p ON p.id = pt.plan_id
-      WHERE pt.status = 'success'
+      WHERE pt.status IN ('success', 'refunded')
       GROUP BY p.name, p.id, pt.plan_id
       ORDER BY revenue DESC
       `
     );
 
-    // 3. Revenue by month (last 12 months)
+    // 4. Revenue by month (last 12 months)
     const monthlyRes = await pool.query(
       `
       SELECT
         TO_CHAR(COALESCE(paid_at, created_at), 'YYYY-MM') AS month,
         COUNT(id)::int AS transaction_count,
-        COALESCE(SUM(amount), 0)::numeric(15, 2) AS revenue
+        COALESCE(SUM(amount), 0)::numeric(15, 2) AS gross_revenue,
+        COALESCE(SUM(refunded_amount), 0)::numeric(15, 2) AS refunded_amount,
+        (COALESCE(SUM(amount), 0) - COALESCE(SUM(refunded_amount), 0))::numeric(15, 2) AS revenue
       FROM public.payment_transactions
-      WHERE status = 'success'
+      WHERE status IN ('success', 'refunded')
         AND COALESCE(paid_at, created_at) >= NOW() - INTERVAL '12 months'
       GROUP BY TO_CHAR(COALESCE(paid_at, created_at), 'YYYY-MM')
       ORDER BY month ASC
       `
     );
 
-    // 4. Revenue by school (top 10)
+    // 5. Revenue by school (top 10)
     const schoolRes = await pool.query(
       `
       SELECT
@@ -837,10 +965,12 @@ const PlatformRepository = {
         s.name AS school_name,
         s.code AS school_code,
         COUNT(pt.id)::int AS transaction_count,
-        COALESCE(SUM(pt.amount), 0)::numeric(15, 2) AS total_paid
+        COALESCE(SUM(pt.amount), 0)::numeric(15, 2) AS total_gross,
+        COALESCE(SUM(pt.refunded_amount), 0)::numeric(15, 2) AS total_refunded,
+        (COALESCE(SUM(pt.amount), 0) - COALESCE(SUM(pt.refunded_amount), 0))::numeric(15, 2) AS total_paid
       FROM public.payment_transactions pt
       INNER JOIN public.schools s ON s.id = pt.school_id
-      WHERE pt.status = 'success'
+      WHERE pt.status IN ('success', 'refunded')
       GROUP BY s.id, s.name, s.code
       ORDER BY total_paid DESC
       LIMIT 10
@@ -848,11 +978,170 @@ const PlatformRepository = {
     );
 
     return {
-      summary: totalRes.rows[0] || { total_revenue: 0, total_successful_payments: 0 },
+      summary: {
+        ...(totalRes.rows[0] || { total_gross_revenue: 0, total_refunded: 0, total_revenue: 0, total_successful_payments: 0 }),
+        ...(refundPendingRes.rows[0] || { pending_refunds_count: 0, pending_refunds_amount: 0, successful_refunds_count: 0 }),
+      },
       by_plan: planRes.rows,
       by_month: monthlyRes.rows,
       by_school: schoolRes.rows,
     };
+  },
+
+  // =========================================================================
+  // REFUNDS MANAGEMENT
+  // =========================================================================
+
+  async listRefunds({ page = 1, limit = 20, status, search } = {}) {
+    const curPage = Math.max(1, Number(page) || 1);
+    const curLimit = Math.max(1, Number(limit) || 20);
+    const offset = (curPage - 1) * curLimit;
+    const whereConditions = [];
+    const params = [];
+
+    if (status) {
+      params.push(status);
+      whereConditions.push(`pr.status = $${params.length}`);
+    }
+
+    if (search) {
+      params.push(`%${search.trim()}%`);
+      whereConditions.push(`(s.name ILIKE $${params.length} OR s.code ILIKE $${params.length} OR pt.order_reference ILIKE $${params.length})`);
+    }
+
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(" AND ")}` : "";
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total
+       FROM public.payment_refunds pr
+       JOIN public.schools s ON s.id = pr.school_id
+       JOIN public.payment_transactions pt ON pt.id = pr.payment_transaction_id
+       ${whereClause}`,
+      params
+    );
+    const total = countResult.rows[0]?.total || 0;
+
+    params.push(curLimit);
+    params.push(offset);
+
+    const { rows } = await pool.query(
+      `
+      SELECT
+        pr.*,
+        s.name AS school_name,
+        s.code AS school_code,
+        pt.order_reference,
+        pt.payment_method,
+        pt.amount AS transaction_amount,
+        pt.refunded_amount AS tx_refunded_amount,
+        u_req.email AS requester_email,
+        up_req.full_name AS requester_name,
+        u_app.email AS approver_email,
+        up_app.full_name AS approver_name
+      FROM public.payment_refunds pr
+      JOIN public.schools s ON s.id = pr.school_id
+      JOIN public.payment_transactions pt ON pt.id = pr.payment_transaction_id
+      LEFT JOIN public.users u_req ON u_req.id = pr.requested_by
+      LEFT JOIN public.user_profiles up_req ON up_req.user_id = pr.requested_by
+      LEFT JOIN public.users u_app ON u_app.id = pr.approved_by
+      LEFT JOIN public.user_profiles up_app ON up_app.user_id = pr.approved_by
+      ${whereClause}
+      ORDER BY pr.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+      `,
+      params
+    );
+
+    return {
+      items: rows,
+      pagination: {
+        page: curPage,
+        limit: curLimit,
+        total,
+        totalPages: Math.ceil(total / curLimit) || 1,
+      },
+    };
+  },
+
+  async findRefundById(id) {
+    const { rows } = await pool.query(
+      `SELECT pr.*, pt.order_reference, pt.amount AS transaction_amount, pt.refunded_amount, s.name AS school_name
+       FROM public.payment_refunds pr
+       JOIN public.schools s ON s.id = pr.school_id
+       JOIN public.payment_transactions pt ON pt.id = pr.payment_transaction_id
+       WHERE pr.id = $1 LIMIT 1`,
+      [id]
+    );
+    return rows[0] || null;
+  },
+
+  async approveRefund(id, approverId) {
+    const { rows } = await pool.query(
+      `UPDATE public.payment_refunds
+       SET status = 'approved', approved_by = $2, updated_at = NOW()
+       WHERE id = $1 AND status = 'requested'
+       RETURNING *`,
+      [id, approverId]
+    );
+    return rows[0] || null;
+  },
+
+  async rejectRefund(id, approverId, rejectionReason) {
+    const { rows } = await pool.query(
+      `UPDATE public.payment_refunds
+       SET status = 'rejected', approved_by = $2, rejection_reason = $3, updated_at = NOW()
+       WHERE id = $1 AND status IN ('requested', 'approved')
+       RETURNING *`,
+      [id, approverId, rejectionReason || 'Không đủ điều kiện hoàn tiền']
+    );
+    return rows[0] || null;
+  },
+
+  async executeRefund(id, { payoutReference, notes, actorId }) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: refundRows } = await client.query(
+        `SELECT * FROM public.payment_refunds WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      if (!refundRows[0]) throw new Error("REFUND_NOT_FOUND");
+      const refund = refundRows[0];
+      if (refund.status !== "approved" && refund.status !== "requested") {
+        throw new Error("REFUND_INVALID_STATUS");
+      }
+
+      // Update refund record
+      const { rows: updatedRefund } = await client.query(
+        `UPDATE public.payment_refunds
+         SET status = 'succeeded',
+             payout_reference = COALESCE($2, payout_reference),
+             notes = COALESCE($3, notes),
+             executed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [id, payoutReference, notes]
+      );
+
+      // Update payment_transactions
+      await client.query(
+        `UPDATE public.payment_transactions
+         SET refunded_amount = COALESCE(refunded_amount, 0) + $1,
+             status = CASE WHEN (COALESCE(refunded_amount, 0) + $1) >= amount THEN 'refunded' ELSE status END,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [refund.amount, refund.payment_transaction_id]
+      );
+
+      await client.query("COMMIT");
+      return updatedRefund[0];
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 };
 

@@ -80,8 +80,8 @@ const updateUserSchema = z.object({
 const broadcastNotificationSchema = z.object({
   title: z.string().min(1, "Tiêu đề không được để trống"),
   message: z.string().min(1, "Nội dung không được để trống"),
-  target: z.enum(["all", "student", "lecturer"], {
-    errorMap: () => ({ message: "Target không hợp lệ. Chỉ chấp nhận: all, student, lecturer" }),
+  target: z.enum(["all", "student", "lecturer", "school_admin"], {
+    errorMap: () => ({ message: "Target không hợp lệ. Chỉ chấp nhận: all, student, lecturer, school_admin" }),
   }),
 });
 
