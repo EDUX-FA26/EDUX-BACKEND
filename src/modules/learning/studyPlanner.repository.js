@@ -1,5 +1,47 @@
 const { pool } = require('../../config/db.config');
 
+let hasSchoolIdInStudyPlans = null;
+let hasSchoolIdInStudyPlanDays = null;
+
+async function checkSchoolIdColumn(client) {
+  if (hasSchoolIdInStudyPlans !== null) return hasSchoolIdInStudyPlans;
+  try {
+    const res = await client.query(`
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_name = 'study_plans' AND column_name = 'school_id'
+      LIMIT 1
+    `);
+    hasSchoolIdInStudyPlans = res.rows.length > 0;
+  } catch (_) {
+    hasSchoolIdInStudyPlans = false;
+  }
+  return hasSchoolIdInStudyPlans;
+}
+
+async function checkDaySchoolIdColumn(client) {
+  if (hasSchoolIdInStudyPlanDays !== null) return hasSchoolIdInStudyPlanDays;
+  try {
+    const res = await client.query(`
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_name = 'study_plan_days' AND column_name = 'school_id'
+      LIMIT 1
+    `);
+    hasSchoolIdInStudyPlanDays = res.rows.length > 0;
+  } catch (_) {
+    hasSchoolIdInStudyPlanDays = false;
+  }
+  return hasSchoolIdInStudyPlanDays;
+}
+
+function getStudyDate(startsOnStr, dayNumber) {
+  const [y, m, d] = startsOnStr.split('-').map(Number);
+  const utcDate = new Date(Date.UTC(y, m - 1, d + (dayNumber - 1)));
+  const outY = utcDate.getUTCFullYear();
+  const outM = String(utcDate.getUTCMonth() + 1).padStart(2, '0');
+  const outD = String(utcDate.getUTCDate()).padStart(2, '0');
+  return `${outY}-${outM}-${outD}`;
+}
+
 const StudyPlannerRepository = {
   async createOrGetPlan({
     studentId,
@@ -15,17 +57,12 @@ const StudyPlannerRepository = {
     try {
       await client.query('BEGIN');
 
-      // Force: xóa plan cũ cùng ngày (scoped by school nếu có)
+      // Force: xóa plan cũ cùng chu kỳ
       if (force) {
-        const whereForce = schoolId
-          ? `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3 AND school_id = $4`
-          : `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`;
-        const paramsForce = schoolId
-          ? [studentId, subjectId, startsOn, schoolId]
-          : [studentId, subjectId, startsOn];
         const oldPlans = await client.query(
-          `SELECT id FROM study_plans ${whereForce}`,
-          paramsForce
+          `SELECT id FROM study_plans
+           WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`,
+          [studentId, subjectId, startsOn]
         );
         for (const op of oldPlans.rows) {
           await client.query(`DELETE FROM study_plan_days WHERE plan_id = $1`, [op.id]);
@@ -33,117 +70,134 @@ const StudyPlannerRepository = {
         }
       }
 
-      // INSERT study_plan với school_id nếu có
-      let inserted;
-      if (schoolId) {
-        inserted = await client.query(
-          `INSERT INTO study_plans (
-             student_id,
-             subject_id,
-             starts_on,
-             status,
-             analytics_snapshot,
-             school_id
-           )
-           VALUES ($1, $2, $3, 'draft', $4::jsonb, $5)
-           ON CONFLICT (school_id, student_id, subject_id, starts_on)
-           DO NOTHING
-           RETURNING *`,
-          [studentId, subjectId, startsOn, JSON.stringify(analytics), schoolId]
-        );
-      } else {
-        inserted = await client.query(
-          `INSERT INTO study_plans (
-             student_id,
-             subject_id,
-             starts_on,
-             status,
-             analytics_snapshot
-           )
-           VALUES ($1, $2, $3, 'draft', $4::jsonb)
-           ON CONFLICT (student_id, subject_id, starts_on)
-           DO NOTHING
-           RETURNING *`,
-          [studentId, subjectId, startsOn, JSON.stringify(analytics)]
-        );
-      }
+      // Khóa và kiểm tra xem kế hoạch đã tồn tại cho chu kỳ này chưa
+      const existing = await client.query(
+        `SELECT * FROM study_plans
+         WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3
+         FOR UPDATE`,
+        [studentId, subjectId, startsOn]
+      );
 
-      const created = inserted.rows.length > 0;
-      let plan = inserted.rows[0];
-
-      // Nếu conflict (DO NOTHING), lấy plan hiện có
-      if (!plan) {
-        const existingParams = schoolId
-          ? [studentId, subjectId, startsOn, schoolId]
-          : [studentId, subjectId, startsOn];
-        const existingWhere = schoolId
-          ? `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3 AND school_id = $4`
-          : `WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`;
-        const existing = await client.query(
-          `SELECT * FROM study_plans ${existingWhere}`,
-          existingParams
-        );
-        plan = existing.rows[0];
-      }
+      let plan = existing.rows[0];
+      let created = false;
 
       if (!plan) {
-        throw new Error('STUDY_PLAN_NOT_FOUND');
-      }
+        const hasSchoolCol = await checkSchoolIdColumn(client);
+        let inserted;
 
-      // Nếu mới tạo, insert các ngày học
-      if (created) {
-        for (const day of days) {
-          if (schoolId) {
-            await client.query(
-              `INSERT INTO study_plan_days (
-                 plan_id,
-                 day_number,
-                 topic_id,
-                 activity,
-                 duration_minutes,
-                 target_questions,
-                 reason,
-                 school_id
-               )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-              [
-                plan.id,
-                day.day,
-                day.topicId,
-                day.activity,
-                day.durationMinutes,
-                day.targetQuestions,
-                day.reason,
-                schoolId,
-              ]
-            );
-          } else {
-            await client.query(
-              `INSERT INTO study_plan_days (
-                 plan_id,
-                 day_number,
-                 topic_id,
-                 activity,
-                 duration_minutes,
-                 target_questions,
-                 reason
-               )
-               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [
-                plan.id,
-                day.day,
-                day.topicId,
-                day.activity,
-                day.durationMinutes,
-                day.targetQuestions,
-                day.reason,
-              ]
-            );
+        if (hasSchoolCol && schoolId) {
+          inserted = await client.query(
+            `INSERT INTO study_plans (
+               student_id,
+               subject_id,
+               starts_on,
+               status,
+               analytics_snapshot,
+               school_id
+             )
+             VALUES ($1, $2, $3, 'draft', $4::jsonb, $5)
+             ON CONFLICT (student_id, subject_id, starts_on)
+             DO NOTHING
+             RETURNING *`,
+            [studentId, subjectId, startsOn, JSON.stringify(analytics), schoolId]
+          );
+        } else {
+          inserted = await client.query(
+            `INSERT INTO study_plans (
+               student_id,
+               subject_id,
+               starts_on,
+               status,
+               analytics_snapshot
+             )
+             VALUES ($1, $2, $3, 'draft', $4::jsonb)
+             ON CONFLICT (student_id, subject_id, starts_on)
+             DO NOTHING
+             RETURNING *`,
+            [studentId, subjectId, startsOn, JSON.stringify(analytics)]
+          );
+        }
+
+        created = inserted.rows.length > 0;
+        plan = inserted.rows[0];
+
+        // Nếu request song song đã chèn trước (DO NOTHING), lấy plan đó kèm khóa hàng
+        if (!plan) {
+          const fetchAgain = await client.query(
+            `SELECT * FROM study_plans
+             WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3
+             FOR UPDATE`,
+            [studentId, subjectId, startsOn]
+          );
+          plan = fetchAgain.rows[0];
+        }
+
+        if (!plan) {
+          throw new Error('STUDY_PLAN_NOT_FOUND');
+        }
+
+        // Chèn đúng 7 ngày học trong transaction
+        if (created) {
+          const hasDaySchoolCol = await checkDaySchoolIdColumn(client);
+          for (const day of days) {
+            if (hasDaySchoolCol && schoolId) {
+              await client.query(
+                `INSERT INTO study_plan_days (
+                   plan_id,
+                   day_number,
+                   topic_id,
+                   activity,
+                   duration_minutes,
+                   target_questions,
+                   reason,
+                   content_status,
+                   school_id
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT (plan_id, day_number) DO NOTHING`,
+                [
+                  plan.id,
+                  day.day,
+                  day.topicId,
+                  day.activity,
+                  day.durationMinutes,
+                  day.targetQuestions,
+                  day.reason,
+                  day.contentStatus || 'ready',
+                  schoolId,
+                ]
+              );
+            } else {
+              await client.query(
+                `INSERT INTO study_plan_days (
+                   plan_id,
+                   day_number,
+                   topic_id,
+                   activity,
+                   duration_minutes,
+                   target_questions,
+                   reason,
+                   content_status
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (plan_id, day_number) DO NOTHING`,
+                [
+                  plan.id,
+                  day.day,
+                  day.topicId,
+                  day.activity,
+                  day.durationMinutes,
+                  day.targetQuestions,
+                  day.reason,
+                  day.contentStatus || 'ready',
+                ]
+              );
+            }
           }
         }
       }
 
-      const dayResult = await client.query(
+      let dayResult = await client.query(
         `SELECT
            id,
            day_number,
@@ -158,6 +212,82 @@ const StudyPlannerRepository = {
          ORDER BY day_number`,
         [plan.id]
       );
+
+      // Nếu kế hoạch hiện có chưa có ngày (kế hoạch dở dang/cũ), tự động bổ sung đủ 7 ngày
+      if (dayResult.rows.length === 0 && Array.isArray(days) && days.length > 0) {
+        const hasDaySchoolCol = await checkDaySchoolIdColumn(client);
+        for (const day of days) {
+          if (hasDaySchoolCol && schoolId) {
+            await client.query(
+              `INSERT INTO study_plan_days (
+                 plan_id,
+                 day_number,
+                 topic_id,
+                 activity,
+                 duration_minutes,
+                 target_questions,
+                 reason,
+                 content_status,
+                 school_id
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               ON CONFLICT (plan_id, day_number) DO NOTHING`,
+              [
+                plan.id,
+                day.day,
+                day.topicId,
+                day.activity,
+                day.durationMinutes,
+                day.targetQuestions,
+                day.reason,
+                day.contentStatus || 'ready',
+                schoolId,
+              ]
+            );
+          } else {
+            await client.query(
+              `INSERT INTO study_plan_days (
+                 plan_id,
+                 day_number,
+                 topic_id,
+                 activity,
+                 duration_minutes,
+                 target_questions,
+                 reason,
+                 content_status
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (plan_id, day_number) DO NOTHING`,
+              [
+                plan.id,
+                day.day,
+                day.topicId,
+                day.activity,
+                day.durationMinutes,
+                day.targetQuestions,
+                day.reason,
+                day.contentStatus || 'ready',
+              ]
+            );
+          }
+        }
+
+        dayResult = await client.query(
+          `SELECT
+             id,
+             day_number,
+             topic_id,
+             activity,
+             duration_minutes,
+             target_questions,
+             reason,
+             content_status
+           FROM study_plan_days
+           WHERE plan_id = $1
+           ORDER BY day_number`,
+          [plan.id]
+        );
+      }
 
       await client.query('COMMIT');
 
@@ -179,16 +309,19 @@ const StudyPlannerRepository = {
    * Nếu không có, trả về null.
    */
   async getActivePlan(studentId, subjectId, schoolId = null) {
-    const conditions = ['student_id = $1'];
+    const conditions = ['sp.student_id = $1'];
     const params = [studentId];
     let idx = 2;
 
     if (subjectId) {
-      conditions.push(`subject_id = $${idx++}`);
+      conditions.push(`sp.subject_id = $${idx++}`);
       params.push(subjectId);
     }
+
+    let schoolJoin = '';
     if (schoolId) {
-      conditions.push(`school_id = $${idx++}`);
+      schoolJoin = 'JOIN subjects s ON s.id = sp.subject_id';
+      conditions.push(`s.school_id = $${idx++}`);
       params.push(schoolId);
     }
 
@@ -196,15 +329,16 @@ const StudyPlannerRepository = {
 
     const planResult = await pool.query(
       `SELECT
-         id,
-         subject_id AS "subjectId",
-         starts_on AS "startsOn",
-         status,
-         analytics_snapshot AS "analyticsSnapshot",
-         created_at AS "createdAt"
-       FROM study_plans
+         sp.id,
+         sp.subject_id AS "subjectId",
+         sp.starts_on AS "startsOn",
+         sp.status,
+         sp.analytics_snapshot AS "analyticsSnapshot",
+         sp.created_at AS "createdAt"
+       FROM study_plans sp
+       ${schoolJoin}
        ${whereClause}
-       ORDER BY created_at DESC
+       ORDER BY sp.created_at DESC
        LIMIT 1`,
       params
     );
@@ -213,12 +347,14 @@ const StudyPlannerRepository = {
 
     const plan = planResult.rows[0];
 
-    // Lấy 7 ngày học + trạng thái nộp bài
+    // Lấy 7 ngày học + trạng thái nộp bài (submission)
     const daysResult = await pool.query(
       `SELECT
          spd.id AS "planDayId",
          spd.day_number AS "day",
          spd.topic_id AS "topicId",
+         t.name AS "topicName",
+         t.code AS "topicCode",
          spd.activity,
          spd.duration_minutes AS "durationMinutes",
          spd.target_questions AS "targetQuestions",
@@ -237,29 +373,28 @@ const StudyPlannerRepository = {
            LIMIT 1
          ) AS submission
        FROM study_plan_days spd
+       LEFT JOIN topics t ON t.id = spd.topic_id
        WHERE spd.plan_id = $1
        ORDER BY spd.day_number`,
       [plan.id, studentId]
     );
 
-    // Tính ngày thực tế cho từng day
-    const startDate = new Date(`${plan.startsOn}T00:00:00.000Z`);
-    const days = daysResult.rows.map(day => {
-      const date = new Date(startDate);
-      date.setUTCDate(date.getUTCDate() + day.day - 1);
-      return {
-        ...day,
-        studyDate: date.toISOString().slice(0, 10),
-        isCompleted: !!day.submission,
-      };
-    });
+    const startsOnStr = typeof plan.startsOn === 'string'
+      ? plan.startsOn.slice(0, 10)
+      : new Date(plan.startsOn).toISOString().slice(0, 10);
+
+    const days = daysResult.rows.map(day => ({
+      ...day,
+      studyDate: getStudyDate(startsOnStr, day.day),
+      isCompleted: !!day.submission,
+    }));
 
     const completedCount = days.filter(d => d.isCompleted).length;
 
     return {
       planId: plan.id,
       subjectId: plan.subjectId,
-      startsOn: plan.startsOn,
+      startsOn: startsOnStr,
       status: plan.status,
       durationDays: 7,
       completedDays: completedCount,

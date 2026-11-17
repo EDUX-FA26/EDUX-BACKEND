@@ -1,4 +1,3 @@
-
 const {
     makeStudyPlan7Days
 } = require('./studyPlanner.core');
@@ -6,27 +5,94 @@ const {
 const LearningRepository = require('./learning.repository');
 const StudyPlannerRepository = require('./studyPlanner.repository');
 
+function getVietnamTodayDate() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).formatToParts(new Date());
+
+    const values = Object.fromEntries(
+        parts
+            .filter(part => part.type !== 'literal')
+            .map(part => [part.type, part.value])
+    );
+
+    return `${values.year}-${values.month}-${values.day}`;
+}
+
+function getStudyDate(startsOnStr, dayNumber) {
+    const [y, m, d] = startsOnStr.split('-').map(Number);
+    const utcDate = new Date(Date.UTC(y, m - 1, d + (dayNumber - 1)));
+    const outY = utcDate.getUTCFullYear();
+    const outM = String(utcDate.getUTCMonth() + 1).padStart(2, '0');
+    const outD = String(utcDate.getUTCDate()).padStart(2, '0');
+    return `${outY}-${outM}-${outD}`;
+}
+
 const StudyPlannerService = {
-    createPreview(analytics) {
-        const plan = makeStudyPlan7Days(analytics);
+    async createPreview(analytics, studentId = null, schoolId = null) {
+        let enrichedAnalytics = analytics;
+
+        if (studentId && analytics?.subjectId && Array.isArray(analytics.topics)) {
+            const topicIds = analytics.topics.map(t => t.topicId);
+            const countsMap = await LearningRepository.findAccessibleCardCountsByTopics(
+                studentId,
+                analytics.subjectId,
+                schoolId,
+                topicIds
+            );
+            enrichedAnalytics = {
+                ...analytics,
+                topics: analytics.topics.map(t => ({
+                    ...t,
+                    accessibleCardCount: countsMap.get(t.topicId) ?? 0,
+                }))
+            };
+        }
+
+        const plan = makeStudyPlan7Days(enrichedAnalytics);
+        const startsOn = getVietnamTodayDate();
 
         return {
             ...plan,
+            startsOn,
+            days: plan.days.map(day => ({
+                ...day,
+                studyDate: getStudyDate(startsOn, day.day)
+            })),
             generatedAt: new Date().toISOString()
         };
     },
 
     async getMistakesPreview(analytics, studentId, schoolId = null) {
-        const plan = makeStudyPlan7Days(analytics);
+        let enrichedAnalytics = analytics;
+        if (studentId && analytics?.subjectId && Array.isArray(analytics.topics)) {
+            const topicIds = analytics.topics.map(t => t.topicId);
+            const countsMap = await LearningRepository.findAccessibleCardCountsByTopics(
+                studentId,
+                analytics.subjectId,
+                schoolId,
+                topicIds
+            );
+            enrichedAnalytics = {
+                ...analytics,
+                topics: analytics.topics.map(t => ({
+                    ...t,
+                    accessibleCardCount: countsMap.get(t.topicId) ?? 0,
+                }))
+            };
+        }
 
-        // Chỉ lấy các Topic được xếp lịch ôn tập.
+        const plan = makeStudyPlan7Days(enrichedAnalytics);
+
+        // Lấy các Topic được xếp lịch ôn tập hoặc luyện tập
         const reviewTopics = new Map();
 
         for (const day of plan.days) {
-            if (
-                day.activity === 'review' &&
-                !reviewTopics.has(day.topicId)
-            ) {
+            const isPracticeOrReview = day.activity === 'practice' || day.activity === 'review';
+            if (isPracticeOrReview && !reviewTopics.has(day.topicId)) {
                 reviewTopics.set(day.topicId, {
                     topicId: day.topicId,
                     topicName: day.topicName,
@@ -35,7 +101,7 @@ const StudyPlannerService = {
                 });
             }
 
-            if (day.activity === 'review') {
+            if (isPracticeOrReview) {
                 reviewTopics
                     .get(day.topicId)
                     .scheduledDays.push(day.day);
@@ -77,41 +143,41 @@ const StudyPlannerService = {
         };
     },
 
-
     async generateForStudent(analytics, studentId, force = false, schoolId = null) {
-        // Ngày bắt đầu theo múi giờ Việt Nam.
-        const parts = new Intl.DateTimeFormat('en-US', {
-            timeZone: 'Asia/Ho_Chi_Minh',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit'
-        }).formatToParts(new Date());
+        const startsOn = getVietnamTodayDate();
 
-        const values = Object.fromEntries(
-            parts
-                .filter(part => part.type !== 'literal')
-                .map(part => [part.type, part.value])
-        );
+        // Kiểm tra quyền truy cập học liệu và số lượng flashcard khả dụng của từng topic
+        let enrichedAnalytics = analytics;
+        if (analytics?.subjectId && Array.isArray(analytics.topics)) {
+            const topicIds = analytics.topics.map(t => t.topicId);
+            const countsMap = await LearningRepository.findAccessibleCardCountsByTopics(
+                studentId,
+                analytics.subjectId,
+                schoolId,
+                topicIds
+            );
 
-        const startsOn =
-            `${values.year}-${values.month}-${values.day}`;
+            enrichedAnalytics = {
+                ...analytics,
+                topics: analytics.topics.map(t => ({
+                    ...t,
+                    accessibleCardCount: countsMap.get(t.topicId) ?? 0,
+                }))
+            };
+        }
 
-        const preview = makeStudyPlan7Days(analytics);
+        const preview = makeStudyPlan7Days(enrichedAnalytics);
 
         const saved =
             await StudyPlannerRepository.createOrGetPlan({
                 studentId,
                 subjectId: analytics.subjectId,
                 startsOn,
-                analytics,
+                analytics: enrichedAnalytics,
                 days: preview.days,
                 force,
                 schoolId,
             });
-
-        const startDate = new Date(
-            `${startsOn}T00:00:00.000Z`
-        );
 
         return {
             planId: saved.plan.id,
@@ -120,25 +186,17 @@ const StudyPlannerService = {
             durationDays: 7,
             status: saved.plan.status,
             created: saved.created,
-            days: saved.days.map(day => {
-                const date = new Date(startDate);
-
-                date.setUTCDate(
-                    date.getUTCDate() + day.day_number - 1
-                );
-
-                return {
-                    planDayId: day.id,
-                    day: day.day_number,
-                    studyDate: date.toISOString().slice(0, 10),
-                    topicId: day.topic_id,
-                    activity: day.activity,
-                    durationMinutes: day.duration_minutes,
-                    targetQuestions: day.target_questions,
-                    reason: day.reason,
-                    contentStatus: day.content_status
-                };
-            })
+            days: saved.days.map(day => ({
+                planDayId: day.id,
+                day: day.day_number,
+                studyDate: getStudyDate(startsOn, day.day_number),
+                topicId: day.topic_id,
+                activity: day.activity,
+                durationMinutes: day.duration_minutes,
+                targetQuestions: day.target_questions,
+                reason: day.reason,
+                contentStatus: day.content_status
+            }))
         };
     },
 
@@ -148,4 +206,3 @@ const StudyPlannerService = {
 };
 
 module.exports = StudyPlannerService;
-
