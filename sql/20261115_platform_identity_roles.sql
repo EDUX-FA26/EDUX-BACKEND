@@ -10,16 +10,7 @@ BEGIN
   END IF;
 END $$;
 
--- Existing platform accounts become their real business role. Existing School
--- Admin/Lecturer/Student users retain their legacy LMS role unchanged.
-UPDATE public.users u
-SET role = pa.role,
-    updated_at = NOW()
-FROM public.platform_admins pa
-WHERE pa.user_id = u.id
-  AND pa.is_active = TRUE
-  AND u.role IS DISTINCT FROM pa.role;
-
+-- 1. Drop existing role constraint first so platform roles can be set
 DO $$
 DECLARE role_constraint TEXT;
 BEGIN
@@ -35,11 +26,19 @@ BEGIN
   END IF;
 END $$;
 
+-- 2. Existing platform accounts become their real business role. Existing School
+-- Admin/Lecturer/Student users retain their legacy LMS role unchanged.
+UPDATE public.users u
+SET role = pa.role,
+    updated_at = NOW()
+FROM public.platform_admins pa
+WHERE pa.user_id = u.id
+  AND pa.is_active = TRUE
+  AND u.role IS DISTINCT FROM pa.role;
+
+-- 3. Add updated constraint supporting all 5 roles
 ALTER TABLE public.users
   ADD CONSTRAINT users_role_check
   CHECK (role IN ('student', 'lecturer', 'admin', 'superadmin', 'manager'));
 
 COMMIT;
-
--- Rollback: set platform identities back to 'admin', then replace the check
--- constraint only after confirming no other users have platform-only roles.

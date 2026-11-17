@@ -22,7 +22,7 @@ function createSchoolsRouter({ authenticate }) {
     if (typeof authenticate !== "function") {
         throw new Error(
             "SchoolsRouter requires authenticate middleware"
-        );
+        );  
     }
 
     const router = express.Router();

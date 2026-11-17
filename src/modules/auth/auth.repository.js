@@ -50,7 +50,7 @@ class AuthRepository {
       SELECT id, email, username, password_hash, role, is_active,
              COALESCE(must_change_password, FALSE) AS must_change_password
       FROM users
-      WHERE LOWER(email) = LOWER($1) OR username = $1
+      WHERE LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1)
     `;
     const result = await pool.query(query, [identifier]);
     return result.rows[0] || null;
@@ -118,9 +118,9 @@ class AuthRepository {
    */
   async checkDuplication(email, username, studentCode) {
     const query = `
-      SELECT 'email' as field FROM users WHERE email = $1
+      SELECT 'email' as field FROM users WHERE LOWER(email) = LOWER($1)
       UNION
-      SELECT 'username' as field FROM users WHERE username = $2 AND $2 IS NOT NULL
+      SELECT 'username' as field FROM users WHERE LOWER(username) = LOWER($2) AND $2 IS NOT NULL
       UNION
       SELECT 'student_code' as field FROM user_profiles WHERE student_code = $3 AND $3 IS NOT NULL
     `;

@@ -308,33 +308,39 @@ const AdminRepository = {
     return rows;
   },
 
-  async findUserIdsByPlatformTarget(target) {
+  async findUsersByPlatformTarget(target) {
     let query = `
-      SELECT DISTINCT u.id
+      SELECT DISTINCT u.id, u.email, up.full_name
       FROM public.users u
+      LEFT JOIN public.user_profiles up ON up.user_id = u.id
       WHERE u.is_active = TRUE
     `;
 
-    if (target === "student" || target === "lecturer") {
+    if (target === "student" || target === "lecturer" || target === "school_admin") {
+      const matchRole = target === "school_admin" ? "admin" : target;
       query = `
-        SELECT DISTINCT sm.user_id AS id
-        FROM public.school_memberships sm
-        JOIN public.schools s
-          ON s.id = sm.school_id
-        JOIN public.users u
-          ON u.id = sm.user_id
-        WHERE sm.role = $1
-          AND sm.status = 'active'
-          AND s.status = 'active'
+        SELECT DISTINCT u.id, u.email, up.full_name
+        FROM public.users u
+        LEFT JOIN public.user_profiles up ON up.user_id = u.id
+        LEFT JOIN public.school_memberships sm
+          ON sm.user_id = u.id AND sm.status = 'active'
+        LEFT JOIN public.schools s
+          ON s.id = sm.school_id AND s.status = 'active'
+        WHERE (sm.role = $1 OR u.role = $2)
           AND u.is_active = TRUE
-        ORDER BY sm.user_id
+        ORDER BY u.id
       `;
-      const { rows } = await pool.query(query, [target]);
-      return rows.map((row) => row.id);
+      const { rows } = await pool.query(query, [target, matchRole]);
+      return rows;
     }
 
     const { rows } = await pool.query(query);
-    return rows.map((row) => row.id);
+    return rows;
+  },
+
+  async findUserIdsByPlatformTarget(target) {
+    const users = await this.findUsersByPlatformTarget(target);
+    return users.map((u) => u.id);
   },
 
   /**
