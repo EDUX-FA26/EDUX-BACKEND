@@ -114,12 +114,35 @@ const PlatformRepository = {
     return rows[0] || null;
   },
 
+  async updateManager(userId, { email, username, fullName }) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(
+        `UPDATE public.users u
+         SET email = COALESCE($2, u.email), username = COALESCE($3, u.username), updated_at = NOW()
+         FROM public.platform_admins pa
+         WHERE pa.user_id = u.id AND pa.user_id = $1 AND pa.role = 'manager'
+         RETURNING u.id, u.email, u.username`,
+        [userId, email ?? null, username ?? null]
+      );
+      if (!rows[0]) { await client.query("ROLLBACK"); return null; }
+      if (fullName !== undefined) {
+        await client.query(`UPDATE public.user_profiles SET full_name = $2, updated_at = NOW() WHERE user_id = $1`, [userId, fullName]);
+      }
+      await client.query("COMMIT");
+      return rows[0];
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  },
+
   async deleteManager(userId) {
-    const { rowCount } = await pool.query(
-      `DELETE FROM public.platform_admins WHERE user_id = $1 AND role = 'manager'`,
+    const { rows } = await pool.query(
+      `UPDATE public.platform_admins SET is_active = FALSE, updated_at = NOW()
+       WHERE user_id = $1 AND role = 'manager' AND is_active = TRUE
+       RETURNING user_id`,
       [userId]
     );
-    return rowCount > 0;
+    return Boolean(rows[0]);
   },
 
   // =========================================================================
@@ -275,6 +298,7 @@ const PlatformRepository = {
         s.code,
         s.slug,
         s.status,
+        s.provisioning_source,
         s.setup_completed,
         s.setup_completed_at,
         s.locked_at,
@@ -409,8 +433,8 @@ const PlatformRepository = {
       // A tenant has no profile until its invited school_admin completes setup.
       const { rows } = await client.query(
         `
-        INSERT INTO public.schools (name, code, slug, status, setup_completed)
-        VALUES (NULL, $1, $2, 'pending_setup', FALSE)
+        INSERT INTO public.schools (name, code, slug, status, setup_completed, provisioning_source)
+        VALUES (NULL, $1, $2, 'pending_setup', FALSE, 'manager_created')
         RETURNING *
         `,
         [code, code.toLowerCase()]

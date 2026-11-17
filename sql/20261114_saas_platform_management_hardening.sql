@@ -14,16 +14,40 @@ BEGIN
     RAISE EXCEPTION 'Platform hardening requires the prior SaaS platform migration';
   END IF;
 
-  -- Do not silently bypass a legacy status CHECK. The current constraint must
-  -- first permit the documented pending_setup lifecycle state.
+  -- Stop before changing a legacy CHECK if the table already contains a
+  -- lifecycle value the SaaS application cannot safely preserve.
   IF EXISTS (
+    SELECT 1 FROM public.schools
+    WHERE status NOT IN ('active', 'suspended', 'archived', 'pending_setup', 'locked')
+  ) THEN
+    RAISE EXCEPTION 'schools.status contains unsupported lifecycle values; review before migration';
+  END IF;
+END $$;
+
+-- The legacy database only allowed active/suspended/archived. The SaaS flow
+-- needs pending_setup before School Admin handover and locked for operations.
+DO $$
+DECLARE status_constraint TEXT;
+BEGIN
+  SELECT conname INTO status_constraint
+  FROM pg_constraint
+  WHERE conrelid = 'public.schools'::regclass
+    AND contype = 'c'
+    AND pg_get_constraintdef(oid) ILIKE '%status%'
+  LIMIT 1;
+
+  IF status_constraint IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE public.schools DROP CONSTRAINT %I', status_constraint);
+  END IF;
+
+  IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'public.schools'::regclass
-      AND contype = 'c'
-      AND pg_get_constraintdef(oid) ILIKE '%status%'
-      AND pg_get_constraintdef(oid) NOT ILIKE '%pending_setup%'
+      AND conname = 'schools_status_check'
   ) THEN
-    RAISE EXCEPTION 'schools.status constraint must be reviewed to allow pending_setup before this migration';
+    ALTER TABLE public.schools
+      ADD CONSTRAINT schools_status_check
+      CHECK (status IN ('active', 'suspended', 'archived', 'pending_setup', 'locked'));
   END IF;
 END $$;
 
@@ -78,18 +102,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS payment_transactions_provider_reference_unique
 CREATE OR REPLACE FUNCTION public.prevent_platform_school_account_overlap()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_TABLE_NAME = 'platform_admins' AND NEW.is_active = TRUE AND EXISTS (
-    SELECT 1 FROM public.school_memberships
-    WHERE user_id = NEW.user_id AND status = 'active'
-  ) THEN
-    RAISE EXCEPTION 'A platform account cannot have an active school membership';
-  END IF;
-
-  IF TG_TABLE_NAME = 'school_memberships' AND NEW.status = 'active' AND EXISTS (
-    SELECT 1 FROM public.platform_admins
-    WHERE user_id = NEW.user_id AND is_active = TRUE
-  ) THEN
-    RAISE EXCEPTION 'A school account cannot have an active platform role';
+  IF TG_TABLE_NAME = 'platform_admins' THEN
+    IF NEW.is_active = TRUE AND EXISTS (
+      SELECT 1 FROM public.school_memberships
+      WHERE user_id = NEW.user_id AND status = 'active'
+    ) THEN
+      RAISE EXCEPTION 'A platform account cannot have an active school membership';
+    END IF;
+  ELSIF TG_TABLE_NAME = 'school_memberships' THEN
+    IF NEW.status = 'active' AND EXISTS (
+      SELECT 1 FROM public.platform_admins
+      WHERE user_id = NEW.user_id AND is_active = TRUE
+    ) THEN
+      RAISE EXCEPTION 'A school account cannot have an active platform role';
+    END IF;
   END IF;
   RETURN NEW;
 END;

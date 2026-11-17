@@ -374,6 +374,62 @@ class AuthService {
     return { success: true };
   }
 
+  async firstLoginChangePassword(userId, currentPassword, newPassword, confirmPassword) {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      const error = new Error("Vui lòng điền đầy đủ thông tin mật khẩu");
+      error.status = 400;
+      throw error;
+    }
+
+    if (newPassword !== confirmPassword) {
+      const error = new Error("Mật khẩu mới và xác nhận mật khẩu không trùng khớp");
+      error.status = 400;
+      throw error;
+    }
+
+    if (newPassword.length < 6) {
+      const error = new Error("Mật khẩu mới phải có ít nhất 6 ký tự");
+      error.status = 400;
+      throw error;
+    }
+
+    if (newPassword === currentPassword) {
+      const error = new Error("Mật khẩu mới không được trùng với mật khẩu khởi tạo tạm thời");
+      error.status = 400;
+      throw error;
+    }
+
+    const user = await authRepository.findUserByIdWithPassword(userId);
+    if (!user) {
+      const error = new Error("Không tìm thấy người dùng");
+      error.status = 404;
+      throw error;
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isMatch) {
+      const error = new Error("Mật khẩu hiện tại không chính xác");
+      error.status = 400;
+      throw error;
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await authRepository.updatePassword(userId, newHash);
+
+    const updatedUser = await authRepository.findUserByIdWithProfile(userId);
+    const platformRole = await authRepository.findPlatformRole(userId);
+
+    return {
+      success: true,
+      message: "Đổi mật khẩu thành công",
+      user: {
+        ...updatedUser,
+        must_change_password: false,
+        platform_role: platformRole,
+      },
+    };
+  }
+
   async changePassword(userId, oldPassword, newPassword) {
     // 1. Lấy thông tin user hiện tại (chứa password_hash)
     const user = await authRepository.findUserByIdWithPassword(userId);
