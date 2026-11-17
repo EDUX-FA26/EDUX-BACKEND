@@ -103,6 +103,22 @@ class AuthController {
     }
   }
 
+  async firstLoginChangePassword(req, res, next) {
+    try {
+      const userId = req.user.id;
+      const { current_password, new_password, confirm_password } = req.body;
+      const result = await authService.firstLoginChangePassword(
+        userId,
+        current_password,
+        new_password,
+        confirm_password
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async changePassword(req, res, next) {
     try {
       const userId = req.user.id;

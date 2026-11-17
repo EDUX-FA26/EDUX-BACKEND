@@ -296,12 +296,16 @@ const GradingRepository = {
         a.ai_declaration_required AS assignment_ai_declaration_required,
         a.class_id,
         c.lecturer_id,
+        c.subject_id,
+        s_subj.name           AS subject_name,
+        s_subj.code           AS subject_code,
         up.full_name          AS student_name,
         up.student_code,
         u.email               AS student_email
       FROM submissions s
       JOIN assignments a ON s.assignment_id = a.id AND a.school_id = s.school_id
       JOIN classes     c ON a.class_id      = c.id AND c.school_id = s.school_id
+      LEFT JOIN subjects s_subj ON c.subject_id = s_subj.id
       JOIN users       u ON s.student_id    = u.id
       LEFT JOIN user_profiles up ON u.id    = up.user_id
       WHERE s.id = $1 AND s.school_id = $2
@@ -360,11 +364,29 @@ const GradingRepository = {
       aiEvaluation = null;
     }
 
+    let courseTopics = [];
+    if (submissionData.subject_id) {
+      try {
+        const topicQuery = `
+          SELECT id, subject_id, name, description, parent_id, is_active
+          FROM topics
+          WHERE subject_id = $1 AND is_active = TRUE AND school_id = $2
+          ORDER BY name ASC
+        `;
+        const { rows: tRows } = await pool.query(topicQuery, [submissionData.subject_id, schoolId]);
+        courseTopics = tRows || [];
+      } catch (e) {
+        courseTopics = [];
+      }
+    }
+
     return {
       submission: submissionData,
       latestVersion,
       aiInteractions,
       aiEvaluation,
+      courseTopics,
+      hasCourseTopics: courseTopics.length > 0,
     };
   },
 };

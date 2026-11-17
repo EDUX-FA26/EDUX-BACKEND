@@ -97,6 +97,49 @@ const TasksRepository = {
         return rows[0] || null;
     },
 
+
+    // ==========================================
+    // CHECK PROJECT LECTURER
+    // ==========================================
+
+    async isProjectLecturer(
+        projectId,
+        lecturerId,
+        schoolId
+    ) {
+        const { rows } = await pool.query(
+            `
+            SELECT 1
+            FROM projects p
+
+            INNER JOIN classes c
+                ON c.id = p.class_id
+               AND c.school_id = p.school_id
+
+            INNER JOIN public.school_memberships sm
+                ON sm.user_id = $2
+               AND sm.school_id = $3
+
+            WHERE p.id = $1
+              AND p.school_id = $3
+              AND p.status = 'active'
+              AND c.is_active = true
+              AND c.lecturer_id = $2
+              AND sm.status = 'active'
+              AND sm.role = 'lecturer'
+
+            LIMIT 1
+            `,
+            [
+                projectId,
+                lecturerId,
+                schoolId,
+            ]
+        );
+
+        return rows.length > 0;
+    },
+
     // ==========================================
     // GET TASK LIST
     // ==========================================

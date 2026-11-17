@@ -421,7 +421,7 @@ function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequire
  * @param {Array} data.activeRubrics Danh sách rubric active đã được lọc và chuẩn hóa
  * @param {boolean} data.aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  */
-async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs, activeRubrics, aiDeclarationRequired = true }) {
+async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs, activeRubrics, aiDeclarationRequired = true, courseTopics = [] }) {
   // Ưu tiên key audit riêng để tránh quá tải key chính
   const auditKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
   if (!auditKey) {
@@ -673,7 +673,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
   // Nếu toàn bộ pool model đều bị 503 hoặc quá tải, kích hoạt khung thẩm định sư phạm dự phòng
   if (!response || !response.text) {
     console.error(`[Gemini Audit] Toàn bộ các model (${candidateModels.join(', ')}) đều quá tải/503. Kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng.`);
-    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired });
+    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired, courseTopics });
   }
 
   let parsed;
@@ -681,7 +681,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
     parsed = JSON.parse(response.text);
   } catch (parseErr) {
     console.warn(`[Gemini Audit] Lỗi parse JSON từ Gemini response: ${parseErr.message}. Kích hoạt fallback.`);
-    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired });
+    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired, courseTopics });
   }
 
   // Áp dụng Guardrails để kiểm tra, ép trần max_score và tính tổng thang 10.0
@@ -704,6 +704,10 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
       }
     });
   }
+
+  guardrailed.course_topics = courseTopics || [];
+  guardrailed.has_course_topics = Array.isArray(courseTopics) && courseTopics.length > 0;
+  guardrailed.recommended_topics = guardrailed.has_course_topics ? (guardrailed.recommended_topics || []) : [];
 
   return sanitizeObjectStrings(guardrailed);
 }
@@ -1039,7 +1043,7 @@ Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_R
  * Kích hoạt khi toàn bộ cụm máy chủ Gemini API gặp sự cố quá tải diện rộng (503 High Demand).
  * Đảm bảo hệ thống KHÔNG BAO GIỜ bị crash 500/503 và giảng viên luôn có dữ liệu chấm bài hoàn chỉnh.
  */
-function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null, activeRubrics = null, aiDeclarationRequired = true } = {}) {
+function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null, activeRubrics = null, aiDeclarationRequired = true, courseTopics = [] } = {}) {
   const DEFAULT_CONFIGS = [
     { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 20, is_enabled: true },
     { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 30, is_enabled: true },
@@ -1160,6 +1164,20 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
         expected_answer_key: 'Cần kiểm tra item.getQuantity() <= 0, discount < 0, discount > subtotal, và danh sách items null/rỗng.'
       }
     ],
+    course_topics: courseTopics || [],
+    has_course_topics: Array.isArray(courseTopics) && courseTopics.length > 0,
+    recommended_topics: Array.isArray(courseTopics) && courseTopics.length > 0
+      ? courseTopics.slice(0, 2).map((t, idx) => ({
+          id: t.id,
+          name: t.name,
+          description: t.description,
+          priority: idx === 0 ? 'high' : 'medium',
+          priority_label: idx === 0 ? 'Ưu tiên cao' : 'Khuyến nghị',
+          reason: idx === 0
+            ? 'Cần củng cố về xử lý thứ tự tính toán và validation các giá trị biên.'
+            : 'Cần ôn tập về tối ưu hóa truy vấn cơ sở dữ liệu và cấu trúc giải thuật.'
+        }))
+      : [],
   };
 
   const guarded = applyScoringGuardrails(fallbackObj, finalActiveRubrics, aiDeclarationRequired);

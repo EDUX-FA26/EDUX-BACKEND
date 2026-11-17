@@ -47,7 +47,8 @@ class AuthRepository {
    */
   async findUserByEmailOrUsername(identifier) {
     const query = `
-      SELECT id, email, username, password_hash, role, is_active
+      SELECT id, email, username, password_hash, role, is_active,
+             COALESCE(must_change_password, FALSE) AS must_change_password
       FROM users
       WHERE LOWER(email) = LOWER($1) OR username = $1
     `;
@@ -136,7 +137,10 @@ class AuthRepository {
   async updatePassword(userId, passwordHash) {
     const query = `
       UPDATE users
-      SET password_hash = $2
+      SET password_hash = $2,
+          must_change_password = FALSE,
+          password_changed_at = NOW(),
+          updated_at = NOW()
       WHERE id = $1
     `;
     await pool.query(query, [userId, passwordHash]);

@@ -164,11 +164,22 @@ function createSchoolsRouter({ authenticate }) {
         try {
             const { rows } = await pool.query(
                 `
-                SELECT s.id, s.code, s.name, s.status, s.setup_completed,
+                SELECT s.id, s.code, s.name, s.status, s.setup_completed, s.created_at,
                        ss.display_name, ss.logo_url, ss.address, ss.contact_email,
-                       ss.contact_phone, ss.description, ss.website
+                       ss.contact_phone, ss.description, ss.website,
+                       sub.plan_id, sub.billing_cycle, sub.status AS subscription_status,
+                       sub.start_date AS subscription_start, sub.end_date AS subscription_end,
+                       sub.price_snapshot,
+                       sp.name AS plan_name, sp.student_limit, sp.storage_limit_gb, sp.ai_requests_limit
                 FROM public.schools s
                 LEFT JOIN public.school_settings ss ON ss.school_id = s.id
+                LEFT JOIN LATERAL (
+                    SELECT * FROM public.school_subscriptions 
+                    WHERE school_id = s.id 
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                ) sub ON true
+                LEFT JOIN public.subscription_plans sp ON sp.id = sub.plan_id
                 WHERE s.id = $1 AND s.deleted_at IS NULL
                 LIMIT 1
                 `,
@@ -207,13 +218,13 @@ function createSchoolsRouter({ authenticate }) {
                 }
 
                 const settings = {
-                    display_name: input.display_name ?? (name || null),
-                    logo_url: input.logo_url ?? null,
-                    address: input.address ?? null,
-                    contact_email: input.contact_email ?? null,
-                    contact_phone: input.contact_phone ?? null,
-                    description: input.description ?? null,
-                    website: input.website ?? null,
+                    display_name: input.display_name !== undefined ? (input.display_name?.trim() || null) : null,
+                    logo_url: input.logo_url !== undefined ? (input.logo_url?.trim() || null) : null,
+                    address: input.address !== undefined ? (input.address?.trim() || null) : null,
+                    contact_email: input.contact_email !== undefined ? (input.contact_email?.trim() || null) : null,
+                    contact_phone: input.contact_phone !== undefined ? (input.contact_phone?.trim() || null) : null,
+                    description: input.description !== undefined ? (input.description?.trim() || null) : null,
+                    website: input.website !== undefined ? (input.website?.trim() || null) : null,
                 };
                 await client.query(
                     `INSERT INTO public.school_settings (
@@ -222,21 +233,33 @@ function createSchoolsRouter({ authenticate }) {
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
                     ON CONFLICT (school_id) DO UPDATE SET
                       display_name = COALESCE(EXCLUDED.display_name, public.school_settings.display_name),
-                      logo_url = COALESCE(EXCLUDED.logo_url, public.school_settings.logo_url),
-                      address = COALESCE(EXCLUDED.address, public.school_settings.address),
-                      contact_email = COALESCE(EXCLUDED.contact_email, public.school_settings.contact_email),
-                      contact_phone = COALESCE(EXCLUDED.contact_phone, public.school_settings.contact_phone),
-                      description = COALESCE(EXCLUDED.description, public.school_settings.description),
-                      website = COALESCE(EXCLUDED.website, public.school_settings.website),
+                      logo_url = EXCLUDED.logo_url,
+                      address = EXCLUDED.address,
+                      contact_email = EXCLUDED.contact_email,
+                      contact_phone = EXCLUDED.contact_phone,
+                      description = EXCLUDED.description,
+                      website = EXCLUDED.website,
                       updated_at = NOW()`,
                     [req.tenant.schoolId, settings.display_name, settings.logo_url, settings.address,
                         settings.contact_email, settings.contact_phone, settings.description, settings.website]
                 );
                 const { rows } = await client.query(
-                    `SELECT s.id, s.code, s.name, s.status, s.setup_completed,
+                    `SELECT s.id, s.code, s.name, s.status, s.setup_completed, s.created_at,
                             ss.display_name, ss.logo_url, ss.address, ss.contact_email,
-                            ss.contact_phone, ss.description, ss.website
-                     FROM public.schools s JOIN public.school_settings ss ON ss.school_id = s.id
+                            ss.contact_phone, ss.description, ss.website,
+                            sub.plan_id, sub.billing_cycle, sub.status AS subscription_status,
+                            sub.start_date AS subscription_start, sub.end_date AS subscription_end,
+                            sub.price_snapshot,
+                            sp.name AS plan_name, sp.student_limit, sp.storage_limit_gb, sp.ai_requests_limit
+                     FROM public.schools s 
+                     LEFT JOIN public.school_settings ss ON ss.school_id = s.id
+                     LEFT JOIN LATERAL (
+                         SELECT * FROM public.school_subscriptions 
+                         WHERE school_id = s.id 
+                         ORDER BY created_at DESC 
+                         LIMIT 1
+                     ) sub ON true
+                     LEFT JOIN public.subscription_plans sp ON sp.id = sub.plan_id
                      WHERE s.id = $1`, [req.tenant.schoolId]
                 );
                 return rows[0];

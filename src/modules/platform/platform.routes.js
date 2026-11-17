@@ -61,6 +61,8 @@ function createPlatformRouter({ authenticate }) {
   router.get("/managers", requireSuperAdmin, platformController.listManagers);
   router.post("/managers", requireSuperAdmin, platformController.createManager);
   router.patch("/managers/:userId/status", requireSuperAdmin, platformController.setManagerStatus);
+  router.patch("/managers/:userId", requireSuperAdmin, platformController.updateManager);
+  router.delete("/managers/:userId", requireSuperAdmin, platformController.deactivateManager);
   router.get("/plans", requireSuperAdmin, platformController.listPlans);
   router.post("/plans", requireSuperAdmin, platformController.createPlan);
   router.patch("/plans/:planId", requireSuperAdmin, platformController.updatePlan);
@@ -108,7 +110,8 @@ function createPlatformRouter({ authenticate }) {
 
   router.get("/overview", async (req, res, next) => {
     try {
-      const { rows: schools } = await pool.query(
+      const [schoolsResult, subscriptionResult, revenueResult, managerResult, planResult] = await Promise.all([
+        pool.query(
         `
         SELECT
           s.id,
@@ -147,7 +150,28 @@ function createPlatformRouter({ authenticate }) {
 
         ORDER BY s.name ASC
         `
-      );
+        ),
+        pool.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'active')::int AS active_contracts,
+            COUNT(*) FILTER (WHERE status = 'active' AND end_date <= NOW() + INTERVAL '30 days')::int AS expiring_contracts
+          FROM public.school_subscriptions
+        `),
+        pool.query(`
+          SELECT COALESCE(SUM(amount), 0)::numeric(15, 2) AS total_revenue
+          FROM public.payment_transactions
+          WHERE status = 'success'
+        `),
+        pool.query(`SELECT COUNT(*)::int AS manager_count FROM public.platform_admins WHERE role = 'manager' AND is_active = TRUE`),
+        pool.query(`
+          SELECT sp.id, sp.name, COUNT(ss.id)::int AS active_subscriptions
+          FROM public.subscription_plans sp
+          LEFT JOIN public.school_subscriptions ss ON ss.plan_id = sp.id AND ss.status = 'active'
+          GROUP BY sp.id, sp.name
+          ORDER BY sp.price_monthly ASC
+        `),
+      ]);
+      const schools = schoolsResult.rows;
 
       // =====================================
       // PLATFORM METRICS
@@ -178,6 +202,14 @@ function createPlatformRouter({ authenticate }) {
           active_schools: activeSchools,
 
           active_memberships: activeMemberships,
+          pending_setup_schools: schools.filter((school) => school.status === "pending_setup").length,
+          locked_schools: schools.filter((school) => school.status === "locked").length,
+          suspended_schools: schools.filter((school) => school.status === "suspended").length,
+          active_contracts: subscriptionResult.rows[0]?.active_contracts || 0,
+          expiring_contracts: subscriptionResult.rows[0]?.expiring_contracts || 0,
+          total_revenue: revenueResult.rows[0]?.total_revenue || 0,
+          manager_count: managerResult.rows[0]?.manager_count || 0,
+          plans: planResult.rows,
 
           schools,
         },

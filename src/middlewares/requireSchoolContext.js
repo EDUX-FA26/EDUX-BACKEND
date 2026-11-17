@@ -37,20 +37,31 @@ async function requireSchoolContext(req, res, next) {
     // 2. SELECTED SCHOOL
     // =========================================
 
-    const schoolIdHeader = req.get("X-School-Id");
+    const schoolIdHeader = req.get("X-School-Id") || req.query.school_id || req.query.schoolId || req.query.school;
 
-    if (
-      typeof schoolIdHeader !== "string" ||
-      !UUID_REGEX.test(schoolIdHeader.trim())
-    ) {
+    let requestedSchoolId =
+      typeof schoolIdHeader === "string" && UUID_REGEX.test(schoolIdHeader.trim())
+        ? schoolIdHeader.trim()
+        : null;
+
+    if (!requestedSchoolId) {
+      // Fallback: Tự động lấy school_id active của user nếu request không mang theo header (như fetch file/preview hoặc iframe)
+      const { rows: fallbackRows } = await pool.query(
+        `SELECT school_id FROM public.school_memberships WHERE user_id = $1 AND status = 'active' ORDER BY created_at ASC LIMIT 1`,
+        [userId]
+      );
+      if (fallbackRows.length > 0) {
+        requestedSchoolId = fallbackRows[0].school_id;
+      }
+    }
+
+    if (!requestedSchoolId) {
       return res.status(400).json({
         success: false,
         code: "SCHOOL_CONTEXT_REQUIRED",
         message: "Valid X-School-Id header is required",
       });
     }
-
-    const requestedSchoolId = schoolIdHeader.trim();
 
     // =========================================
     // 3. VERIFY SCHOOL MEMBERSHIP

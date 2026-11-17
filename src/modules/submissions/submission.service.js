@@ -7,6 +7,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { v4: uuidv4 } = require('uuid');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 const { preSubmissionSanityCheckWithGemini } = require('../../config/gemini.config');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
 
 const SubmissionService = {
   /**
@@ -16,7 +17,9 @@ const SubmissionService = {
     const filesMeta = [];
     for (const file of uploadedFiles) {
       const fileId = uuidv4();
-      const fileKey = `submissions/${assignmentId}/${userId}/${fileId}_${file.originalname}`;
+      const cleanFileName = decodeUtf8Filename(file.originalname);
+      const safeStorageName = sanitizeStorageFilename(cleanFileName);
+      const fileKey = `submissions/${assignmentId}/${userId}/${fileId}_${safeStorageName}`;
 
       try {
         await s3.send(
@@ -40,9 +43,9 @@ const SubmissionService = {
 
       filesMeta.push({
         id: fileId,
-        name: file.originalname,
+        name: cleanFileName,
         key: fileKey,
-        type: file.mimetype,
+        type: getMimeType(cleanFileName, file.mimetype),
         size: file.size,
         uploaded_at: new Date().toISOString()
       });
@@ -387,6 +390,20 @@ const SubmissionService = {
     const submission = await SubmissionRepository.findById(submissionId, includeHistory, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
 
+    // Chuẩn hóa tên file trong versions
+    if (submission && Array.isArray(submission.versions)) {
+      submission.versions.forEach(v => {
+        if (v.files) {
+          try {
+            let files = typeof v.files === 'string' ? JSON.parse(v.files) : v.files;
+            if (Array.isArray(files)) {
+              v.files = files.map(f => ({ ...f, name: decodeUtf8Filename(f.name) }));
+            }
+          } catch (e) {}
+        }
+      });
+    }
+
     // Phân quyền
     if (tenant.role === 'student') {
       if (submission.student_id !== tenant.userId) {
@@ -483,17 +500,20 @@ const SubmissionService = {
 
     if (!foundFile) throw new Error('FILE_NOT_FOUND');
 
+    const cleanFileName = decodeUtf8Filename(foundFile.name);
+
     const command = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: foundFile.key,
-      ResponseContentDisposition: `attachment; filename="${foundFile.name}"`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'attachment'),
+      ResponseContentType: getMimeType(cleanFileName, foundFile.type),
     });
 
     const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
 
     return {
       url: presignedUrl,
-      file_name: foundFile.name,
+      file_name: cleanFileName,
       file_type: foundFile.type,
       file_size: foundFile.size,
     };
@@ -570,6 +590,15 @@ const SubmissionService = {
     sub.ai_audit_log = hasDeclaredAudit ? normalizedAudit : null;
     if (!sub.declarations && normalizedAudit) {
       sub.declarations = normalizedAudit;
+    }
+
+    if (sub && sub.latest_files) {
+      try {
+        let files = typeof sub.latest_files === 'string' ? JSON.parse(sub.latest_files) : sub.latest_files;
+        if (Array.isArray(files)) {
+          sub.latest_files = files.map(f => ({ ...f, name: decodeUtf8Filename(f.name) }));
+        }
+      } catch (e) {}
     }
 
     return sub;

@@ -8,6 +8,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const AssignmentMaterialRepository = require('./assignmentMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
 
 /**
  * Lấy thông tin assignment + class theo trường hiện tại, kiểm tra quyền truy cập.
@@ -63,6 +64,12 @@ const AssignmentMaterialService = {
       page: query.page,
       limit: query.limit,
     });
+    if (result && Array.isArray(result.data)) {
+      result.data = result.data.map(m => ({
+        ...m,
+        file_name: decodeUtf8Filename(m.file_name)
+      }));
+    }
     return result;
   },
 
@@ -76,7 +83,9 @@ const AssignmentMaterialService = {
       throw new Error('FORBIDDEN');
     }
 
-    const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${file.originalname}`;
+    const cleanFileName = decodeUtf8Filename(file.originalname);
+    const safeStorageName = sanitizeStorageFilename(cleanFileName);
+    const fileKey = `assignment-materials/${assignmentId}/${uuidv4()}_${safeStorageName}`;
 
     await s3.send(
       new PutObjectCommand({
@@ -87,13 +96,15 @@ const AssignmentMaterialService = {
       })
     );
 
+    const mimeType = getMimeType(cleanFileName, file.mimetype);
+
     const material = await AssignmentMaterialRepository.create({
       school_id: tenant.schoolId,
       assignment_id: assignmentId,
       description: body.description || '',
-      file_name: file.originalname,
+      file_name: cleanFileName,
       file_key: fileKey,
-      file_type: file.mimetype,
+      file_type: mimeType,
       file_size: file.size,
       uploaded_by: tenant.userId,
     });
@@ -160,7 +171,7 @@ const AssignmentMaterialService = {
   },
 
   /**
-   * Tải xuống tài liệu assignment (presigned URL)
+   * Tải xuống / xem trước tài liệu assignment (presigned URL)
    */
   async downloadMaterial(assignmentId, materialId, tenant) {
     const assignment = await verifyAssignmentAccess(assignmentId, tenant);
@@ -172,19 +183,31 @@ const AssignmentMaterialService = {
     const material = await AssignmentMaterialRepository.findByIdAndAssignment(materialId, assignmentId, tenant.schoolId);
     if (!material) throw new Error('MATERIAL_NOT_FOUND');
 
-    const command = new GetObjectCommand({
+    const cleanFileName = decodeUtf8Filename(material.file_name);
+
+    const downloadCommand = new GetObjectCommand({
       Bucket: S3_BUCKET,
       Key: material.file_key,
-      ResponseContentDisposition: `attachment; filename="${material.file_name}"`,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'attachment'),
     });
 
-    // Presigned URL có hiệu lực 15 phút
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    const previewCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: material.file_key,
+      ResponseContentDisposition: formatContentDisposition(cleanFileName, 'inline'),
+      ResponseContentType: getMimeType(cleanFileName, material.file_type),
+    });
+
+    const [downloadUrl, previewUrl] = await Promise.all([
+      getSignedUrl(s3, downloadCommand, { expiresIn: 900 }),
+      getSignedUrl(s3, previewCommand, { expiresIn: 900 }),
+    ]);
 
     return {
-      url: presignedUrl,
-      download_url: presignedUrl,
-      file_name: material.file_name,
+      url: downloadUrl,
+      download_url: downloadUrl,
+      preview_url: previewUrl,
+      file_name: cleanFileName,
       file_type: material.file_type,
       file_size: material.file_size,
     };

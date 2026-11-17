@@ -73,6 +73,25 @@ const PlatformService = {
     return updated;
   },
 
+  async updateManager({ userId, email, username, fullName, actorId, ipAddress }) {
+    if (userId === actorId) {
+      const error = new Error("Cannot change your own platform identity from this endpoint");
+      error.status = 400;
+      throw error;
+    }
+    if (email !== undefined) {
+      const error = new Error("Manager email changes require the verified-email workflow and are not available yet");
+      error.status = 409;
+      throw error;
+    }
+    const updated = await platformRepository.updateManager(userId, {
+      username: username?.trim(), fullName: fullName?.trim(),
+    });
+    if (!updated) { const error = new Error("Manager not found"); error.status = 404; throw error; }
+    await platformAuditService.log({ actorId, actorRole: "superadmin", action: "UPDATE_MANAGER", targetType: "platform_admin", targetId: userId, metadata: { email: updated.email, username: updated.username }, ipAddress });
+    return updated;
+  },
+
   async deleteManager({ userId, actorId, ipAddress }) {
     if (userId === actorId) {
       const err = new Error("Cannot delete your own platform account");
