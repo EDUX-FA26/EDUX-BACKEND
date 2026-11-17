@@ -28,8 +28,9 @@ function trendFor(rows, now) {
   return 'stable';
 }
 
-function calculateTopicAnalytics(topic, rows, now = new Date()) {
+function calculateTopicAnalytics(topic, rows = [], now = new Date(), reviewData = null) {
   const attempts = rows.length;
+  const reviewCount = reviewData ? Number(reviewData.total_reviews || 0) : 0;
   const correctAnswers = rows.filter((row) => row.is_correct).length;
   const latest = latestByCard(rows);
   const distinctQuestionCount = latest.length;
@@ -39,26 +40,80 @@ function calculateTopicAnalytics(topic, rows, now = new Date()) {
   const masteryEstimate = hasEvidence
     ? round(((rawLatestScore * distinctQuestionCount) + (PRIOR_MASTERY * PRIOR_WEIGHT)) / (distinctQuestionCount + PRIOR_WEIGHT))
     : null;
-  let priority = 'insufficient_evidence';
-  if (hasEvidence && distinctQuestionCount >= HIGH_PRIORITY_DISTINCT && masteryEstimate < 50) priority = 'high';
-  else if (hasEvidence && masteryEstimate < 70) priority = 'medium';
-  else if (hasEvidence) priority = 'low';
+
+  // Determine lastStudiedAt from latest quiz answer or SRS review
+  let lastStudiedAt = null;
+  if (rows.length > 0) {
+    const latestQuizTime = rows.reduce((max, r) => {
+      const t = r.submitted_at ? new Date(r.submitted_at) : null;
+      return t && t > max ? t : max;
+    }, new Date(0));
+    if (latestQuizTime.getTime() > 0) lastStudiedAt = latestQuizTime.toISOString();
+  }
+  if (reviewData?.last_reviewed_at) {
+    const revTime = new Date(reviewData.last_reviewed_at);
+    if (!lastStudiedAt || revTime > new Date(lastStudiedAt)) {
+      lastStudiedAt = revTime.toISOString();
+    }
+  }
+
+  const totalActivity = attempts + reviewCount;
+
+  // State classification theo Phase 5:
+  // 1. not_assessed: chưa có attempt hoặc review nào
+  // 2. insufficient_data: có activity nhưng distinctQuestionCount < 3
+  // 3. developing: distinctQuestionCount >= 3 nhưng masteryEstimate < 70%
+  // 4. mastered: distinctQuestionCount >= 3 và masteryEstimate >= 70%
+  let masteryStatus = 'not_assessed';
+  let priority = 'diagnostic';
+  let dataQuality = 'no_data';
+  let needsReview = false;
+
+  if (totalActivity === 0) {
+    masteryStatus = 'not_assessed';
+    priority = 'insufficient_evidence';
+    dataQuality = 'no_data';
+    needsReview = false;
+  } else if (!hasEvidence) {
+    masteryStatus = 'insufficient_data';
+    priority = 'insufficient_evidence';
+    dataQuality = 'insufficient';
+    needsReview = false;
+  } else if (masteryEstimate !== null && masteryEstimate >= 70) {
+    masteryStatus = 'mastered';
+    priority = 'low';
+    dataQuality = 'sufficient';
+    needsReview = false;
+  } else {
+    masteryStatus = 'developing';
+    priority = (distinctQuestionCount >= HIGH_PRIORITY_DISTINCT && masteryEstimate < 50) ? 'high' : 'medium';
+    dataQuality = 'sufficient';
+    needsReview = true;
+  }
+
   return {
     topicId: topic.id,
+    topicCode: topic.code || null,
     topicName: topic.name,
     parentTopicId: topic.parent_id || null,
     totalAttempts: attempts,
+    totalReviews: reviewCount,
+    totalQuizAnswers: attempts,
     evidenceCount: attempts,
     distinctQuestionCount,
     correctAnswers,
     incorrectAnswers: attempts - correctAnswers,
     accuracy,
+    accuracyPercent: accuracy,
     masteryEstimate,
+    masteryStatus,
     masteryMethod: 'latest_per_distinct_flashcard_with_neutral_prior',
     insufficientEvidence: !hasEvidence,
     trend: trendFor(rows, now),
-    needsReview: priority === 'high' || priority === 'medium',
+    needsReview,
     priority,
+    lastStudiedAt,
+    dataQuality,
   };
 }
 
