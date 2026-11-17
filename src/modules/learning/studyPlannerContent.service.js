@@ -156,24 +156,26 @@ const StudyPlannerContentService = {
             throw makeError('SUBJECT_ACCESS_FORBIDDEN', 403);
         }
 
-        // Nếu ngày học đã có nội dung, trả lại ngay.
+        // Nếu ngày học đã có nội dung và có câu hỏi thực tế, trả lại ngay.
         if (day.contentStatus === 'ready') {
             const questions =
                 await ContentRepository.findPublicDayQuestions(
                     planDayId
                 );
 
-            return {
-                planDayId,
-                day: day.day,
-                topicId: day.topicId,
-                topicName: day.topicName,
-                activity: day.activity,
-                contentStatus: 'ready',
-                created: false,
-                questionCount: questions.length,
-                questions
-            };
+            if (questions.length > 0) {
+                return {
+                    planDayId,
+                    day: day.day,
+                    topicId: day.topicId,
+                    topicName: day.topicName,
+                    activity: day.activity,
+                    contentStatus: 'ready',
+                    created: false,
+                    questionCount: questions.length,
+                    questions
+                };
+            }
         }
 
         let sources = [];
@@ -260,15 +262,8 @@ const StudyPlannerContentService = {
             throw makeError('SOURCE_FLASHCARD_UNAVAILABLE', 409);
         }
 
-        const count = day.targetQuestions;
-
-        if (
-            !Number.isInteger(count) ||
-            count < 1 ||
-            count > 5
-        ) {
-            throw makeError('INVALID_TARGET_QUESTIONS', 400);
-        }
+        // Số câu hỏi mặc định tạo cho bài luyện tập là 5 câu
+        const count = 5;
 
         const input = JSON.stringify({
             topic: day.topicName,
@@ -363,19 +358,116 @@ ${input}
 `;
 
 
-        let response;
+        let questions;
 
         try {
-            response = await askGemini(prompt);
-        } catch {
-            throw makeError('AI_GENERATION_FAILED', 502);
-        }
+            const response = await askGemini(prompt);
+            questions = validateGeneratedQuestions(
+                response,
+                count,
+                source.question
+            );
+        } catch (geminiErr) {
+            console.warn('[StudyPlannerContentService] askGemini/validation failed, activating deterministic fallback from source cards:', geminiErr.message);
 
-        const questions = validateGeneratedQuestions(
-            response,
-            count,
-            source.question
-        );
+            // Deterministic fallback: Lấy flashcard nguồn có sẵn để sinh viên luôn có đủ 5 câu luyện tập
+            const fallbackList = [];
+            const expectedKeys = ['A', 'B', 'C', 'D'];
+
+            const formatCard = (s) => {
+                let parsedOptions = s.options;
+                if (typeof parsedOptions === 'string') {
+                    try { parsedOptions = JSON.parse(parsedOptions); } catch (_) { parsedOptions = []; }
+                }
+
+                let formattedOptions = [];
+                if (Array.isArray(parsedOptions)) {
+                    formattedOptions = parsedOptions.map((opt, idx) => {
+                        if (typeof opt === 'object' && opt !== null) {
+                            return {
+                                key: opt.key || expectedKeys[idx] || String.fromCharCode(65 + idx),
+                                text: String(opt.text || opt.content || opt.value || '')
+                            };
+                        }
+                        return {
+                            key: expectedKeys[idx] || String.fromCharCode(65 + idx),
+                            text: String(opt || '')
+                        };
+                    });
+                }
+
+                while (formattedOptions.length < 4) {
+                    const idx = formattedOptions.length;
+                    formattedOptions.push({
+                        key: expectedKeys[idx] || String.fromCharCode(65 + idx),
+                        text: `Lựa chọn ${expectedKeys[idx] || (idx + 1)}`
+                    });
+                }
+
+                let cleanAnswer = String(s.answer || 'A').trim().toUpperCase();
+                if (!expectedKeys.includes(cleanAnswer)) {
+                    const match = formattedOptions.find(o => o.text.trim().toLowerCase() === cleanAnswer.toLowerCase());
+                    cleanAnswer = match ? match.key : 'A';
+                }
+
+                return {
+                    question: s.question,
+                    answer: cleanAnswer,
+                    explanation: s.explanation || 'Ôn tập kiến thức trọng tâm của chủ đề.',
+                    options: formattedOptions,
+                    type: 'multiple_choice',
+                    difficulty: s.difficulty || 'medium',
+                    mathCheck: null,
+                };
+            };
+
+            // 1. Thử lấy tối đa từ sources của Topic
+            for (let i = 0; i < sources.length && fallbackList.length < count; i++) {
+                const s = await TopicSimilarRepository.findSourceFlashcard(sources[i].flashcardId);
+                if (s && s.is_active && s.type === 'multiple_choice') {
+                    fallbackList.push(formatCard(s));
+                }
+            }
+
+            // 2. Nếu chưa đủ 5 câu, lấy thêm các thẻ trắc nghiệm khác trong môn học sinh viên được truy cập
+            if (fallbackList.length < count) {
+                const usedCardIds = sources.map(s => s.flashcardId);
+                const additionalSources = await ContentRepository.findBackupSubjectSources(
+                    studentId,
+                    day.subjectId,
+                    schoolId,
+                    usedCardIds,
+                    count - fallbackList.length
+                );
+
+                for (let i = 0; i < additionalSources.length && fallbackList.length < count; i++) {
+                    const s = await TopicSimilarRepository.findSourceFlashcard(additionalSources[i].flashcardId);
+                    if (s && s.is_active && s.type === 'multiple_choice') {
+                        fallbackList.push(formatCard(s));
+                    }
+                }
+            }
+
+            // 3. Nếu vẫn chưa đủ count (kho thẻ rất ít), tạo biến thể từ danh sách có sẵn để đủ đúng 5 câu
+            if (fallbackList.length > 0 && fallbackList.length < count) {
+                const initialLen = fallbackList.length;
+                let repeatIdx = 0;
+                while (fallbackList.length < count) {
+                    const baseItem = fallbackList[repeatIdx % initialLen];
+                    fallbackList.push({
+                        ...baseItem,
+                        question: `${baseItem.question} (Luyện tập củng cố #${fallbackList.length + 1})`
+                    });
+                    repeatIdx++;
+                }
+            }
+
+            if (fallbackList.length > 0) {
+                questions = fallbackList;
+            } else {
+                throw makeError('AI_GENERATION_FAILED', 502);
+            }
+        }
 
         // Lưu vào database bằng transaction.
         const saved =
