@@ -7,7 +7,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { v4: uuidv4 } = require('uuid');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 const { preSubmissionSanityCheckWithGemini } = require('../../config/gemini.config');
-const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition } = require('../../utils/file.util');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
 
 const SubmissionService = {
   /**
@@ -45,7 +45,7 @@ const SubmissionService = {
         id: fileId,
         name: cleanFileName,
         key: fileKey,
-        type: file.mimetype,
+        type: getMimeType(cleanFileName, file.mimetype),
         size: file.size,
         uploaded_at: new Date().toISOString()
       });
@@ -506,6 +506,7 @@ const SubmissionService = {
       Bucket: S3_BUCKET,
       Key: foundFile.key,
       ResponseContentDisposition: formatContentDisposition(cleanFileName, 'attachment'),
+      ResponseContentType: getMimeType(cleanFileName, foundFile.type),
     });
 
     const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });

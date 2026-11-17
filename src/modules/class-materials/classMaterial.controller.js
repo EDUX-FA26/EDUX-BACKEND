@@ -175,13 +175,30 @@ const ClassMaterialController = {
 
   /**
    * UC18 — GET /api/materials/classes/:id/download
-   * Tải xuống tài liệu lớp (trả về presigned URL)
+   * Tải xuống / xem trước tài liệu lớp (hỗ trợ ?disposition=inline / attachment)
    */
   async downloadMaterial(req, res, next) {
     try {
       const materialId = req.params.materialId || req.params.id;
+      const disposition = (req.query.disposition || 'attachment').toLowerCase();
       const result = await ClassMaterialService.downloadMaterial(materialId, req.tenant);
-      res.status(200).json({ success: true, data: result });
+
+      const targetUrl = disposition === 'inline' ? (result.preview_url || result.url) : (result.download_url || result.url);
+
+      if (req.headers.accept?.includes('text/html') || req.query.redirect === 'true') {
+        return res.redirect(targetUrl);
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          ...result,
+          url: targetUrl,
+        },
+        url: targetUrl,
+        download_url: result.download_url || result.url,
+        preview_url: result.preview_url || result.url,
+      });
     } catch (error) {
       if (error.message === 'MATERIAL_NOT_FOUND') {
         return res.status(404).json({ success: false, message: 'Material not found' });

@@ -132,13 +132,31 @@ const AssignmentMaterialController = {
 
   /**
    * GET /api/assignments/:assignmentId/materials/:materialId/download
-   * Tải xuống tài liệu assignment (trả về presigned URL)
+   * Tải xuống / xem trước tài liệu assignment (hỗ trợ ?disposition=inline / attachment)
    */
   async downloadMaterial(req, res, next) {
     try {
       const { assignmentId, materialId } = req.params;
+      const disposition = (req.query.disposition || 'attachment').toLowerCase();
       const result = await AssignmentMaterialService.downloadMaterial(assignmentId, materialId, req.tenant);
-      res.status(200).json({ success: true, data: result });
+
+      const targetUrl = disposition === 'inline' ? (result.preview_url || result.url) : (result.download_url || result.url);
+
+      // Nếu client yêu cầu redirect hoặc truy cập trực tiếp từ trình duyệt / thẻ iframe
+      if (req.headers.accept?.includes('text/html') || req.query.redirect === 'true') {
+        return res.redirect(targetUrl);
+      }
+
+      res.status(200).json({
+        success: true,
+        data: {
+          ...result,
+          url: targetUrl,
+        },
+        url: targetUrl,
+        download_url: result.download_url || result.url,
+        preview_url: result.preview_url || result.url,
+      });
     } catch (error) {
       if (error.message === 'ASSIGNMENT_NOT_FOUND') {
         return res.status(404).json({ success: false, message: 'Assignment not found' });
