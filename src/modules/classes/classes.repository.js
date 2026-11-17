@@ -53,7 +53,30 @@ const ClassesRepository = {
       s.code AS subject_code,
       sem.name AS semester_name,
       sem.code AS semester_code,
-      u.full_name AS lecturer_name
+      u.full_name AS lecturer_name,
+      (
+        SELECT COUNT(*)::int
+        FROM sessions ses
+        WHERE ses.class_id = c.id
+          AND ses.school_id = c.school_id
+      ) AS total_slots,
+      COALESCE(
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', ses.id,
+              'slot_number', ses.session_no,
+              'title', ses.title,
+              'date', ses.learning_date,
+              'time', COALESCE(ses.slot_time, '09:30-11:45')
+            ) ORDER BY ses.session_no ASC
+          )
+          FROM sessions ses
+          WHERE ses.class_id = c.id
+            AND ses.school_id = c.school_id
+        ),
+        '[]'::json
+      ) AS slots
     FROM classes c
     JOIN subjects s
       ON c.subject_id = s.id
@@ -238,7 +261,32 @@ const ClassesRepository = {
           AND a.school_id = s.school_id
         ),
         '[]'::json
-      ) AS assignments
+      ) AS assignments,
+
+      COALESCE(
+        (
+          SELECT json_agg(
+            json_build_object(
+              'id', cm.id,
+              'class_id', cm.class_id,
+              'slot_id', cm.slot_id,
+              'title', cm.title,
+              'description', cm.description,
+              'file_name', cm.file_name,
+              'file_key', cm.file_key,
+              'file_url', cm.file_key,
+              'file_type', cm.file_type,
+              'file_size', cm.file_size,
+              'created_at', cm.created_at,
+              'uploaded_by', cm.uploaded_by
+            ) ORDER BY cm.created_at ASC
+          )
+          FROM class_materials cm
+          WHERE cm.slot_id = s.id
+            AND cm.school_id = s.school_id
+        ),
+        '[]'::json
+      ) AS materials
 
     FROM sessions s
 
@@ -295,7 +343,31 @@ const ClassesRepository = {
               ${assignmentSchoolCheck}
           ),
           '[]'::json
-        ) as assignments
+        ) as assignments,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'id', cm.id,
+                'class_id', cm.class_id,
+                'slot_id', cm.slot_id,
+                'title', cm.title,
+                'description', cm.description,
+                'file_name', cm.file_name,
+                'file_key', cm.file_key,
+                'file_url', cm.file_key,
+                'file_type', cm.file_type,
+                'file_size', cm.file_size,
+                'created_at', cm.created_at,
+                'uploaded_by', cm.uploaded_by
+              ) ORDER BY cm.created_at ASC
+            )
+            FROM class_materials cm
+            WHERE cm.slot_id = s.id
+              ${schoolId ? 'AND cm.school_id = s.school_id' : ''}
+          ),
+          '[]'::json
+        ) as materials
       FROM sessions s
       ${whereCondition}
     `;

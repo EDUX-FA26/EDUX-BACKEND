@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const { upload } = require('../../middlewares/upload.middleware');
 
 const SubmissionController = require('./submission.controller');
 const gradingController = require('../grading/grading.controller');
@@ -14,7 +14,7 @@ const {
   saveDraftDeclarationsSchema
 } = require('./submission.validation');
 
-const upload = multer({ storage: multer.memoryStorage() });
+
 
 const router = express.Router();
 router.use(authenticate, requireSchoolContext);

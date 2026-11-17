@@ -1,5 +1,5 @@
 const express = require('express');
-const multer = require('multer');
+const { upload } = require('../../middlewares/upload.middleware');
 
 const assignmentMaterialController = require('./assignmentMaterial.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
@@ -12,7 +12,7 @@ const {
   listAssignmentMaterialsQuery,
 } = require('./assignmentMaterial.validation');
 
-const upload = multer({ storage: multer.memoryStorage() });
+
 
 // -----------------------------------------------------------------------
 // Router: gắn vào /api/assignments/:assignmentId/materials
@@ -46,11 +46,21 @@ router.get(
   assignmentMaterialController.getMaterialById
 );
 
-// GET  /api/assignments/:assignmentId/materials/:materialId/download
+// GET  /api/assignments/:assignmentId/materials/:materialId/download (hỗ trợ ?disposition=inline / attachment)
 router.get(
   '/:materialId/download',
   authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
   assignmentMaterialController.downloadMaterial
+);
+
+// GET  /api/assignments/:assignmentId/materials/:materialId/preview
+router.get(
+  '/:materialId/preview',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
+  (req, res, next) => {
+    req.query.disposition = 'inline';
+    return assignmentMaterialController.downloadMaterial(req, res, next);
+  }
 );
 
 // PATCH /api/assignments/:assignmentId/materials/:materialId  (chỉ lecturer / school_admin)
