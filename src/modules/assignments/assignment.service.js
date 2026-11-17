@@ -5,7 +5,7 @@ const { pool, withTransaction } = require('../../config/db.config');
 const AssignmentRepository = require('./assignment.repository');
 const AssignmentMaterialRepository = require('../assignment-materials/assignmentMaterial.repository');
 const { DEFAULT_RUBRIC_CONFIGS } = require('./assignment.constants');
-const { decodeUtf8Filename, sanitizeStorageFilename } = require('../../utils/file.util');
+const { decodeUtf8Filename, sanitizeStorageFilename, getMimeType } = require('../../utils/file.util');
 
 function parseAndValidateRubrics(rawRubrics, aiDeclarationRequired = true) {
   let configs = rawRubrics;
@@ -126,7 +126,7 @@ const AssignmentService = {
         uploadedMaterials.push({
           file_name: cleanFileName,
           file_key: fileKey,
-          file_type: file.mimetype,
+          file_type: getMimeType(cleanFileName, file.mimetype),
           file_size: file.size,
         });
       }
@@ -271,7 +271,7 @@ const AssignmentService = {
           description: '',
           file_name: cleanFileName,
           file_key: fileKey,
-          file_type: file.mimetype,
+          file_type: getMimeType(cleanFileName, file.mimetype),
           file_size: file.size,
           uploaded_by: actualTenant.userId,
         });

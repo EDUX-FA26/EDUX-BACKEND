@@ -8,7 +8,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const AssignmentMaterialRepository = require('./assignmentMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
-const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition } = require('../../utils/file.util');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
 
 /**
  * Lấy thông tin assignment + class theo trường hiện tại, kiểm tra quyền truy cập.
@@ -96,13 +96,15 @@ const AssignmentMaterialService = {
       })
     );
 
+    const mimeType = getMimeType(cleanFileName, file.mimetype);
+
     const material = await AssignmentMaterialRepository.create({
       school_id: tenant.schoolId,
       assignment_id: assignmentId,
       description: body.description || '',
       file_name: cleanFileName,
       file_key: fileKey,
-      file_type: file.mimetype,
+      file_type: mimeType,
       file_size: file.size,
       uploaded_by: tenant.userId,
     });
@@ -193,7 +195,7 @@ const AssignmentMaterialService = {
       Bucket: S3_BUCKET,
       Key: material.file_key,
       ResponseContentDisposition: formatContentDisposition(cleanFileName, 'inline'),
-      ResponseContentType: material.file_type || 'application/octet-stream',
+      ResponseContentType: getMimeType(cleanFileName, material.file_type),
     });
 
     const [downloadUrl, previewUrl] = await Promise.all([

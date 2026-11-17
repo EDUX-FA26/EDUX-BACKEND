@@ -8,7 +8,7 @@ const { s3, S3_BUCKET } = require('../../config/seaweed.config');
 const { pool } = require('../../config/db.config');
 const ClassMaterialRepository = require('./classMaterial.repository');
 const { v4: uuidv4 } = require('uuid');
-const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition } = require('../../utils/file.util');
+const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
 
 /**
  * Kiểm tra quyền truy cập vào lớp học theo trường hiện tại.
@@ -98,7 +98,7 @@ const ClassMaterialService = {
       description: body.description || '',
       file_name: cleanFileName,
       file_key: fileKey,
-      file_type: file.mimetype,
+      file_type: getMimeType(cleanFileName, file.mimetype),
       file_size: file.size,
       is_private: body.is_private !== undefined ? body.is_private : false,
       uploaded_by: tenant.userId,
@@ -147,7 +147,7 @@ const ClassMaterialService = {
       description: body.description || '',
       file_name: cleanFileName,
       file_key: fileKey,
-      file_type: file.mimetype,
+      file_type: getMimeType(cleanFileName, file.mimetype),
       file_size: file.size,
       is_private: false,
       uploaded_by: tenant.userId,
@@ -256,7 +256,7 @@ const ClassMaterialService = {
       Bucket: S3_BUCKET,
       Key: material.file_key,
       ResponseContentDisposition: formatContentDisposition(cleanFileName, 'inline'),
-      ResponseContentType: material.file_type || 'application/octet-stream',
+      ResponseContentType: getMimeType(cleanFileName, material.file_type),
     });
 
     const [downloadUrl, previewUrl] = await Promise.all([

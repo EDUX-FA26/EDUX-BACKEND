@@ -89,7 +89,8 @@ router.delete(
   AssignmentController.deleteAssignment
 );
 
-// Khai báo sub-router cho assignment-materials
+// Khai báo sub-router cho assignment-materials & attachments
 router.use('/:assignmentId/materials', assignmentMaterialRoutes);
+router.use('/:assignmentId/attachments', assignmentMaterialRoutes);
 
 module.exports = router;
