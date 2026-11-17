@@ -95,7 +95,7 @@ class FlashcardsTestService {
 
     for (const card of deckCardsWithAnswers) {
       const studentAns = studentAnswerMap.get(card.id) || '';
-      const isCorrect = this._gradeAnswer(card.question_type, studentAns, card.answer);
+      const isCorrect = this._gradeAnswer(card.question_type, studentAns, card.answer, card.options);
       const questionScore = isCorrect ? 1.0 : 0.0;
       if (isCorrect) correctCount++;
 
@@ -174,11 +174,31 @@ class FlashcardsTestService {
     return str.trim().toLowerCase().replace(/\s+/g, ' ');
   }
 
-  _gradeAnswer(type, studentAns, realAns) {
-    const normStudent = this._normalizeString(studentAns);
-    const normReal = this._normalizeString(realAns);
+  _gradeAnswer(type, studentAns, realAns, options = []) {
+    const normStudent = this._normalizeString(typeof studentAns === 'object' ? (studentAns.text || studentAns.key) : studentAns);
+    const normReal = this._normalizeString(typeof realAns === 'object' ? (realAns.text || realAns.key) : realAns);
     if (!normStudent || !normReal) return false;
-    return normStudent === normReal;
+    if (normStudent === normReal) return true;
+
+    const stripPrefix = (s) => s.replace(/^[a-d][.:)\s-]+/i, '').trim();
+    const cleanStudent = stripPrefix(normStudent);
+    const cleanReal = stripPrefix(normReal);
+    if (cleanStudent && cleanStudent === cleanReal) return true;
+
+    // Nếu options có dạng [{ key, text }], cho phép khớp chéo giữa key và text
+    if (Array.isArray(options)) {
+      for (const opt of options) {
+        if (typeof opt === 'object' && opt !== null) {
+          const optKey = this._normalizeString(opt.key);
+          const optText = this._normalizeString(opt.text);
+          const cleanOptText = stripPrefix(optText);
+
+          if (normStudent === optKey && (normReal === optText || cleanReal === cleanOptText)) return true;
+          if ((normStudent === optText || cleanStudent === cleanOptText) && normReal === optKey) return true;
+        }
+      }
+    }
+    return false;
   }
 
   async _checkViewAccess(deck, user, tenant) {
