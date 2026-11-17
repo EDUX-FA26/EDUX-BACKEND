@@ -47,6 +47,14 @@ const controller = {
     } catch (error) { return next(error); }
   },
 
+  async updateManager(req, res, next) {
+    try { return send(res, await platformService.updateManager({ userId: req.params.userId, ...req.body, ...actorContext(req) })); } catch (error) { return next(error); }
+  },
+
+  async deactivateManager(req, res, next) {
+    try { return send(res, await platformService.deleteManager({ userId: req.params.userId, ...actorContext(req) })); } catch (error) { return next(error); }
+  },
+
   async listPlans(req, res, next) {
     try { return send(res, await platformService.listPlans(req.query.include_inactive === "true")); } catch (error) { return next(error); }
   },

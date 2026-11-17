@@ -36,6 +36,8 @@ const {
   createPlatformRouter,
 } = require("./modules/platform/platform.routes");
 const forumRoutes = require("./modules/forum/forum.routes");
+const publicRegistrationRoutes = require("./modules/public-registration/publicRegistration.routes");
+const paymentRoutes = require("./modules/payments/payments.routes");
 
 
 // =========================
@@ -76,6 +78,8 @@ slotsRouter.get("/:slotId", classesController.getSlotById);
 // API routes
 app.use("/api/users", userRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/public", publicRegistrationRoutes);
+app.use("/api/payments", paymentRoutes);
 const schoolsRoutes = createSchoolsRouter({
   authenticate,
 });
