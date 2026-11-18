@@ -8,6 +8,13 @@ const SubmissionController = {
       const result = await SubmissionService.saveDraftFile(assignmentId, req.tenant, files, req.body);
       res.status(200).json({ success: true, data: result, message: 'Draft file saved successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED', 'FORBIDDEN'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }
@@ -24,6 +31,13 @@ const SubmissionController = {
       const result = await SubmissionService.saveDraftDeclarations(assignmentId, req.tenant, req.body);
       res.status(200).json({ success: true, data: result, message: 'Draft declarations saved successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED', 'FORBIDDEN'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }
@@ -40,6 +54,13 @@ const SubmissionController = {
       const result = await SubmissionService.removeDraftFile(assignmentId, req.tenant);
       res.status(200).json({ success: true, data: result, message: 'Draft file removed successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_DELETE', 'FORBIDDEN', 'SUBMISSION_LOCKED'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }
@@ -56,6 +77,13 @@ const SubmissionController = {
       const result = await SubmissionService.sanityCheck(assignmentId, req.tenant, req.body);
       res.status(200).json({ success: true, data: result, message: 'Sanity check completed successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'FORBIDDEN'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }
@@ -76,6 +104,13 @@ const SubmissionController = {
       const result = await SubmissionService.saveDraft(assignmentId, req.tenant, files, req.body);
       res.status(200).json({ success: true, data: result, message: 'Draft saved successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED', 'FORBIDDEN'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }
@@ -93,6 +128,13 @@ const SubmissionController = {
       const result = await SubmissionService.submitFinal(assignmentId, req.tenant, files, req.body);
       res.status(201).json({ success: true, data: result, message: 'Submitted successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (error.message.startsWith('AI_DECLARATION_REQUIRED') || error.message === 'SUBMISSION_EMPTY_CONTENT') {
         return res.status(400).json({ success: false, message: error.message });
       }
@@ -114,6 +156,13 @@ const SubmissionController = {
       const result = await SubmissionService.submitFinal(submission.assignment_id, req.tenant, files, req.body);
       res.status(200).json({ success: true, data: result, message: 'Submitted successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (error.message.startsWith('AI_DECLARATION_REQUIRED') || error.message === 'SUBMISSION_EMPTY_CONTENT') {
         return res.status(400).json({ success: false, message: error.message });
       }
@@ -137,6 +186,13 @@ const SubmissionController = {
         : await SubmissionService.submitFinal(assignmentId, req.tenant, files, req.body);
       res.status(isDraft ? 200 : 201).json({ success: true, data: result });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (error.message.startsWith('AI_DECLARATION_REQUIRED') || error.message === 'SUBMISSION_EMPTY_CONTENT') {
         return res.status(400).json({ success: false, message: error.message });
       }
@@ -156,6 +212,13 @@ const SubmissionController = {
       const result = await SubmissionService.deleteSubmissionFile(id, fileId, req.tenant);
       res.status(200).json({ success: true, data: result });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_DELETE', 'FORBIDDEN', 'SUBMISSION_LOCKED'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }
@@ -289,6 +352,13 @@ const SubmissionController = {
       const result = await SubmissionService.supplementAiDeclarations(assignmentId, req.tenant, req.body);
       res.status(200).json({ success: true, data: result, message: 'AI declarations supplemented successfully' });
     } catch (error) {
+      if (error.message === 'SUBMISSION_GRADED_LOCKED') {
+        return res.status(403).json({
+          success: false,
+          code: 'SUBMISSION_GRADED_LOCKED',
+          message: 'Bài nộp này đã được giảng viên chấm điểm chính thức, không thể chỉnh sửa hoặc nộp lại.'
+        });
+      }
       if (['ONLY_STUDENT_CAN_SUBMIT', 'NOT_ENROLLED_IN_CLASS', 'SUBMISSION_LOCKED', 'SUBMISSION_IS_DRAFT', 'FORBIDDEN'].includes(error.message)) {
         return res.status(403).json({ success: false, message: error.message });
       }

@@ -162,8 +162,16 @@ const SubmissionRepository = {
    */
   async findByAssignmentAndStudent(assignmentId, studentId, schoolId, client = pool) {
     const query = `
-      SELECT * FROM submissions 
-      WHERE assignment_id = $1 AND student_id = $2 AND school_id = $3
+      SELECT s.*, g.score, g.feedback, g.max_score
+      FROM submissions s
+      LEFT JOIN LATERAL (
+        SELECT id, score, max_score, feedback, rubrics
+        FROM grades
+        WHERE submission_id = s.id AND school_id = s.school_id
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) g ON TRUE
+      WHERE s.assignment_id = $1 AND s.student_id = $2 AND s.school_id = $3
     `;
     const { rows } = await client.query(query, [assignmentId, studentId, schoolId]);
     return rows[0];
