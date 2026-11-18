@@ -3,6 +3,7 @@
 
 const { validate: isUuid } = require('uuid');
 const ProjectsRepository = require('./projects.repository');
+const ClassesService = require('../classes/classes.service');
 
 const validId = (id) => typeof id === 'string' && isUuid(id);
 
