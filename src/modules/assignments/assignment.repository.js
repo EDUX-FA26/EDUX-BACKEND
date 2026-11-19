@@ -125,6 +125,7 @@ const AssignmentRepository = {
     const query = `
       SELECT 
         a.*, 
+        a.class_id as class_id,
         COALESCE(a.slot_id, a.session_id) as slot_id,
         COALESCE(a.slot_id, a.session_id) as session_id,
         ses.session_no as slot_number,

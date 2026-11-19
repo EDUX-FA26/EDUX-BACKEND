@@ -9,6 +9,18 @@ const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 const { preSubmissionSanityCheckWithGemini } = require('../../config/gemini.config');
 const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
 
+/**
+ * Kiểm tra bài nộp đã được chấm điểm chính thức hay chưa.
+ * Nếu giảng viên yêu cầu nộp lại (resubmit_requested), cho phép học sinh nộp lại.
+ */
+function isSubmissionGraded(submission) {
+  if (!submission) return false;
+  const status = String(submission.status || '').toLowerCase();
+  if (status === 'resubmit_requested') return false;
+  const score = submission.score;
+  return status === 'graded' || (score !== null && score !== undefined);
+}
+
 const SubmissionService = {
   /**
    * Helper tải file lên S3
@@ -93,6 +105,24 @@ const SubmissionService = {
       }
     }
 
+    const isNoAiUsed = Boolean(
+      body.no_ai_used === true ||
+      body.no_ai_used === 'true' ||
+      body.noAiUsed === true ||
+      body.noAiUsed === 'true'
+    );
+    const noAiNote = body.no_ai_note || body.noAiNote || null;
+    if (isNoAiUsed) {
+      try {
+        let noteObj = draftNote ? JSON.parse(draftNote) : {};
+        noteObj.no_ai_used = true;
+        noteObj.no_ai_note = noAiNote;
+        draftNote = JSON.stringify(noteObj);
+      } catch (_) {
+        draftNote = JSON.stringify({ no_ai_used: true, no_ai_note: noAiNote, note: draftNote });
+      }
+    }
+
     // 3. Transaction DB
     const client = await pool.connect();
     try {
@@ -104,6 +134,10 @@ const SubmissionService = {
         tenant.schoolId,
         client
       );
+
+      if (existingSubmission && isSubmissionGraded(existingSubmission)) {
+        throw new Error('SUBMISSION_GRADED_LOCKED');
+      }
       let result;
 
       if (!existingSubmission) {
@@ -114,7 +148,9 @@ const SubmissionService = {
           school_id: tenant.schoolId,
           assignment_id: assignmentId,
           student_id: tenant.userId,
-          status: 'draft'
+          status: 'draft',
+          no_ai_used: isNoAiUsed,
+          no_ai_note: noAiNote
         };
         const versionData = {
           files: filesMeta,
@@ -123,6 +159,9 @@ const SubmissionService = {
         result = await SubmissionRepository.createSubmissionWithVersion(submissionData, versionData, client);
       } else {
         // Đã có submission
+        if (isSubmissionGraded(existingSubmission)) {
+          throw new Error('SUBMISSION_GRADED_LOCKED');
+        }
         if (existingSubmission.status !== 'draft') {
           throw new Error('SUBMISSION_LOCKED');
         }
@@ -150,7 +189,8 @@ const SubmissionService = {
           tenant.schoolId,
           finalFiles,
           finalNote,
-          client
+          client,
+          { no_ai_used: isNoAiUsed, no_ai_note: noAiNote }
         );
       }
 
@@ -215,6 +255,10 @@ const SubmissionService = {
         client
       );
 
+      if (existingSubmission && isSubmissionGraded(existingSubmission)) {
+        throw new Error('SUBMISSION_GRADED_LOCKED');
+      }
+
       // Xác định file có hiệu lực (từ file vừa tải lên hoặc từ version trước đó)
       let effectiveFiles = filesMeta;
       let existingLatestVer = null;
@@ -247,16 +291,36 @@ const SubmissionService = {
         effectiveNote = existingLatestVer.note;
       }
 
+      const auditData = normalizeAuditData(effectiveNote);
+      const isNoAiUsed = Boolean(
+        body.no_ai_used === true ||
+        body.no_ai_used === 'true' ||
+        body.noAiUsed === true ||
+        body.noAiUsed === 'true' ||
+        (auditData && (auditData.no_ai_used === true || auditData.noAiUsed === true))
+      );
+      const noAiNote = body.no_ai_note || body.noAiNote || (auditData && (auditData.no_ai_note || auditData.noAiNote)) || null;
+
+      if (isNoAiUsed) {
+        try {
+          let noteObj = effectiveNote ? JSON.parse(effectiveNote) : {};
+          noteObj.no_ai_used = true;
+          noteObj.no_ai_note = noAiNote;
+          effectiveNote = JSON.stringify(noteObj);
+        } catch (_) {
+          effectiveNote = JSON.stringify({ no_ai_used: true, no_ai_note: noAiNote, note: effectiveNote });
+        }
+      }
+
       // 4.1. Kiểm tra nội dung bài nộp (không được để trống cả file lẫn ghi chú)
       const hasFiles = Boolean(effectiveFiles && effectiveFiles.length > 0);
       const hasNote = Boolean(effectiveNote && effectiveNote.trim().length > 0);
-      if (!hasFiles && !hasNote) {
+      if (!hasFiles && !hasNote && !isNoAiUsed) {
         throw new Error('SUBMISSION_EMPTY_CONTENT');
       }
 
       // 4.2. Kiểm tra yêu cầu khai báo AI Audit Log nếu được bật
-      if (assignment.ai_declaration_required) {
-        const auditData = normalizeAuditData(effectiveNote);
+      if (assignment.ai_declaration_required && !isNoAiUsed) {
         let validCount = 0;
         if (auditData && Array.isArray(auditData.scopes)) {
           for (const scope of auditData.scopes) {
@@ -292,7 +356,9 @@ const SubmissionService = {
           school_id: tenant.schoolId,
           assignment_id: assignmentId,
           student_id: tenant.userId,
-          status
+          status,
+          no_ai_used: isNoAiUsed,
+          no_ai_note: noAiNote
         };
         const versionData = {
           files: effectiveFiles,
@@ -309,7 +375,8 @@ const SubmissionService = {
           status,
           effectiveFiles,
           effectiveNote,
-          client
+          client,
+          { no_ai_used: isNoAiUsed, no_ai_note: noAiNote }
         );
       } else {
         // Đã từng nộp trước đó: Resubmit tạo version mới
@@ -318,7 +385,13 @@ const SubmissionService = {
           note: effectiveNote,
           status: (status === 'late' ? 'late' : 'resubmitted')
         };
-        result = await SubmissionRepository.addSubmissionVersion(existingSubmission.id, tenant.schoolId, versionData, client);
+        result = await SubmissionRepository.addSubmissionVersion(
+          existingSubmission.id,
+          tenant.schoolId,
+          versionData,
+          client,
+          { no_ai_used: isNoAiUsed, no_ai_note: noAiNote }
+        );
       }
 
       await client.query('COMMIT');
@@ -354,6 +427,9 @@ const SubmissionService = {
     if (submission.student_id !== tenant.userId) throw new Error('FORBIDDEN');
 
     // Không cho xóa nếu bài đã chấm hoặc bị khoá
+    if (isSubmissionGraded(submission)) {
+      throw new Error('SUBMISSION_GRADED_LOCKED');
+    }
     const lockedStatuses = ['evaluated', 'reviewed', 'graded', 'flagged'];
     if (lockedStatuses.includes(submission.status)) {
       throw new Error('SUBMISSION_LOCKED');
@@ -409,7 +485,7 @@ const SubmissionService = {
       if (submission.student_id !== tenant.userId) {
         throw new Error('FORBIDDEN');
       }
-      return submission;
+      return this.enrichSubmissionAuditData(submission);
     }
 
     // Giảng viên / School Admin: Tuyệt đối không nhìn thấy bài đang ở trạng thái draft
@@ -424,7 +500,7 @@ const SubmissionService = {
           throw new Error('FORBIDDEN');
         }
       }
-      return submission;
+      return this.enrichSubmissionAuditData(submission);
     }
 
     throw new Error('FORBIDDEN');
@@ -585,9 +661,23 @@ const SubmissionService = {
       }
     }
 
-    sub.has_declared_audit = hasDeclaredAudit;
+    const isNoAiUsed = Boolean(
+      sub.no_ai_used === true ||
+      sub.no_ai_used === 'true' ||
+      sub.noAiUsed === true ||
+      sub.noAiUsed === 'true' ||
+      (normalizedAudit && (normalizedAudit.no_ai_used === true || normalizedAudit.noAiUsed === true))
+    );
+    const noAiNote = sub.no_ai_note || sub.noAiNote || (normalizedAudit && (normalizedAudit.no_ai_note || normalizedAudit.noAiNote)) || null;
+
+    sub.no_ai_used = isNoAiUsed;
+    sub.noAiUsed = isNoAiUsed;
+    sub.no_ai_note = noAiNote;
+    sub.noAiNote = noAiNote;
+
+    sub.has_declared_audit = hasDeclaredAudit || isNoAiUsed;
     sub.ai_declarations = completedDeclarations;
-    sub.ai_audit_log = hasDeclaredAudit ? normalizedAudit : null;
+    sub.ai_audit_log = (hasDeclaredAudit || isNoAiUsed) ? normalizedAudit : null;
     if (!sub.declarations && normalizedAudit) {
       sub.declarations = normalizedAudit;
     }
@@ -721,6 +811,10 @@ const SubmissionService = {
         tenant.schoolId,
         client
       );
+
+      if (existingSubmission && isSubmissionGraded(existingSubmission)) {
+        throw new Error('SUBMISSION_GRADED_LOCKED');
+      }
       let result;
 
       if (!existingSubmission) {
@@ -837,6 +931,25 @@ const SubmissionService = {
       }
     }
 
+    const isNoAiUsed = Boolean(
+      body.no_ai_used === true ||
+      body.no_ai_used === 'true' ||
+      body.noAiUsed === true ||
+      body.noAiUsed === 'true'
+    );
+    const noAiNote = body.no_ai_note || body.noAiNote || null;
+
+    if (isNoAiUsed) {
+      try {
+        let noteObj = draftNote ? JSON.parse(draftNote) : {};
+        noteObj.no_ai_used = true;
+        noteObj.no_ai_note = noAiNote;
+        draftNote = JSON.stringify(noteObj);
+      } catch (_) {
+        draftNote = JSON.stringify({ no_ai_used: true, no_ai_note: noAiNote, note: draftNote });
+      }
+    }
+
     // 3. Transaction DB
     const client = await pool.connect();
     try {
@@ -848,6 +961,10 @@ const SubmissionService = {
         tenant.schoolId,
         client
       );
+
+      if (existingSubmission && isSubmissionGraded(existingSubmission)) {
+        throw new Error('SUBMISSION_GRADED_LOCKED');
+      }
       let result;
 
       if (!existingSubmission) {
@@ -858,7 +975,9 @@ const SubmissionService = {
           school_id: tenant.schoolId,
           assignment_id: assignmentId,
           student_id: tenant.userId,
-          status: 'draft'
+          status: 'draft',
+          no_ai_used: isNoAiUsed,
+          no_ai_note: noAiNote
         };
         const versionData = {
           files: [],
@@ -882,7 +1001,8 @@ const SubmissionService = {
           latestVer.id,
           tenant.schoolId,
           draftNote,
-          client
+          client,
+          { no_ai_used: isNoAiUsed, no_ai_note: noAiNote }
         );
       }
 
@@ -911,6 +1031,10 @@ const SubmissionService = {
 
     const submission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, tenant.userId, tenant.schoolId);
     if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+
+    if (isSubmissionGraded(submission)) {
+      throw new Error('SUBMISSION_GRADED_LOCKED');
+    }
 
     if (submission.status !== 'draft') {
       throw new Error('SUBMISSION_LOCKED');
@@ -1051,6 +1175,9 @@ const SubmissionService = {
 
     // 2. Lấy submission draft hiện tại
     const existingSubmission = await SubmissionRepository.findByAssignmentAndStudent(assignmentId, tenant.userId, tenant.schoolId);
+    if (existingSubmission && isSubmissionGraded(existingSubmission)) {
+      throw new Error('SUBMISSION_GRADED_LOCKED');
+    }
     let filesList = [];
     let noteData = body.note || '';
 
@@ -1132,6 +1259,10 @@ const SubmissionService = {
     );
     if (!existingSubmission) {
       throw new Error('SUBMISSION_NOT_FOUND');
+    }
+
+    if (isSubmissionGraded(existingSubmission)) {
+      throw new Error('SUBMISSION_GRADED_LOCKED');
     }
 
     if (existingSubmission.status === 'draft') {
