@@ -226,6 +226,24 @@ const notify = {
     }));
     await sendMany(notifications);
   },
+
+  /**
+   * Thông báo nhắc nhở gia hạn hợp đồng thuê bao cho School Admin
+   * @param {{ userIds: string[], title: string, message: string, relatedEntityId?: string, schoolId?: string }} p
+   */
+  async renewalReminder({ userIds, title, message, relatedEntityId = null, schoolId = null }) {
+    const notifications = userIds.map(userId => ({
+      userId,
+      title,
+      message,
+      type: 'renewal_reminder',
+      relatedEntityType: 'school_subscription',
+      relatedEntityId,
+      notification_scope: 'school',
+      school_id: schoolId,
+    }));
+    await sendMany(notifications);
+  },
 };
 
 module.exports = notify;
