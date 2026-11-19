@@ -36,17 +36,20 @@ const ForumRepository = {
       ORDER BY s.name`, [userId]);
     return rows;
   },
-  async findUserSchoolId(userId) {
+  async findUserSchoolId(userId, preferredSchoolId = null) {
     const { rows } = await pool.query(`
       SELECT school_id FROM school_memberships
       WHERE user_id = $1 AND status = 'active'
-      ORDER BY joined_at NULLS LAST, created_at
-      LIMIT 1`, [userId]);
+        AND ($2::uuid IS NULL OR school_id = $2::uuid)
+      ORDER BY CASE WHEN $2::uuid IS NOT NULL AND school_id = $2::uuid THEN 0 ELSE 1 END,
+               joined_at NULLS LAST, created_at
+      LIMIT 1`, [userId, preferredSchoolId]);
     if (rows[0]?.school_id) return rows[0].school_id;
     const fallback = await pool.query(`
       SELECT c.school_id FROM classes c
       WHERE c.lecturer_id = $1 AND c.school_id IS NOT NULL
-      ORDER BY c.created_at DESC LIMIT 1`, [userId]);
+        AND ($2::uuid IS NULL OR c.school_id = $2::uuid)
+      ORDER BY c.created_at DESC LIMIT 1`, [userId, preferredSchoolId]);
     return fallback.rows[0]?.school_id || null;
   },
   async getUserStats(userId) {
@@ -161,6 +164,21 @@ const ForumRepository = {
       await client.query('COMMIT');
       return rows[0];
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  },
+
+  async updatePost(id, authorId, schoolId, { title, content, attachments, tags }) {
+    const { rows } = await pool.query(
+      `UPDATE forum_posts
+       SET title = $3,
+           content = $4,
+           attachments = $5::jsonb,
+           tags = $6::jsonb,
+           updated_at = NOW()
+       WHERE id = $1 AND author_id = $2 AND school_id = $7::uuid
+       RETURNING id`,
+      [id, authorId, title, content, JSON.stringify(attachments || []), JSON.stringify(tags || []), schoolId]
+    );
+    return rows[0] || null;
   },
 
   async deletePost(id, userId, isAdmin) {

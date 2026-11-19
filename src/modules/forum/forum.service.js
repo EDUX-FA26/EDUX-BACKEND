@@ -6,17 +6,17 @@ const ForumService = {
   schools(user) { return Repo.listAvailableSchools(user.id, user.role); },
   stats(user) { return Repo.getUserStats(user.id); },
   async list(user, query) {
-    const schoolId = await Repo.findUserSchoolId(user.id);
+    const schoolId = await Repo.findUserSchoolId(user.id, user.schoolId);
     const selectedSchoolId = user.role === 'admin' && query.schoolId ? query.schoolId : schoolId;
     return Repo.listPosts({ ...query, userId: user.id, role: user.role, schoolId: selectedSchoolId });
   },
   async get(user, id) {
-    const schoolId = await Repo.findUserSchoolId(user.id);
+    const schoolId = await Repo.findUserSchoolId(user.id, user.schoolId);
     return Repo.findPostById(id, user.id, user.role, schoolId);
   },
   async create(user, body) {
     if (!['lecturer', 'admin', 'student'].includes(user.role)) throw Object.assign(new Error('You are not allowed to create forum posts'), { status: 403 });
-    const schoolId = await Repo.findUserSchoolId(user.id);
+    const schoolId = await Repo.findUserSchoolId(user.id, user.schoolId);
     if (!schoolId && user.role !== 'admin') throw Object.assign(new Error('Your account is not assigned to a school'), { status: 403 });
     if (body.flashcardDeckId && user.role !== 'lecturer') {
       throw Object.assign(new Error('Only lecturers can publish Flashcard posts'), { status: 403 });
@@ -49,6 +49,20 @@ const ForumService = {
       console.error('Forum post notification failed:', notificationError.message);
     }
     return post;
+  },
+  async update(user, id, body) {
+    const title = String(body.title || '').trim();
+    const content = String(body.content || '').trim();
+    if (!title || !content) throw Object.assign(new Error('Title and content are required'), { status: 400 });
+    const attachments = Array.isArray(body.attachments)
+      ? body.attachments.slice(0, 5).filter((item) => item && item.name && item.dataUrl && String(item.dataUrl).length <= 3_000_000)
+      : [];
+    const tags = Array.isArray(body.tags)
+      ? [...new Set(body.tags.map((tag) => String(tag).trim().replace(/^#/, '').slice(0, 40)).filter(Boolean))].slice(0, 10)
+      : [];
+    const result = await Repo.updatePost(id, user.id, user.schoolId, { title, content, attachments, tags });
+    if (!result) throw Object.assign(new Error('Forum post not found or access denied'), { status: 404 });
+    return result;
   },
   async remove(user, id) {
     const result = await Repo.deletePost(id, user.id, user.role === 'admin');

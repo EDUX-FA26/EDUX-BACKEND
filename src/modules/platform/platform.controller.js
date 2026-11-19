@@ -30,7 +30,7 @@ const controller = {
   },
 
   async listManagers(req, res, next) {
-    try { return send(res, await platformService.listManagers()); } catch (error) { return next(error); }
+    try { return send(res, await platformService.listManagers(req.query)); } catch (error) { return next(error); }
   },
 
   async createManager(req, res, next) {
@@ -67,6 +67,10 @@ const controller = {
     try { return send(res, await platformService.updatePlan(req.params.planId, req.body, actorContext(req))); } catch (error) { return next(error); }
   },
 
+  async deletePlan(req, res, next) {
+    try { return send(res, await platformService.deletePlan(req.params.planId, actorContext(req))); } catch (error) { return next(error); }
+  },
+
   async listSchools(req, res, next) {
     try { return send(res, await platformService.listSchools(req.query)); } catch (error) { return next(error); }
   },
@@ -95,6 +99,10 @@ const controller = {
     try { return send(res, await platformService.listContracts(req.query)); } catch (error) { return next(error); }
   },
 
+  async remindSubscriptionRenewal(req, res, next) {
+    try { return send(res, await platformService.remindSubscriptionRenewal(req.params.subscriptionId, actorContext(req))); } catch (error) { return next(error); }
+  },
+
   async listTransactions(req, res, next) {
     try { return send(res, await platformService.listTransactions(req.query)); } catch (error) { return next(error); }
   },
@@ -105,6 +113,22 @@ const controller = {
 
   async auditLogs(req, res, next) {
     try { return send(res, await platformService.listAuditLogs(req.query)); } catch (error) { return next(error); }
+  },
+
+  async listRefunds(req, res, next) {
+    try { return send(res, await platformService.listRefunds(req.query)); } catch (error) { return next(error); }
+  },
+
+  async approveRefund(req, res, next) {
+    try { return send(res, await platformService.approveRefund(req.params.id, actorContext(req))); } catch (error) { return next(error); }
+  },
+
+  async rejectRefund(req, res, next) {
+    try { return send(res, await platformService.rejectRefund(req.params.id, req.body?.reason, actorContext(req))); } catch (error) { return next(error); }
+  },
+
+  async executeRefund(req, res, next) {
+    try { return send(res, await platformService.executeRefund(req.params.id, req.body, actorContext(req))); } catch (error) { return next(error); }
   },
 };
 

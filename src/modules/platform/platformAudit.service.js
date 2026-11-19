@@ -87,7 +87,7 @@ const PlatformAuditService = {
         pal.id,
         pal.actor_id,
         u.email AS actor_email,
-        u.full_name AS actor_name,
+        up.full_name AS actor_name,
         pal.actor_role,
         pal.action,
         pal.target_type,
@@ -97,6 +97,7 @@ const PlatformAuditService = {
         pal.created_at
       FROM public.platform_audit_logs pal
       LEFT JOIN public.users u ON u.id = pal.actor_id
+      LEFT JOIN public.user_profiles up ON up.user_id = pal.actor_id
       ${whereClause}
       ORDER BY pal.created_at DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
