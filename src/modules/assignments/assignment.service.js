@@ -483,6 +483,8 @@ const AssignmentService = {
 
     return {
       ...assignment,
+      class_id: assignment.class_id,
+      classId: assignment.class_id,
       class_name: assignment.class_code,
       course_name: assignment.subject_name,
       course_code: assignment.subject_code,

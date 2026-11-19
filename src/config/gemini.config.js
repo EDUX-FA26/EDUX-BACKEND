@@ -225,13 +225,41 @@ function filterAndRescaleRubricsForNonAi(rubrics) {
  * @param {boolean} aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  * @returns {string}
  */
-function buildDynamicGradingSystemInstruction(activeRubrics, aiDeclarationRequired = true) {
+function buildDynamicGradingSystemInstruction(activeRubrics, aiDeclarationRequired = true, noAiUsed = false) {
   const criteriaLines = activeRubrics
     .map(
       (r) =>
         `${r.index}. ${r.criteria_name || r.criterion_name || r.criterion_key} (key: "${r.criterion_key}"): Trọng số ${r.weight_percent}% (Tối đa ${r.max_score.toFixed(1)} điểm)`
     )
     .join('\n');
+
+  if (noAiUsed) {
+    return `Bạn là Trợ lý AI thẩm định và chấm điểm chuyên môn cho bài tập lập trình SE/IT.
+
+BỐI CẢNH & NGUYÊN TẮC BẮT BUỘC (QUAN TRỌNG NHẤT):
+- SINH VIÊN ĐÃ CAM KẾT TỰ THỰC HIỆN 100% BÀI LÀM NÀY MÀ KHÔNG SỬ DỤNG BẤT KỲ CÔNG CỤ AI NÀO (ZERO-AI DECLARATION).
+- BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC TRỪ ĐIỂM HOẶC BẮT BẺ VỀ VIỆC SINH VIÊN KHÔNG KHAI BÁO NHẬT KÝ PROMPT AI.
+- Chấm điểm 100% dựa trên chất lượng chuyên môn thực tế của mã nguồn đối chiếu với yêu cầu đề bài theo ${activeRubrics.length} tiêu chí chuyên môn.
+- ĐẶC BIỆT: BỘ CÂU HỎI VẤN ĐÁP VIVA ("viva_questions"):
+  + Kích hoạt chế độ "CODE OWNERSHIP VERIFICATION" (Kiểm tra quyền tác giả mã nguồn).
+  + Bắt buộc sinh từ 3 đến 5 câu hỏi phỏng vấn kỹ thuật thực tế để Giảng viên trực tiếp vấn đáp sinh viên:
+    1. Kiến trúc hàm, luồng luân chuyển dữ liệu và lựa chọn cấu trúc giải thuật trong mã nguồn.
+    2. Cách thức tổ chức mã nguồn, xử lý các trường hợp ngoại lệ (exception handling) và kiểm thử các ca biên (edge cases).
+    3. Hỏi trực diện lý do sinh viên chọn cách code cụ thể ở các dòng lệnh trọng yếu trong file bài nộp để chứng minh sinh viên thực sự tự viết mã nguồn 100%.
+- audit_integrity:
+  + match_percentage: 100.0
+  + risk_level: "LOW_RISK"
+  + ai_transparency_index: "A+"
+  + reflection_depth: "High"
+  + penalty_applied: false
+  + penalty_reason: "Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực tự code qua câu hỏi vấn đáp Viva."
+
+DANH SÁCH TIÊU CHÍ VÀ TRỌNG SỐ CHUYÊN MÔN HIỆN HÀNH (Tổng thang điểm: 10.0):
+${criteriaLines}
+
+NHIỆM VỤ:
+Đọc kỹ yêu cầu đề bài và toàn bộ mã nguồn bài nộp của sinh viên, sau đó chấm điểm từng tiêu chí chuyên môn trên đúng trần điểm trọng số quy định, và tạo 3-5 câu hỏi vấn đáp Code Ownership Verification chi tiết.`;
+  }
 
   if (!aiDeclarationRequired) {
     return `Bạn là Trợ lý AI chấm điểm chuyên môn cho bài tập lập trình SE/IT.
@@ -277,7 +305,7 @@ NHIỆM VỤ:
  * @param {boolean} aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  * @returns {any}
  */
-function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequired = true) {
+function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequired = true, noAiUsed = false) {
   const aiBreakdown = Array.isArray(aiRawResult?.grading_breakdown)
     ? aiRawResult.grading_breakdown
     : (Array.isArray(aiRawResult?.rubric_evaluations)
@@ -357,33 +385,46 @@ function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequire
     else normalizedRisk = 'low';
   }
 
-  const audit_integrity = !aiDeclarationRequired
-    ? {
-        match_percentage: 100.0,
-        risk_level: 'LOW_RISK',
-        riskLevel: 'low',
-        ai_transparency_index: 'A',
-        reflection_depth: 'Not Required',
-        penalty_applied: false,
-        penalty_reason: 'Bài tập không yêu cầu khai báo AI Audit Log; chấm điểm chuyên môn thuần túy.',
-      }
-    : (aiRawResult?.audit_integrity
-      ? {
-          ...aiRawResult.audit_integrity,
-          risk_level: normalizedRisk.toUpperCase() + '_RISK',
-          riskLevel: normalizedRisk,
-          penalty_applied: false,
-          penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
-        }
-      : {
-          match_percentage: 95.0,
-          risk_level: normalizedRisk.toUpperCase() + '_RISK',
-          riskLevel: normalizedRisk,
-          ai_transparency_index: 'A',
-          reflection_depth: 'High',
-          penalty_applied: false,
-          penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
-        });
+  let audit_integrity;
+  if (noAiUsed) {
+    audit_integrity = {
+      match_percentage: 100.0,
+      risk_level: 'LOW_RISK',
+      riskLevel: 'low',
+      ai_transparency_index: 'A+',
+      reflection_depth: 'High',
+      penalty_applied: false,
+      penalty_reason: 'Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva.',
+    };
+  } else if (!aiDeclarationRequired) {
+    audit_integrity = {
+      match_percentage: 100.0,
+      risk_level: 'LOW_RISK',
+      riskLevel: 'low',
+      ai_transparency_index: 'A',
+      reflection_depth: 'Not Required',
+      penalty_applied: false,
+      penalty_reason: 'Bài tập không yêu cầu khai báo AI Audit Log; chấm điểm chuyên môn thuần túy.',
+    };
+  } else if (aiRawResult?.audit_integrity) {
+    audit_integrity = {
+      ...aiRawResult.audit_integrity,
+      risk_level: normalizedRisk.toUpperCase() + '_RISK',
+      riskLevel: normalizedRisk,
+      penalty_applied: false,
+      penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
+    };
+  } else {
+    audit_integrity = {
+      match_percentage: 95.0,
+      risk_level: normalizedRisk.toUpperCase() + '_RISK',
+      riskLevel: normalizedRisk,
+      ai_transparency_index: 'A',
+      reflection_depth: 'High',
+      penalty_applied: false,
+      penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
+    };
+  }
 
   const verdict =
     aiRawResult?.overall_verdict ||
@@ -421,7 +462,7 @@ function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequire
  * @param {Array} data.activeRubrics Danh sách rubric active đã được lọc và chuẩn hóa
  * @param {boolean} data.aiDeclarationRequired Cờ bài tập có yêu cầu khai báo AI Audit Log hay không
  */
-async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs, activeRubrics, aiDeclarationRequired = true, courseTopics = [] }) {
+async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory, aiAuditSummary, oralExamLogs, rubricConfigs, activeRubrics, aiDeclarationRequired = true, noAiUsed = false, noAiNote = '', courseTopics = [] }) {
   // Ưu tiên key audit riêng để tránh quá tải key chính
   const auditKey = process.env.GEMINI_API_KEY_AUDIT || process.env.GEMINI_API_KEY;
   if (!auditKey) {
@@ -442,14 +483,14 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
     ? activeRubrics
     : ((Array.isArray(rubricConfigs) && rubricConfigs.length > 0) ? rubricConfigs : DEFAULT_CONFIGS);
 
-  // Nếu bài tập KHÔNG yêu cầu khai báo AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
-  if (!aiDeclarationRequired) {
+  // Nếu bài tập KHÔNG yêu cầu khai báo AI hoặc sinh viên cam kết Zero-AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
+  if (!aiDeclarationRequired || noAiUsed) {
     rawConfigs = filterAndRescaleRubricsForNonAi(rawConfigs);
   }
 
   let enabledConfigs = rawConfigs.filter((c) => c.is_enabled !== false && Number(c.weight_percent) > 0);
   if (enabledConfigs.length === 0) {
-    enabledConfigs = !aiDeclarationRequired
+    enabledConfigs = (!aiDeclarationRequired || noAiUsed)
       ? filterAndRescaleRubricsForNonAi(DEFAULT_CONFIGS)
       : DEFAULT_CONFIGS;
   }
@@ -474,9 +515,45 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
   });
 
   // BƯỚC 2: Xây dựng System Instruction động theo danh sách tiêu chí Active
-  const systemInstruction = buildDynamicGradingSystemInstruction(finalActiveRubrics, aiDeclarationRequired);
+  const systemInstruction = buildDynamicGradingSystemInstruction(finalActiveRubrics, aiDeclarationRequired && !noAiUsed, noAiUsed);
 
-  const prompt = !aiDeclarationRequired
+  const prompt = noAiUsed
+    ? `
+Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây.
+SINH VIÊN ĐÃ CAM KẾT TỰ THỰC HIỆN 100% BÀI LÀM MÀ KHÔNG SỬ DỤNG AI (ZERO-AI / NO AI USED).
+${noAiNote ? `Ghi chú phương pháp / tiến trình tự thực hiện của sinh viên: "${noAiNote}".` : "Sinh viên tự nghiên cứu và phát triển mã nguồn 100%."}
+
+--- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
+${finalActiveRubrics.map(c => `• ${c.criterion_key} (${c.criteria_name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
+
+--- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
+[1. YÊU CẦU ĐỀ BÀI SE/IT]:
+${assignmentInfo || "Xây dựng ứng dụng phần mềm theo đặc tả yêu cầu."}
+
+[2. DANH SÁCH TẬP TIN, CẤU TRÚC AST VÀ MÃ NGUỒN BÀI NỘP]:
+${sourceCode || "Không tìm thấy mã nguồn trong bài nộp."}
+
+[3. LỊCH SỬ GIT COMMIT THỰC TẾ]:
+${gitHistory || "Không tìm thấy lịch sử Git commit."}
+
+[4. CAM KẾT KHÔNG DÙNG AI (ZERO-AI DECLARATION)]:
+Sinh viên cam kết tự làm 100%. Chấm điểm 100% dựa trên chất lượng chuyên môn thực tế của mã nguồn và đối chiếu với yêu cầu đề bài. TUYỆT ĐỐI KHÔNG trừ điểm hay bắt bẻ vì không có nhật ký prompt AI.
+
+[5. BẢN GHI PHIÊN VẤN ĐÁP VIVA (NẾU ĐÃ CÓ)]:
+${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
+
+--- HƯỚNG DẪN QUY CHUẨN ĐIỂM SỐ & PHẢN HỒI ---
+- Bạn CHỈ chấm điểm cho đúng ${finalActiveRubrics.length} tiêu chí active trên trong mảng "grading_breakdown".
+- Điểm awarded_score của mỗi tiêu chí KHÔNG ĐƯỢC vượt quá max_score quy định của tiêu chí đó (nằm trong khoảng từ 0.0 đến max_score).
+- Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0).
+- BỘ CÂU HỎI VẤN ĐÁP VIVA ("viva_questions"): BẮT BUỘC TẠO TỪ 3 ĐẾN 5 CÂU HỎI CHẾ ĐỘ "CODE OWNERSHIP VERIFICATION" (Kiểm tra quyền tác giả mã nguồn) xoay quanh:
+  + Kiến trúc hàm, luồng dữ liệu và lý do lựa chọn cấu trúc giải thuật của sinh viên.
+  + Cách tổ chức module, xử lý ngoại lệ và ca biên của code.
+  + Hỏi trực diện lý do sinh viên code theo cách này ở các đoạn code quan trọng để Giảng viên trực tiếp phỏng vấn kiểm chứng sinh viên thực sự tự viết code 100%.
+- Trong "audit_integrity", trả về: ai_transparency_index: "A+", risk_level: "LOW_RISK", match_percentage: 100, reflection_depth: "High", penalty_applied: false, penalty_reason: "Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva."
+- Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
+`
+    : (!aiDeclarationRequired
     ? `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu mã nguồn thực tế với yêu cầu đề bài và chấm điểm chuẩn xác theo các tiêu chí Rubric chuyên môn được kích hoạt (Tổng 10.0 điểm) cùng Bộ câu hỏi vấn đáp Viva:
 
@@ -535,7 +612,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 - Điểm awarded_score của mỗi tiêu chí KHÔNG ĐƯỢC vượt quá max_score quy định của tiêu chí đó (nằm trong khoảng từ 0.0 đến max_score).
 - Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0).
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
-`;
+`);
 
   // Cấu hình Schema bắt buộc Gemini trả về đúng khuôn JSON theo yêu cầu
   const rubricResponseSchema = {
@@ -1043,7 +1120,7 @@ Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_R
  * Kích hoạt khi toàn bộ cụm máy chủ Gemini API gặp sự cố quá tải diện rộng (503 High Demand).
  * Đảm bảo hệ thống KHÔNG BAO GIỜ bị crash 500/503 và giảng viên luôn có dữ liệu chấm bài hoàn chỉnh.
  */
-function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null, activeRubrics = null, aiDeclarationRequired = true, courseTopics = [] } = {}) {
+function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '', aiAuditSummary = '', rubricConfigs = null, activeRubrics = null, aiDeclarationRequired = true, noAiUsed = false, noAiNote = '', courseTopics = [] } = {}) {
   const DEFAULT_CONFIGS = [
     { criterion_key: 'PROBLEM_ABSTRACTION', criterion_name: 'Problem Abstraction & Solution Design', weight_percent: 20, is_enabled: true },
     { criterion_key: 'IMPLEMENTATION_QUALITY', criterion_name: 'Implementation & Code Quality', weight_percent: 30, is_enabled: true },
@@ -1056,14 +1133,14 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
     ? activeRubrics
     : ((Array.isArray(rubricConfigs) && rubricConfigs.length > 0) ? rubricConfigs : DEFAULT_CONFIGS);
 
-  // Nếu bài tập KHÔNG yêu cầu AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
-  if (!aiDeclarationRequired) {
+  // Nếu bài tập KHÔNG yêu cầu AI hoặc sinh viên cam kết Zero-AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
+  if (!aiDeclarationRequired || noAiUsed) {
     rawConfigs = filterAndRescaleRubricsForNonAi(rawConfigs);
   }
 
   let enabledConfigs = rawConfigs.filter((c) => c.is_enabled !== false && Number(c.weight_percent) > 0);
   if (enabledConfigs.length === 0) {
-    enabledConfigs = !aiDeclarationRequired
+    enabledConfigs = (!aiDeclarationRequired || noAiUsed)
       ? filterAndRescaleRubricsForNonAi(DEFAULT_CONFIGS)
       : DEFAULT_CONFIGS;
   }
@@ -1116,7 +1193,17 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
   const fallbackObj = {
     grading_breakdown: rawBreakdown,
     risk_level: 'low',
-    audit_integrity: !aiDeclarationRequired
+    audit_integrity: noAiUsed
+      ? {
+          match_percentage: 100.0,
+          risk_level: 'LOW_RISK',
+          riskLevel: 'low',
+          ai_transparency_index: 'A+',
+          reflection_depth: 'High',
+          penalty_applied: false,
+          penalty_reason: 'Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva.',
+        }
+      : (!aiDeclarationRequired
       ? {
           match_percentage: 100.0,
           risk_level: 'LOW_RISK',
@@ -1134,8 +1221,38 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
           reflection_depth: 'High',
           penalty_applied: false,
           penalty_reason: 'Không trừ điểm học thuật; sử dụng câu hỏi VIVA để giảng viên tự vấn đáp.',
-        },
-    viva_questions: [
+        }),
+    viva_questions: noAiUsed
+      ? [
+          {
+            id: 1,
+            rubric_criterion: 'IMPLEMENTATION_QUALITY',
+            target_file: 'CoreService.java',
+            target_code_snippet: 'public Response handleProcess(Request req) { ... }',
+            question: 'Hãy giải thích cấu trúc hàm và luồng xử lý dữ liệu chính trong chức năng này. Tại sao bạn lại chọn giải pháp thiết kế này thay vì một kiến trúc khác?',
+            expected_answer_criteria: 'Sinh viên mô tả lưu loát luồng dữ liệu vào - ra, các bước biến đổi dữ liệu và lý do kỹ thuật đằng sau quyết định thiết kế kiến trúc của mình.',
+            expected_answer_key: 'Sinh viên mô tả lưu loát luồng dữ liệu vào - ra, các bước biến đổi dữ liệu và lý do kỹ thuật đằng sau quyết định thiết kế kiến trúc của mình.'
+          },
+          {
+            id: 2,
+            rubric_criterion: 'PROBLEM_ABSTRACTION',
+            target_file: 'DataModel.java',
+            target_code_snippet: 'Map<String, List<Item>> dataStructure;',
+            question: 'Bạn đã tổ chức cấu trúc dữ liệu lưu trữ nội bộ như thế nào? Cấu trúc này tối ưu về độ phức tạp thời gian (Time Complexity) hay bộ nhớ (Space Complexity) ra sao?',
+            expected_answer_criteria: 'Sinh viên nêu rõ cấu trúc dữ liệu đã sử dụng (Map, List, Set, Tree...) và phân tích được độ phức tạp thao tác O(1), O(n) hoặc O(log n).',
+            expected_answer_key: 'Sinh viên nêu rõ cấu trúc dữ liệu đã sử dụng (Map, List, Set, Tree...) và phân tích được độ phức tạp thao tác O(1), O(n) hoặc O(log n).'
+          },
+          {
+            id: 3,
+            rubric_criterion: 'CRITICAL_EVALUATION',
+            target_file: 'ExceptionHandler.java',
+            target_code_snippet: 'try { ... } catch (SpecificException ex) { ... }',
+            question: 'Mã nguồn của bạn xử lý các trường hợp ngoại lệ (Exceptions) và dữ liệu biên (Edge cases - ví dụ null, rỗng, số âm, vượt ngưỡng) như thế nào?',
+            expected_answer_criteria: 'Sinh viên chỉ ra đúng vị trí các khối try-catch, kiểm tra điều kiện biên và giải thích được chiến lược fallback khi gặp lỗi hệ thống.',
+            expected_answer_key: 'Sinh viên chỉ ra đúng vị trí các khối try-catch, kiểm tra điều kiện biên và giải thích được chiến lược fallback khi gặp lỗi hệ thống.'
+          }
+        ]
+      : [
       {
         id: 1,
         rubric_criterion: 'PATTERN_RECOGNITION',
@@ -1180,7 +1297,7 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
       : [],
   };
 
-  const guarded = applyScoringGuardrails(fallbackObj, finalActiveRubrics, aiDeclarationRequired);
+  const guarded = applyScoringGuardrails(fallbackObj, finalActiveRubrics, aiDeclarationRequired && !noAiUsed, noAiUsed);
   return sanitizeObjectStrings(guarded);
 }
 

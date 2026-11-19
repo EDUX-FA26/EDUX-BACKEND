@@ -1,13 +1,16 @@
 const router = require('express').Router();
 const controller = require('./forum.controller');
 const { authenticate } = require('../../middlewares/auth.middleware');
+const { requireSchoolContext } = require('../../middlewares/requireSchoolContext');
 
 router.use(authenticate);
+router.use(requireSchoolContext);
 router.get('/schools', controller.schools);
 router.get('/stats/me', controller.stats);
 router.get('/posts', controller.list);
 router.get('/posts/:id', controller.get);
 router.post('/posts', controller.create);
+router.patch('/posts/:id', controller.update);
 router.delete('/posts/:id', controller.remove);
 router.post('/posts/:id/like', controller.like);
 router.post('/posts/:id/comments', controller.comment);

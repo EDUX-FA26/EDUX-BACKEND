@@ -481,6 +481,29 @@ const GradingService = {
       gitHistoryStr = 'Không tìm thấy thư mục .git trong bài nộp.';
     }
 
+    // Kiểm tra cờ Cam kết không dùng AI (Zero-AI / 100% tự thực hiện)
+    const normalizedAudit = normalizeAuditData(
+      auditData.latestVersion?.note ||
+      clientContext.aiAuditData ||
+      clientContext.aiDeclarations
+    );
+
+    const isNoAiUsed = Boolean(
+      auditData.submission?.no_ai_used === true ||
+      auditData.submission?.no_ai_used === 'true' ||
+      auditData.submission?.noAiUsed === true ||
+      clientContext.no_ai_used === true ||
+      clientContext.noAiUsed === true ||
+      (normalizedAudit && (normalizedAudit.no_ai_used === true || normalizedAudit.noAiUsed === true))
+    );
+    const noAiNote =
+      auditData.submission?.no_ai_note ||
+      auditData.submission?.noAiNote ||
+      clientContext.no_ai_note ||
+      clientContext.noAiNote ||
+      (normalizedAudit && (normalizedAudit.no_ai_note || normalizedAudit.noAiNote)) ||
+      null;
+
     // Kiểm tra xem bài tập có yêu cầu khai báo AI Audit Log hay không
     const isAiRequired =
       auditData.submission.assignment_ai_declaration_required !== false &&
@@ -490,12 +513,13 @@ const GradingService = {
     // 4. Phân tích ghi chú phiên bản và Khai báo AI của sinh viên qua helper normalizeAuditData (Backward Compatible)
     let aiAuditSummary = '';
 
-    if (isAiRequired) {
-      const normalizedAudit = normalizeAuditData(
-        auditData.latestVersion?.note ||
-        clientContext.aiAuditData ||
-        clientContext.aiDeclarations
-      );
+    if (isNoAiUsed) {
+      aiAuditSummary = `[CAM KẾT LIÊM CHÍNH HỌC THUẬT: ZERO-AI / TỰ THỰC HIỆN 100%]:
+Sinh viên cam kết tự thực hiện 100% bài làm mà không sử dụng bất kỳ công cụ AI hỗ trợ nào.
+${noAiNote ? `Ghi chú tiến trình / phương pháp tự thực hiện của sinh viên: "${noAiNote}".` : 'Sinh viên không để lại ghi chú thêm.'}
+Chế độ thẩm định: Kích hoạt Code Ownership Verification (Kiểm tra quyền tác giả mã nguồn độc lập).
+Sinh 3–5 câu hỏi vấn đáp Viva để giảng viên phỏng vấn kiểm tra mức độ nắm vững cấu trúc giải thuật, kiến trúc hàm, luồng dữ liệu, xử lý ngoại lệ và ca biên của code.`;
+    } else if (isAiRequired) {
       const scopes = normalizedAudit?.scopes || [];
 
       // 5. Chuẩn bị AI Audit Declarations theo mô hình Đa phân rã (Multi-Scope)
@@ -597,8 +621,8 @@ const GradingService = {
       rawConfigs = DEFAULT_RUBRIC_CONFIGS;
     }
 
-    // Nếu bài tập KHÔNG yêu cầu khai báo AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
-    if (!isAiRequired) {
+    // Nếu bài tập KHÔNG yêu cầu khai báo AI hoặc sinh viên cam kết Zero-AI: Tự động loại bỏ tiêu chí AI và quy đổi lại tỷ lệ tiêu chí chuyên môn về đúng tổng 10.0
+    if (!isAiRequired || isNoAiUsed) {
       rawConfigs = filterAndRescaleRubricsForNonAi(rawConfigs);
     }
 
@@ -616,7 +640,7 @@ const GradingService = {
     // Đảm bảo luôn có ít nhất 1 rubric active
     const finalActiveRubrics = activeRubrics.length > 0
       ? activeRubrics
-      : (!isAiRequired
+      : (!isAiRequired || isNoAiUsed
           ? [
               { index: 1, criterion_key: 'PROBLEM_ABSTRACTION', criteria_name: 'Problem Abstraction & Solution Design', weight_percent: 30, max_score: 3.0 },
               { index: 2, criterion_key: 'IMPLEMENTATION_QUALITY', criteria_name: 'Implementation & Code Quality', weight_percent: 40, max_score: 4.0 },
@@ -642,7 +666,9 @@ const GradingService = {
         oralExamLogs,
         activeRubrics: finalActiveRubrics,
         rubricConfigs: finalActiveRubrics,
-        aiDeclarationRequired: isAiRequired,
+        aiDeclarationRequired: isAiRequired && !isNoAiUsed,
+        noAiUsed: isNoAiUsed,
+        noAiNote: noAiNote,
         courseTopics: auditData.courseTopics || [],
       });
     } catch (evalErr) {
@@ -653,13 +679,18 @@ const GradingService = {
         aiAuditSummary,
         activeRubrics: finalActiveRubrics,
         rubricConfigs: finalActiveRubrics,
-        aiDeclarationRequired: isAiRequired,
+        aiDeclarationRequired: isAiRequired && !isNoAiUsed,
+        noAiUsed: isNoAiUsed,
+        noAiNote: noAiNote,
         courseTopics: auditData.courseTopics || [],
       });
     }
 
     // BƯỚC 3: CƠ CHẾ PHÒNG VỆ HẬU KỲ (BACKEND SCORING GUARDRAILS)
-    result = applyScoringGuardrails(result, finalActiveRubrics, isAiRequired);
+    result = applyScoringGuardrails(result, finalActiveRubrics, isAiRequired && !isNoAiUsed, isNoAiUsed);
+
+    result.no_ai_used = isNoAiUsed;
+    result.no_ai_note = noAiNote;
 
     result.course_topics = auditData.courseTopics || [];
     result.has_course_topics = Boolean(auditData.hasCourseTopics);

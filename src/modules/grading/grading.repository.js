@@ -289,6 +289,8 @@ const GradingRepository = {
         s.assignment_id,
         s.status              AS submission_status,
         s.latest_version_no,
+        s.no_ai_used,
+        s.no_ai_note,
         a.title               AS assignment_title,
         a.description         AS assignment_description,
         a.instructions        AS assignment_instructions,
