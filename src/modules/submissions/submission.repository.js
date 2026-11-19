@@ -6,11 +6,13 @@ const SubmissionRepository = {
    */
   async createSubmissionWithVersion(submissionData, versionData, client = pool) {
     const isDraft = submissionData.status === 'draft';
+    const noAiUsed = Boolean(submissionData.no_ai_used === true || submissionData.no_ai_used === 'true');
+    const noAiNote = submissionData.no_ai_note || null;
     const submissionQuery = `
       INSERT INTO submissions (
-        id, uuid, school_id, assignment_id, student_id, latest_version_no, status, submitted_at, last_submitted_at
+        id, uuid, school_id, assignment_id, student_id, latest_version_no, status, submitted_at, last_submitted_at, no_ai_used, no_ai_note
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, ${isDraft ? 'NULL' : 'NOW()'}, ${isDraft ? 'NULL' : 'NOW()'}
+        $1, $2, $3, $4, $5, $6, $7, ${isDraft ? 'NULL' : 'NOW()'}, ${isDraft ? 'NULL' : 'NOW()'}, $8, $9
       ) RETURNING *;
     `;
     const submissionValues = [
@@ -20,7 +22,9 @@ const SubmissionRepository = {
       submissionData.assignment_id,
       submissionData.student_id,
       1, // latest_version_no
-      submissionData.status || 'submitted'
+      submissionData.status || 'submitted',
+      noAiUsed,
+      noAiNote
     ];
 
     const { rows: submissionRows } = await client.query(submissionQuery, submissionValues);
@@ -52,7 +56,9 @@ const SubmissionRepository = {
   /**
    * Cập nhật bản nháp submission hiện tại (không tăng major version)
    */
-  async updateDraftSubmission(submissionId, versionId, schoolId, files, note, client = pool) {
+  async updateDraftSubmission(submissionId, versionId, schoolId, files, note, client = pool, extra = {}) {
+    const noAiUsed = extra?.no_ai_used !== undefined ? Boolean(extra.no_ai_used) : null;
+    const noAiNote = extra?.no_ai_note !== undefined ? extra.no_ai_note : null;
     const versionQuery = `
       UPDATE submission_versions
       SET files = $1::jsonb, note = $2, updated_at = NOW()
@@ -68,11 +74,13 @@ const SubmissionRepository = {
 
     const subQuery = `
       UPDATE submissions
-      SET updated_at = NOW()
+      SET updated_at = NOW(),
+          no_ai_used = COALESCE($3, no_ai_used),
+          no_ai_note = COALESCE($4, no_ai_note)
       WHERE id = $1 AND school_id = $2
       RETURNING *;
     `;
-    const { rows: subRows } = await client.query(subQuery, [submissionId, schoolId]);
+    const { rows: subRows } = await client.query(subQuery, [submissionId, schoolId, noAiUsed, noAiNote]);
 
     return { submission: subRows[0], version: versionRows[0] };
   },
@@ -80,7 +88,9 @@ const SubmissionRepository = {
   /**
    * Chuyển trạng thái draft sang nộp chính thức (chốt submitted_at = NOW())
    */
-  async finalizeDraftSubmission(submissionId, versionId, schoolId, status, files, note, client = pool) {
+  async finalizeDraftSubmission(submissionId, versionId, schoolId, status, files, note, client = pool, extra = {}) {
+    const noAiUsed = extra?.no_ai_used !== undefined ? Boolean(extra.no_ai_used) : null;
+    const noAiNote = extra?.no_ai_note !== undefined ? extra.no_ai_note : null;
     const versionQuery = `
       UPDATE submission_versions
       SET files = $1::jsonb, note = $2, submitted_at = NOW(), updated_at = NOW()
@@ -96,11 +106,13 @@ const SubmissionRepository = {
 
     const subQuery = `
       UPDATE submissions
-      SET status = $1, submitted_at = NOW(), last_submitted_at = NOW(), updated_at = NOW()
+      SET status = $1, submitted_at = NOW(), last_submitted_at = NOW(), updated_at = NOW(),
+          no_ai_used = COALESCE($4, no_ai_used),
+          no_ai_note = COALESCE($5, no_ai_note)
       WHERE id = $2 AND school_id = $3
       RETURNING *;
     `;
-    const { rows: subRows } = await client.query(subQuery, [status, submissionId, schoolId]);
+    const { rows: subRows } = await client.query(subQuery, [status, submissionId, schoolId, noAiUsed, noAiNote]);
 
     return { submission: subRows[0], version: versionRows[0] };
   },
@@ -108,7 +120,7 @@ const SubmissionRepository = {
   /**
    * Nộp lại bài: Tạo version mới và update submission
    */
-  async addSubmissionVersion(submissionId, schoolId, versionData, client = pool) {
+  async addSubmissionVersion(submissionId, schoolId, versionData, client = pool, extra = {}) {
     // 1. Lấy thông tin submission hiện tại để biết latest_version_no
     const { rows: subRows } = await client.query(
       `SELECT * FROM submissions WHERE id = $1 AND school_id = $2 FOR UPDATE`,
@@ -146,13 +158,17 @@ const SubmissionRepository = {
 
     // 4. Update submission
     const status = versionData.status || 'resubmitted';
+    const noAiUsed = extra?.no_ai_used !== undefined ? Boolean(extra.no_ai_used) : null;
+    const noAiNote = extra?.no_ai_note !== undefined ? extra.no_ai_note : null;
     const updateSubQuery = `
       UPDATE submissions
-      SET latest_version_no = $1, status = $2, last_submitted_at = NOW(), updated_at = NOW()
+      SET latest_version_no = $1, status = $2, last_submitted_at = NOW(), updated_at = NOW(),
+          no_ai_used = COALESCE($5, no_ai_used),
+          no_ai_note = COALESCE($6, no_ai_note)
       WHERE id = $3 AND school_id = $4
       RETURNING *;
     `;
-    const { rows: updatedSubRows } = await client.query(updateSubQuery, [newVersionNo, status, submissionId, schoolId]);
+    const { rows: updatedSubRows } = await client.query(updateSubQuery, [newVersionNo, status, submissionId, schoolId, noAiUsed, noAiNote]);
 
     return { submission: updatedSubRows[0], version };
   },
@@ -306,7 +322,9 @@ const SubmissionRepository = {
   /**
    * Cập nhật chỉ phần ghi chú / khai báo AI cho draft
    */
-  async updateDraftNote(submissionId, versionId, schoolId, note, client = pool) {
+  async updateDraftNote(submissionId, versionId, schoolId, note, client = pool, extra = {}) {
+    const noAiUsed = extra?.no_ai_used !== undefined ? Boolean(extra.no_ai_used) : null;
+    const noAiNote = extra?.no_ai_note !== undefined ? extra.no_ai_note : null;
     const versionQuery = `
       UPDATE submission_versions
       SET note = $1, updated_at = NOW()
@@ -317,11 +335,13 @@ const SubmissionRepository = {
 
     const subQuery = `
       UPDATE submissions
-      SET updated_at = NOW()
+      SET updated_at = NOW(),
+          no_ai_used = COALESCE($3, no_ai_used),
+          no_ai_note = COALESCE($4, no_ai_note)
       WHERE id = $1 AND school_id = $2
       RETURNING *;
     `;
-    const { rows: subRows } = await client.query(subQuery, [submissionId, schoolId]);
+    const { rows: subRows } = await client.query(subQuery, [submissionId, schoolId, noAiUsed, noAiNote]);
 
     return { submission: subRows[0], version: versionRows[0] };
   },

@@ -337,12 +337,24 @@ function normalizeAuditData(rawData) {
     };
   }
 
+  const no_ai_used = Boolean(
+    parsed.no_ai_used === true ||
+    parsed.no_ai_used === 'true' ||
+    parsed.noAiUsed === true ||
+    parsed.noAiUsed === 'true'
+  );
+  const no_ai_note = parsed.no_ai_note || parsed.noAiNote || null;
+
   // 1. Trường hợp rawData ĐÃ CÓ mảng scopes (Multi-Scope format v2.0)
   if (Array.isArray(parsed.scopes) && parsed.scopes.length > 0) {
     const normalizedScopes = parsed.scopes.map((s, idx) => normalizeScope(s, idx));
     return {
       version: parsed.version || '2.0',
       scopes: normalizedScopes,
+      no_ai_used,
+      noAiUsed: no_ai_used,
+      no_ai_note,
+      noAiNote: no_ai_note,
     };
   }
 
@@ -358,6 +370,10 @@ function normalizeAuditData(rawData) {
 
   return {
     version: '2.0',
+    no_ai_used,
+    noAiUsed: no_ai_used,
+    no_ai_note,
+    noAiNote: no_ai_note,
     scopes: [
       {
         id: 'default',
