@@ -50,9 +50,21 @@ const paymentRoutes = require("./modules/payments/payments.routes");
 // Middleware
 // =========================
 
+// =========================
+// CORS CONFIGURATION
+// =========================
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  ...(process.env.CLIENT_URL || "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: allowedOrigins,
     credentials: true,
   })
 );
