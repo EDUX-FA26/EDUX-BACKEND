@@ -49,8 +49,11 @@ async function startServer() {
     // SeaweedFS
     // =========================
 
-    await connectSeaweed();
-
+    if (process.env.STORAGE_ENABLED !== "false") {
+      await connectSeaweed();
+    } else {
+      console.log("⚠️ SeaweedFS temporarily disabled");
+    }
     // =========================
     // HTTP Server
     // =========================
@@ -67,12 +70,13 @@ async function startServer() {
     // Start Server
     // =========================
 
-    server.listen(PORT, () => {
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`✅ EDUX Backend running on port ${PORT}`);
       console.log("");
       console.log("=================================");
       console.log("✅ EDUX Backend started");
-      console.log(`🌐 http://localhost:${PORT}`);
-      console.log(`❤️  http://localhost:${PORT}/health`);
+      console.log(`🌐 EDUX Backend listening on port ${PORT}`);
+      console.log(`❤️  Health check: /health`);
       console.log("=================================");
       console.log("");
     });
