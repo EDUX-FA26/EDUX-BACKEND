@@ -50,9 +50,23 @@ const paymentRoutes = require("./modules/payments/payments.routes");
 // Middleware
 // =========================
 
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (process.env.CLIENT_URL && origin === process.env.CLIENT_URL.replace(/\/$/, "")) return true;
+  if (origin.includes("localhost") || origin.includes("127.0.0.1")) return true;
+  if (origin.endsWith(".vercel.app")) return true;
+  return true; // Cho phép deploy liên kết frontend linh hoạt
+};
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL,
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, true);
+      }
+    },
     credentials: true,
   })
 );

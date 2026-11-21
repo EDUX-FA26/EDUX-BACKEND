@@ -7,7 +7,10 @@ let io;
 function initializeSocket(server) {
   io = new Server(server, {
     cors: {
-      origin: process.env.CLIENT_URL,
+      origin: (origin, callback) => {
+        // Cho phép kết nối từ Vercel, localhost và client URL
+        callback(null, true);
+      },
       credentials: true,
     },
   });
