@@ -57,19 +57,6 @@ const StudyPlannerRepository = {
     try {
       await client.query('BEGIN');
 
-      // Force: xóa plan cũ cùng chu kỳ
-      if (force) {
-        const oldPlans = await client.query(
-          `SELECT id FROM study_plans
-           WHERE student_id = $1 AND subject_id = $2 AND starts_on = $3`,
-          [studentId, subjectId, startsOn]
-        );
-        for (const op of oldPlans.rows) {
-          await client.query(`DELETE FROM study_plan_days WHERE plan_id = $1`, [op.id]);
-          await client.query(`DELETE FROM study_plans WHERE id = $1`, [op.id]);
-        }
-      }
-
       // Khóa và kiểm tra xem kế hoạch đã tồn tại cho chu kỳ này chưa
       const existing = await client.query(
         `SELECT * FROM study_plans
@@ -420,10 +407,33 @@ const StudyPlannerRepository = {
           `SELECT 1 FROM study_plan_day_submissions WHERE plan_day_id = $1 LIMIT 1`,
           [day.planDayId]
         );
+
+
         if (subCheck.rows.length > 0) {
-          // Đã hoàn thành, bỏ qua để bảo toàn kết quả
           continue;
         }
+
+        // Bảo vệ cả các ngày sinh viên đã trả lời
+        // nhưng chưa nộp bài.
+        const answerCheck = await client.query(
+          `SELECT 1
+   FROM study_plan_day_answers a
+   JOIN study_plan_questions q
+     ON q.id = a.question_id
+   WHERE q.plan_day_id = $1
+   LIMIT 1`,
+          [day.planDayId]
+        );
+
+        if (answerCheck.rows.length > 0) {
+          console.log(
+            "[STUDY PLAN] Skipping day with saved answers:",
+            day.planDayId
+          );
+
+          continue;
+        }
+
 
         // Xóa câu hỏi nháp cũ chưa làm của ngày này
         await client.query(

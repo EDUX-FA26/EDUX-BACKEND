@@ -157,7 +157,7 @@ const StudyPlannerService = {
     },
 
     async generateForStudent(analytics, studentId, force = false, schoolId = null) {
-        const startsOn = getVietnamTodayDate();
+        let startsOn = getVietnamTodayDate();
 
         // 1. Lấy danh sách Topic cần ôn được Giảng viên duyệt sau khi chấm bài
         let auditTopics = [];
@@ -264,6 +264,39 @@ const StudyPlannerService = {
                 };
             }
         }
+
+
+        // ==========================================
+        // NEW STUDY CYCLE
+        // Preserve historical plans and answers.
+        // ==========================================
+        const isPreviousCycleCompleted =
+            activePlan &&
+            Array.isArray(activePlan.days) &&
+            activePlan.days.length === 7 &&
+            activePlan.days.every(day => day.isCompleted);
+
+        if (isPreviousCycleCompleted) {
+            // Chu kỳ mới bắt đầu sau chu kỳ cũ 7 ngày,
+            // hoặc từ hôm nay nếu ngày đó đã qua.
+            const nextCycleDate = getStudyDate(
+                activePlan.startsOn,
+                8
+            );
+
+            if (nextCycleDate > startsOn) {
+                startsOn = nextCycleDate;
+            }
+
+            console.log(
+                "[STUDY PLAN] Starting a new cycle:",
+                {
+                    previousPlanId: activePlan.planId,
+                    startsOn,
+                }
+            );
+        }
+
 
         // 4. Nếu chưa có plan hoặc chu kỳ trước đã hoàn thành 100%, tạo kế hoạch mới đầy đủ 7 ngày
         const preview = makeStudyPlan7Days(enrichedAnalytics, { auditTopics, totalDays: 7 });
