@@ -27,7 +27,7 @@ const submitStudyPlanDayBody = z.object({
   answers: z.array(
     z.object({
       questionId: z.string().uuid(),
-      selectedAnswer: z.enum(['A', 'B', 'C', 'D'])
+      selectedAnswer: z.enum(['A', 'B', 'C', 'D', 'NONE', '']).nullable().optional().default('NONE')
     }).strict()
   ).min(1).max(20)
 }).strict();

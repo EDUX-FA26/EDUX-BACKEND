@@ -170,10 +170,13 @@ const StudyPlannerSubmissionRepository = {
             const answerMap = new Map();
 
             for (const item of answers) {
+                const rawAnswer = item?.selectedAnswer;
+                const normAnswer = rawAnswer ? String(rawAnswer).trim().toUpperCase() : 'NONE';
+
                 if (
                     !item ||
                     typeof item.questionId !== 'string' ||
-                    !['A', 'B', 'C', 'D'].includes(item.selectedAnswer)
+                    !['A', 'B', 'C', 'D', 'NONE', ''].includes(normAnswer)
                 ) {
                     throw makeError('INVALID_ANSWER_FORMAT', 400);
                 }
@@ -182,16 +185,16 @@ const StudyPlannerSubmissionRepository = {
                     throw makeError('DUPLICATE_ANSWER', 400);
                 }
 
-                answerMap.set(item.questionId, item.selectedAnswer);
+                answerMap.set(item.questionId, ['A', 'B', 'C', 'D'].includes(normAnswer) ? normAnswer : 'NONE');
             }
 
             // Đảm bảo tất cả câu trả lời thuộc đúng ngày học.
             const results = questions.map(question => {
-                const selectedAnswer = answerMap.get(question.id);
-
-                if (!selectedAnswer) {
+                if (!answerMap.has(question.id)) {
                     throw makeError('INVALID_QUESTION_ID', 400);
                 }
+
+                const selectedAnswer = answerMap.get(question.id);
 
                 const correctAnswer =
                     String(question.answer).trim().toUpperCase();
@@ -206,7 +209,7 @@ const StudyPlannerSubmissionRepository = {
                     question: question.question,
                     selectedAnswer,
                     correctAnswer,
-                    isCorrect: selectedAnswer === correctAnswer,
+                    isCorrect: ['A', 'B', 'C', 'D'].includes(selectedAnswer) && selectedAnswer === correctAnswer,
                     explanation: question.explanation
                 };
             });
