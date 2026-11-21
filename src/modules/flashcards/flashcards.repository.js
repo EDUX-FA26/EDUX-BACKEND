@@ -140,7 +140,7 @@ const FlashcardsRepository = {
 
     if (role === 'lecturer') {
       params.push(userId);
-      where.push(`(fd.created_by = $${params.length} OR fd.is_public = true)`);
+      where.push(`fd.created_by = $${params.length}`);
     }
 
     if (typeof is_public === 'boolean') {

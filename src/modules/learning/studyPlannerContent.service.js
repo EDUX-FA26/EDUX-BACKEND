@@ -231,7 +231,7 @@ YÊU CẦU:
 - Các câu hỏi phải kiểm tra kiến thức trọng tâm, bản chất và ứng dụng của chủ đề trên.
 - Mỗi câu có đúng 4 lựa chọn A, B, C, D.
 - Chỉ có MỘT đáp án đúng.
-- "answer" chỉ được là A, B, C hoặc D.
+- "answer" chỉ được là A, B, C hoặc D. Phân bổ đa dạng và ngẫu nhiên giữa các đáp án A, B, C, D (không được để tất cả các câu đều có chung đáp án A).
 - "explanation" giải thích rõ ràng, chi tiết vì sao đáp án đúng.
 - Trả lời đúng cấu trúc JSON, không thêm Markdown ngoài JSON.
 
@@ -258,20 +258,33 @@ YÊU CẦU:
                 questions = validateGeneratedQuestions(response, count, '');
             } catch (err) {
                 console.warn('[StudyPlannerContentService] Pure Topic AI askGemini failed, using pedagogical fallback:', err.message);
-                questions = Array.from({ length: count }, (_, idx) => ({
-                    question: `Câu hỏi ôn tập ${idx + 1} về chủ đề: ${day.topicName}?`,
-                    answer: 'A',
-                    explanation: `Củng cố kiến thức trọng tâm cho chủ đề ${day.topicName}.`,
-                    options: [
+                const answerCycle = ['A', 'B', 'C', 'D'];
+                questions = Array.from({ length: count }, (_, idx) => {
+                    const correctKey = answerCycle[idx % answerCycle.length];
+                    const options = [
                         { key: 'A', text: `Khái niệm và đặc trưng chính xác của ${day.topicName}` },
                         { key: 'B', text: `Phương án đánh lạc hướng B về ${day.topicName}` },
                         { key: 'C', text: `Phương án đánh lạc hướng C về ${day.topicName}` },
                         { key: 'D', text: `Phương án đánh lạc hướng D về ${day.topicName}` },
-                    ],
-                    type: 'multiple_choice',
-                    difficulty: 'medium',
-                    mathCheck: null,
-                }));
+                    ];
+                    if (correctKey !== 'A') {
+                        const targetIdx = options.findIndex(o => o.key === correctKey);
+                        if (targetIdx !== -1) {
+                            const tmp = options[0].text;
+                            options[0].text = options[targetIdx].text;
+                            options[targetIdx].text = tmp;
+                        }
+                    }
+                    return {
+                        question: `Câu hỏi ôn tập ${idx + 1} về chủ đề: ${day.topicName}?`,
+                        answer: correctKey,
+                        explanation: `Củng cố kiến thức trọng tâm cho chủ đề ${day.topicName}.`,
+                        options,
+                        type: 'multiple_choice',
+                        difficulty: 'medium',
+                        mathCheck: null,
+                    };
+                });
             }
 
             const saved = await ContentRepository.saveGeneratedQuestions({

@@ -1071,7 +1071,7 @@ class FlashcardsService {
     if (role === 'school_admin' || role === 'admin') return;
 
     if (role === 'lecturer') {
-      if (deck.created_by === user.id || deck.is_public) return;
+      if (deck.created_by === user.id) return;
       throw new Error('FORBIDDEN');
     }
 

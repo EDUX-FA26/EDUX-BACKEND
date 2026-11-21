@@ -174,6 +174,34 @@ class FlashcardsTestService {
     return str.trim().toLowerCase().replace(/\s+/g, ' ');
   }
 
+  _normalizeOptions(options = []) {
+    if (!Array.isArray(options)) return [];
+    const stripPrefix = (s) => s.replace(/^[a-d][.:)\s-]+/i, '').trim();
+
+    return options.map((opt, idx) => {
+      if (opt === null || opt === undefined) return null;
+      const defaultKey = String.fromCharCode(65 + idx).toLowerCase();
+      if (typeof opt === 'string') {
+        const trimmed = opt.trim();
+        const match = trimmed.match(/^([a-d])[.:)\s-]+(.*)$/i);
+        if (match) {
+          const key = match[1].toLowerCase();
+          const text = this._normalizeString(match[2]);
+          return { key, text, cleanText: stripPrefix(text), raw: trimmed };
+        }
+        const text = this._normalizeString(trimmed);
+        return { key: defaultKey, text, cleanText: stripPrefix(text), raw: trimmed };
+      }
+      if (typeof opt === 'object') {
+        const key = this._normalizeString(opt.key || opt.label || defaultKey);
+        const text = this._normalizeString(opt.text ?? opt.content ?? opt.value ?? '');
+        return { key, text, cleanText: stripPrefix(text), raw: text };
+      }
+      const text = this._normalizeString(String(opt));
+      return { key: defaultKey, text, cleanText: stripPrefix(text), raw: String(opt) };
+    }).filter(Boolean);
+  }
+
   _gradeAnswer(type, studentAns, realAns, options = []) {
     const normStudent = this._normalizeString(typeof studentAns === 'object' ? (studentAns.text || studentAns.key) : studentAns);
     const normReal = this._normalizeString(typeof realAns === 'object' ? (realAns.text || realAns.key) : realAns);
@@ -185,19 +213,34 @@ class FlashcardsTestService {
     const cleanReal = stripPrefix(normReal);
     if (cleanStudent && cleanStudent === cleanReal) return true;
 
-    // Nếu options có dạng [{ key, text }], cho phép khớp chéo giữa key và text
-    if (Array.isArray(options)) {
-      for (const opt of options) {
-        if (typeof opt === 'object' && opt !== null) {
-          const optKey = this._normalizeString(opt.key);
-          const optText = this._normalizeString(opt.text);
-          const cleanOptText = stripPrefix(optText);
+    // Chuẩn hóa toàn bộ options (hỗ trợ cả mảng string lẫn mảng object)
+    const normOptions = this._normalizeOptions(options);
 
-          if (normStudent === optKey && (normReal === optText || cleanReal === cleanOptText)) return true;
-          if ((normStudent === optText || cleanStudent === cleanOptText) && normReal === optKey) return true;
-        }
-      }
+    // Tìm option tương ứng với câu trả lời của học sinh
+    const studentOpt = normOptions.find(
+      (o) => o.key === normStudent || o.text === normStudent || (cleanStudent && o.cleanText === cleanStudent)
+    );
+
+    // Tìm option tương ứng với đáp án chuẩn
+    const realOpt = normOptions.find(
+      (o) => o.key === normReal || o.text === normReal || (cleanReal && o.cleanText === cleanReal)
+    );
+
+    // Nếu cả 2 đều trỏ đến cùng 1 option trong bộ câu hỏi
+    if (studentOpt && realOpt && studentOpt.key === realOpt.key) {
+      return true;
     }
+
+    if (realOpt) {
+      if (normStudent === realOpt.key) return true;
+      if (normStudent === realOpt.text || (cleanStudent && cleanStudent === realOpt.cleanText)) return true;
+    }
+
+    if (studentOpt) {
+      if (normReal === studentOpt.key) return true;
+      if (normReal === studentOpt.text || (cleanReal && cleanReal === studentOpt.cleanText)) return true;
+    }
+
     return false;
   }
 
