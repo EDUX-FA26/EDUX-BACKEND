@@ -8,25 +8,39 @@ const clients = new Map();
  * Tự động sửa các lỗi gõ nhầm (ví dụ: gemini-3-5-flash-lite -> gemini-3.5-flash-lite, gemini-2-5 -> gemini-2.5)
  * Fallback an toàn về model ổn định (gemini-3.5-flash-lite hoặc gemini-2.5-flash-lite)
  */
-function normalizeGeminiModel(rawModel, fallback = 'gemini-2.5-flash') {
-  if (!rawModel || typeof rawModel !== 'string') return fallback;
-  let m = rawModel.trim();
-  // Sửa lỗi gõ nhầm dấu gạch nối hoặc model giả định 3.5 về 2.5
-  m = m.replace(/^gemini-3-5-/i, 'gemini-2.5-')
-       .replace(/^gemini-3.5-/i, 'gemini-2.5-')
-       .replace(/^gemini-2-5-/i, 'gemini-2.5-')
-       .replace(/^gemini-1-5-/i, 'gemini-1.5-');
-
-  const validModels = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash'
-  ];
-
-  if (validModels.includes(m)) {
-    return m;
+function normalizeGeminiModel(
+  rawModel,
+  fallback = "gemini-3.5-flash-lite"
+) {
+  if (
+    typeof rawModel !== "string" ||
+    !rawModel.trim()
+  ) {
+    return fallback;
   }
+
+  const model = rawModel
+    .trim()
+    .toLowerCase()
+    .replace(/^gemini-3-5-/, "gemini-3.5-")
+    .replace(/^gemini-2-5-/, "gemini-2.5-");
+
+  const supportedModels = new Set([
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-flash-lite-latest",
+  ]);
+
+  if (supportedModels.has(model)) {
+    return model;
+  }
+
+  console.warn(
+    `[Gemini] Unknown model: "${model}". Falling back to "${fallback}"`
+  );
+
   return fallback;
 }
 
@@ -86,32 +100,75 @@ async function callGeminiWithRetry(promptFn, maxRetries = 4, initialDelay = 1500
 
 async function askGemini(prompt) {
   const ai = await getGeminiClient();
-  const primaryModel = normalizeGeminiModel(process.env.GEMINI_MODEL, 'gemini-2.5-flash');
-  const candidateModels = Array.from(new Set([
-    primaryModel,
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-  ]));
+
+  const primaryModel = normalizeGeminiModel(
+    process.env.GEMINI_MODEL,
+    "gemini-3.5-flash-lite"
+  );
+
+  // Model chính và fallback
+  const candidateModels = Array.from(
+    new Set([
+      primaryModel,
+      "gemini-3.5-flash-lite",
+      "gemini-3.5-flash",
+    ])
+  );
 
   let lastError = null;
+
   for (const activeModel of candidateModels) {
     try {
-      console.log(`[ART-AI Debug] >>> Đang gọi Gemini với Model: "${activeModel}"`);
-      const response = await callGeminiWithRetry(() => ai.models.generateContent({
-        model: activeModel,
-        contents: prompt
-      }), 2, 800);
+      console.log(
+        `[Gemini] askGemini đang gọi: ${activeModel}`
+      );
+
+      const response = await callGeminiWithRetry(
+        () =>
+          ai.models.generateContent({
+            model: activeModel,
+            contents: prompt,
+          }),
+        2,
+        800
+      );
+
+      if (
+        typeof response?.text !== "string" ||
+        !response.text.trim()
+      ) {
+        throw new Error("GEMINI_EMPTY_RESPONSE");
+      }
+
+      console.log(
+        `[Gemini] Generation successful: ${activeModel}`
+      );
 
       return response.text;
     } catch (err) {
       lastError = err;
-      console.warn(`[ART-AI Debug] Model "${activeModel}" gặp sự cố (${err.message}). Thử fallback model kế tiếp...`);
+
+      console.warn(
+        "[Gemini] askGemini model failed:",
+        {
+          model: activeModel,
+          status:
+            err?.status ||
+            err?.statusCode ||
+            err?.code ||
+            "UNKNOWN",
+          message: String(
+            err?.message || err
+          ).slice(0, 300),
+        }
+      );
     }
   }
 
-  throw lastError;
+  throw (
+    lastError ||
+    new Error("GEMINI_ALL_MODELS_FAILED")
+  );
 }
 
 const CANONICAL_RUBRIC_MAP = {
@@ -162,13 +219,13 @@ function isAiSpecificCriterion(criterion) {
   if (key.includes('AI_') || key.includes('_AI') || key === 'AI') return true;
 
   if (name.includes('ai interaction') ||
-      name.includes('prompt engineering') ||
-      name.includes('critical evaluation of ai') ||
-      name.includes('khai báo ai') ||
-      name.includes('sử dụng ai') ||
-      name.includes('ai audit') ||
-      name.includes('ai transparency') ||
-      name.includes('metacognitive reflection')) {
+    name.includes('prompt engineering') ||
+    name.includes('critical evaluation of ai') ||
+    name.includes('khai báo ai') ||
+    name.includes('sử dụng ai') ||
+    name.includes('ai audit') ||
+    name.includes('ai transparency') ||
+    name.includes('metacognitive reflection')) {
     return true;
   }
 
@@ -576,7 +633,7 @@ ${topicsInstruction}
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
 `
     : (!aiDeclarationRequired
-    ? `
+      ? `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu mã nguồn thực tế với yêu cầu đề bài và chấm điểm chuẩn xác theo các tiêu chí Rubric chuyên môn được kích hoạt (Tổng 10.0 điểm) cùng Bộ câu hỏi vấn đáp Viva:
 
 --- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
@@ -607,7 +664,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 ${topicsInstruction}
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
 `
-    : `
+      : `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây, đối chiếu toàn bộ các Scope khai báo AI với mã nguồn thực tế và chấm điểm chuẩn xác theo các tiêu chí Rubric được kích hoạt (Tổng 10.0 điểm) cùng Bộ câu hỏi vấn đáp Viva:
 
 --- DANH SÁCH TIÊU CHÍ RUBRIC ĐƯỢC THIẾT LẬP (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
@@ -741,15 +798,19 @@ ${topicsInstruction}
     ],
   };
 
-  const primaryModel = normalizeGeminiModel(process.env.GEMINI_MODEL_AUDIT || process.env.GEMINI_MODEL, "gemini-3.5-flash-lite");
+  const primaryModel = normalizeGeminiModel(
+    process.env.GEMINI_MODEL_AUDIT ||
+    process.env.GEMINI_MODEL,
+    "gemini-3.5-flash"
+  );
 
-  // Multi-tier pool các model chất lượng cao theo thứ tự ưu tiên
-  const candidateModels = [
-    primaryModel,
-    (primaryModel === "gemini-3.5-flash" ? "gemini-3.5-flash-lite" : "gemini-3.5-flash"),
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite"
-  ].filter((m, idx, arr) => m && arr.indexOf(m) === idx);
+  const candidateModels = Array.from(
+    new Set([
+      primaryModel,
+      "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
+    ])
+  );
 
   // Pool các API key dự phòng để tránh rate-limit / quota spike theo project
   const candidateKeys = [
@@ -1089,9 +1150,9 @@ Dưới đây là dữ liệu tổng hợp bài nộp và báo cáo kiểm toán
 - Mức độ minh bạch AI trung bình thực tế: ${avgTransparency ? avgTransparency : "Không có (chưa có bài nộp nào có điểm audit -> BẮT BUỘC trả về avg_ai_transparency: null)"}
 
 BÁO CÁO AUDIT & ĐÁNH GIÁ CỦA CÁC BÀI NỘP TRONG LỚP:
-${auditSummaries && auditSummaries.length > 0 
-  ? auditSummaries.map((s, idx) => `[Sinh viên ${idx + 1} - ${s.student_name}]: Điểm minh bạch AI: ${s.transparency || 'Chưa có điểm'}, Mức độ rủi ro: ${s.risk_level || 'Chưa đánh giá'}, Nhận xét audit/lỗi: ${s.summary || 'Không có mô tả'}`).join('\n')
-  : "Chưa có bài nộp nào hoặc chưa có báo cáo audit chi tiết."}
+${auditSummaries && auditSummaries.length > 0
+      ? auditSummaries.map((s, idx) => `[Sinh viên ${idx + 1} - ${s.student_name}]: Điểm minh bạch AI: ${s.transparency || 'Chưa có điểm'}, Mức độ rủi ro: ${s.risk_level || 'Chưa đánh giá'}, Nhận xét audit/lỗi: ${s.summary || 'Không có mô tả'}`).join('\n')
+      : "Chưa có bài nộp nào hoặc chưa có báo cáo audit chi tiết."}
 
 Hãy dựa vào tỷ lệ nộp bài để xác định đúng mode ("PROGRESS_REMINDER" hay "DEEP_TECHNICAL") và trả về JSON theo schema.`;
 
@@ -1257,16 +1318,16 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
     risk_level: 'low',
     audit_integrity: noAiUsed
       ? {
-          match_percentage: 100.0,
-          risk_level: 'LOW_RISK',
-          riskLevel: 'low',
-          ai_transparency_index: 'A+',
-          reflection_depth: 'High',
-          penalty_applied: false,
-          penalty_reason: 'Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva.',
-        }
+        match_percentage: 100.0,
+        risk_level: 'LOW_RISK',
+        riskLevel: 'low',
+        ai_transparency_index: 'A+',
+        reflection_depth: 'High',
+        penalty_applied: false,
+        penalty_reason: 'Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva.',
+      }
       : (!aiDeclarationRequired
-      ? {
+        ? {
           match_percentage: 100.0,
           risk_level: 'LOW_RISK',
           riskLevel: 'low',
@@ -1275,7 +1336,7 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
           penalty_applied: false,
           penalty_reason: 'Bài tập không yêu cầu khai báo AI Audit Log; chấm điểm chuyên môn thuần túy.',
         }
-      : {
+        : {
           match_percentage: 95.0,
           risk_level: 'LOW_RISK',
           riskLevel: 'low',
@@ -1286,78 +1347,78 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
         }),
     viva_questions: noAiUsed
       ? [
-          {
-            id: 1,
-            rubric_criterion: 'IMPLEMENTATION_QUALITY',
-            target_file: 'CoreService.java',
-            target_code_snippet: 'public Response handleProcess(Request req) { ... }',
-            question: 'Hãy giải thích cấu trúc hàm và luồng xử lý dữ liệu chính trong chức năng này. Tại sao bạn lại chọn giải pháp thiết kế này thay vì một kiến trúc khác?',
-            expected_answer_criteria: 'Sinh viên mô tả lưu loát luồng dữ liệu vào - ra, các bước biến đổi dữ liệu và lý do kỹ thuật đằng sau quyết định thiết kế kiến trúc của mình.',
-            expected_answer_key: 'Sinh viên mô tả lưu loát luồng dữ liệu vào - ra, các bước biến đổi dữ liệu và lý do kỹ thuật đằng sau quyết định thiết kế kiến trúc của mình.'
-          },
-          {
-            id: 2,
-            rubric_criterion: 'PROBLEM_ABSTRACTION',
-            target_file: 'DataModel.java',
-            target_code_snippet: 'Map<String, List<Item>> dataStructure;',
-            question: 'Bạn đã tổ chức cấu trúc dữ liệu lưu trữ nội bộ như thế nào? Cấu trúc này tối ưu về độ phức tạp thời gian (Time Complexity) hay bộ nhớ (Space Complexity) ra sao?',
-            expected_answer_criteria: 'Sinh viên nêu rõ cấu trúc dữ liệu đã sử dụng (Map, List, Set, Tree...) và phân tích được độ phức tạp thao tác O(1), O(n) hoặc O(log n).',
-            expected_answer_key: 'Sinh viên nêu rõ cấu trúc dữ liệu đã sử dụng (Map, List, Set, Tree...) và phân tích được độ phức tạp thao tác O(1), O(n) hoặc O(log n).'
-          },
-          {
-            id: 3,
-            rubric_criterion: 'CRITICAL_EVALUATION',
-            target_file: 'ExceptionHandler.java',
-            target_code_snippet: 'try { ... } catch (SpecificException ex) { ... }',
-            question: 'Mã nguồn của bạn xử lý các trường hợp ngoại lệ (Exceptions) và dữ liệu biên (Edge cases - ví dụ null, rỗng, số âm, vượt ngưỡng) như thế nào?',
-            expected_answer_criteria: 'Sinh viên chỉ ra đúng vị trí các khối try-catch, kiểm tra điều kiện biên và giải thích được chiến lược fallback khi gặp lỗi hệ thống.',
-            expected_answer_key: 'Sinh viên chỉ ra đúng vị trí các khối try-catch, kiểm tra điều kiện biên và giải thích được chiến lược fallback khi gặp lỗi hệ thống.'
-          }
-        ]
+        {
+          id: 1,
+          rubric_criterion: 'IMPLEMENTATION_QUALITY',
+          target_file: 'CoreService.java',
+          target_code_snippet: 'public Response handleProcess(Request req) { ... }',
+          question: 'Hãy giải thích cấu trúc hàm và luồng xử lý dữ liệu chính trong chức năng này. Tại sao bạn lại chọn giải pháp thiết kế này thay vì một kiến trúc khác?',
+          expected_answer_criteria: 'Sinh viên mô tả lưu loát luồng dữ liệu vào - ra, các bước biến đổi dữ liệu và lý do kỹ thuật đằng sau quyết định thiết kế kiến trúc của mình.',
+          expected_answer_key: 'Sinh viên mô tả lưu loát luồng dữ liệu vào - ra, các bước biến đổi dữ liệu và lý do kỹ thuật đằng sau quyết định thiết kế kiến trúc của mình.'
+        },
+        {
+          id: 2,
+          rubric_criterion: 'PROBLEM_ABSTRACTION',
+          target_file: 'DataModel.java',
+          target_code_snippet: 'Map<String, List<Item>> dataStructure;',
+          question: 'Bạn đã tổ chức cấu trúc dữ liệu lưu trữ nội bộ như thế nào? Cấu trúc này tối ưu về độ phức tạp thời gian (Time Complexity) hay bộ nhớ (Space Complexity) ra sao?',
+          expected_answer_criteria: 'Sinh viên nêu rõ cấu trúc dữ liệu đã sử dụng (Map, List, Set, Tree...) và phân tích được độ phức tạp thao tác O(1), O(n) hoặc O(log n).',
+          expected_answer_key: 'Sinh viên nêu rõ cấu trúc dữ liệu đã sử dụng (Map, List, Set, Tree...) và phân tích được độ phức tạp thao tác O(1), O(n) hoặc O(log n).'
+        },
+        {
+          id: 3,
+          rubric_criterion: 'CRITICAL_EVALUATION',
+          target_file: 'ExceptionHandler.java',
+          target_code_snippet: 'try { ... } catch (SpecificException ex) { ... }',
+          question: 'Mã nguồn của bạn xử lý các trường hợp ngoại lệ (Exceptions) và dữ liệu biên (Edge cases - ví dụ null, rỗng, số âm, vượt ngưỡng) như thế nào?',
+          expected_answer_criteria: 'Sinh viên chỉ ra đúng vị trí các khối try-catch, kiểm tra điều kiện biên và giải thích được chiến lược fallback khi gặp lỗi hệ thống.',
+          expected_answer_key: 'Sinh viên chỉ ra đúng vị trí các khối try-catch, kiểm tra điều kiện biên và giải thích được chiến lược fallback khi gặp lỗi hệ thống.'
+        }
+      ]
       : [
-      {
-        id: 1,
-        rubric_criterion: 'PATTERN_RECOGNITION',
-        target_file: 'OrderService.java',
-        target_code_snippet: 'List<Product> products = productRepo.findAllByIdIn(pIds);',
-        question: 'Tại sao bạn lại sử dụng phương thức findAllByIdIn kết hợp với Map thay vì gọi findById trong vòng lặp for?',
-        expected_answer_criteria: 'Sinh viên giải thích được vấn đề N+1 query: nếu gọi findById trong vòng lặp thì có N câu lệnh SELECT, dùng findAllByIdIn chỉ tốn 1 câu query duy nhất.',
-        expected_answer_key: 'Sinh viên giải thích được vấn đề N+1 query: nếu gọi findById trong vòng lặp thì có N câu lệnh SELECT, dùng findAllByIdIn chỉ tốn 1 câu query duy nhất.'
-      },
-      {
-        id: 2,
-        rubric_criterion: 'ALGORITHMIC_THINKING',
-        target_file: 'OrderService.java',
-        target_code_snippet: 'BigDecimal total = subtotal.multiply(BigDecimal.valueOf(1.10)).subtract(request.getDiscount());',
-        question: 'Trong dòng tính tổng tiền total, thứ tự áp dụng thuế VAT 10% và giảm giá discount của bạn có điểm gì bất hợp lý so với quy trình bán hàng thực tế?',
-        expected_answer_criteria: 'Sinh viên nhận ra lỗi: công thức hiện tại đang tính thuế trên giá gốc rồi mới trừ discount, trong khi thông lệ tài chính phải trừ discount trước rồi mới áp thuế VAT trên giá sau giảm giá.',
-        expected_answer_key: 'Sinh viên nhận ra lỗi: công thức hiện tại đang tính thuế trên giá gốc rồi mới trừ discount, trong khi thông lệ tài chính phải trừ discount trước rồi mới áp thuế VAT trên giá sau giảm giá.'
-      },
-      {
-        id: 3,
-        rubric_criterion: 'REFLECTION',
-        target_file: 'OrderService.java',
-        target_code_snippet: 'if (p.getStock() < item.getQuantity()) throw new OutOfStockException();',
-        question: 'Ngoài việc kiểm tra tồn kho p.getStock() < item.getQuantity(), bạn cần bổ sung thêm những validation biên nào cho request.getItems() và discount?',
-        expected_answer_criteria: 'Cần kiểm tra item.getQuantity() <= 0, discount < 0, discount > subtotal, và danh sách items null/rỗng.',
-        expected_answer_key: 'Cần kiểm tra item.getQuantity() <= 0, discount < 0, discount > subtotal, và danh sách items null/rỗng.'
-      }
-    ],
+        {
+          id: 1,
+          rubric_criterion: 'PATTERN_RECOGNITION',
+          target_file: 'OrderService.java',
+          target_code_snippet: 'List<Product> products = productRepo.findAllByIdIn(pIds);',
+          question: 'Tại sao bạn lại sử dụng phương thức findAllByIdIn kết hợp với Map thay vì gọi findById trong vòng lặp for?',
+          expected_answer_criteria: 'Sinh viên giải thích được vấn đề N+1 query: nếu gọi findById trong vòng lặp thì có N câu lệnh SELECT, dùng findAllByIdIn chỉ tốn 1 câu query duy nhất.',
+          expected_answer_key: 'Sinh viên giải thích được vấn đề N+1 query: nếu gọi findById trong vòng lặp thì có N câu lệnh SELECT, dùng findAllByIdIn chỉ tốn 1 câu query duy nhất.'
+        },
+        {
+          id: 2,
+          rubric_criterion: 'ALGORITHMIC_THINKING',
+          target_file: 'OrderService.java',
+          target_code_snippet: 'BigDecimal total = subtotal.multiply(BigDecimal.valueOf(1.10)).subtract(request.getDiscount());',
+          question: 'Trong dòng tính tổng tiền total, thứ tự áp dụng thuế VAT 10% và giảm giá discount của bạn có điểm gì bất hợp lý so với quy trình bán hàng thực tế?',
+          expected_answer_criteria: 'Sinh viên nhận ra lỗi: công thức hiện tại đang tính thuế trên giá gốc rồi mới trừ discount, trong khi thông lệ tài chính phải trừ discount trước rồi mới áp thuế VAT trên giá sau giảm giá.',
+          expected_answer_key: 'Sinh viên nhận ra lỗi: công thức hiện tại đang tính thuế trên giá gốc rồi mới trừ discount, trong khi thông lệ tài chính phải trừ discount trước rồi mới áp thuế VAT trên giá sau giảm giá.'
+        },
+        {
+          id: 3,
+          rubric_criterion: 'REFLECTION',
+          target_file: 'OrderService.java',
+          target_code_snippet: 'if (p.getStock() < item.getQuantity()) throw new OutOfStockException();',
+          question: 'Ngoài việc kiểm tra tồn kho p.getStock() < item.getQuantity(), bạn cần bổ sung thêm những validation biên nào cho request.getItems() và discount?',
+          expected_answer_criteria: 'Cần kiểm tra item.getQuantity() <= 0, discount < 0, discount > subtotal, và danh sách items null/rỗng.',
+          expected_answer_key: 'Cần kiểm tra item.getQuantity() <= 0, discount < 0, discount > subtotal, và danh sách items null/rỗng.'
+        }
+      ],
     course_topics: courseTopics || [],
     has_course_topics: Array.isArray(courseTopics) && courseTopics.length > 0,
     recommended_topics: Array.isArray(courseTopics) && courseTopics.length > 0
       ? courseTopics.slice(0, 2).map((t, idx) => ({
-          id: t.id,
-          topic_id: t.id,
-          name: t.name,
-          topic_name: t.name,
-          description: t.description,
-          priority: idx === 0 ? 'high' : 'medium',
-          priority_label: idx === 0 ? 'Ưu tiên cao' : 'Khuyến nghị',
-          reason: idx === 0
-            ? 'Cần củng cố về cấu trúc và giải thuật trong bài làm.'
-            : 'Cần ôn tập thêm về tối ưu hóa và xử lý ngoại lệ.'
-        }))
+        id: t.id,
+        topic_id: t.id,
+        name: t.name,
+        topic_name: t.name,
+        description: t.description,
+        priority: idx === 0 ? 'high' : 'medium',
+        priority_label: idx === 0 ? 'Ưu tiên cao' : 'Khuyến nghị',
+        reason: idx === 0
+          ? 'Cần củng cố về cấu trúc và giải thuật trong bài làm.'
+          : 'Cần ôn tập thêm về tối ưu hóa và xử lý ngoại lệ.'
+      }))
       : [],
   };
 
