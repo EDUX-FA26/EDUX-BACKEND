@@ -538,7 +538,9 @@ const PlatformService = {
     );
 
     if (adminRows.length === 0) {
-      return { success: false, message: "Không tìm thấy tài khoản School Admin đang hoạt động để gửi thông báo.", count: 0 };
+      const err = new Error("Không tìm thấy tài khoản Quản trị trường (School Admin) đang hoạt động để gửi thông báo nhắc nhở.");
+      err.status = 400;
+      throw err;
     }
 
     const endDateStr = sub.end_date ? new Date(sub.end_date).toLocaleDateString("vi-VN") : "sắp tới";
@@ -553,7 +555,15 @@ const PlatformService = {
       school_id: sub.school_id,
     }));
 
-    const created = await notificationsRepository.bulkCreate(notifications);
+    let created = [];
+    try {
+      created = await notificationsRepository.bulkCreate(notifications);
+    } catch (createErr) {
+      // Fallback safely to system_announcement in case of DB constraint variation
+      console.warn("[remindSubscriptionRenewal] Retrying with system_announcement fallback:", createErr.message);
+      const fallbackNotifs = notifications.map(n => ({ ...n, type: "system_announcement" }));
+      created = await notificationsRepository.bulkCreate(fallbackNotifs);
+    }
     emitCreatedNotifications(created);
 
     // Send renewal reminder emails
