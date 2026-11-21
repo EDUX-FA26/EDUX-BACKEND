@@ -810,7 +810,7 @@ const LearningRepository = {
         INSERT INTO subject_streak_activities
           (user_id, subject_id, flashcard_deck_id, activity_date, activity_type, school_id)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (school_id, user_id, subject_id, activity_date) DO NOTHING
+       ON CONFLICT DO NOTHING
         RETURNING *
       `;
       const { rows } = await q.query(query, [
