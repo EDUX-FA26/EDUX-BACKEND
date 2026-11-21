@@ -15,6 +15,7 @@ const gradeSchemas = {
     rubrics: z.any().optional(),
     isDraft: z.boolean().optional(),
     aiCompliance: z.string().optional(),
+    reviewTopics: z.array(z.any()).optional(),
   }),
 
   // PATCH /api/grades/:id — Update grade + feedback (partial)
@@ -26,6 +27,7 @@ const gradeSchemas = {
       rubrics: z.any().optional(),
       isDraft: z.boolean().optional(),
       aiCompliance: z.string().optional(),
+      reviewTopics: z.array(z.any()).optional(),
     })
     .refine(
       (data) => Object.keys(data).some((k) => data[k] !== undefined),

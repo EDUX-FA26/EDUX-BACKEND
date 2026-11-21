@@ -128,12 +128,25 @@ const StudyPlannerSubmissionService = {
             throw makeError('SUBJECT_ACCESS_FORBIDDEN', 403);
         }
 
-        return SubmissionRepository.submitDay(
+        const submissionResult = await SubmissionRepository.submitDay(
             planDayId,
             studentId,
             answers,
             schoolId
         );
+
+        // Đánh dấu topic review tương ứng (nếu có) là 'consumed' vì sinh viên đã hoàn thành ngày ôn tập
+        try {
+            await LearningRepository.markReviewTopicsConsumed(
+                studentId,
+                day.topicId,
+                schoolId
+            );
+        } catch (err) {
+            console.warn('[StudyPlannerSubmissionService] markReviewTopicsConsumed error:', err.message);
+        }
+
+        return submissionResult;
     },
 
 

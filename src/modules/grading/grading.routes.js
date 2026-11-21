@@ -71,11 +71,41 @@ gradingRouter.post(
   gradingController.handleAuditRubric
 );
 
+// GET & PATCH /submissions/:submissionId/review-topics (chỉ lecturer / school_admin)
+gradingRouter.get(
+  '/submissions/:submissionId/review-topics',
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  gradingController.getSubmissionReviewTopics
+);
+
+gradingRouter.patch(
+  '/submissions/:submissionId/review-topics',
+  authenticate,
+  requireSchoolContext,
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  gradingController.approveSubmissionReviewTopics
+);
+
 // Alias on gradesRouter: POST /api/grades/submissions/:submissionId/ai-rubric
 gradesRouter.post(
   '/submissions/:submissionId/ai-rubric',
   authorizeSchoolRoles('lecturer', 'school_admin'),
   gradingController.handleAuditRubric
+);
+
+// Alias on gradesRouter: GET & PATCH /api/grades/submissions/:submissionId/review-topics
+gradesRouter.get(
+  '/submissions/:submissionId/review-topics',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  gradingController.getSubmissionReviewTopics
+);
+
+gradesRouter.patch(
+  '/submissions/:submissionId/review-topics',
+  authorizeSchoolRoles('lecturer', 'school_admin'),
+  gradingController.approveSubmissionReviewTopics
 );
 
 module.exports = { gradesRouter, gradebooksRouter, gradingRouter };

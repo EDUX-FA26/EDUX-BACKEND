@@ -4,7 +4,7 @@ const {
 
 const s3 = new S3Client({
   endpoint: process.env.S3_ENDPOINT,
-  region: "us-east-1",
+  region: process.env.S3_REGION,
 
   credentials: {
     accessKeyId: process.env.S3_ACCESS_KEY,

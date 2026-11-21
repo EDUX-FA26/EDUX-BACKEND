@@ -1,6 +1,7 @@
 const LearningStreakService = require('./learningStreak.service');
 const LearningProfileService = require('./learningProfile.service');
 const LearningTopicAnalyticsService = require('./learningTopicAnalytics.service');
+const LearningRepository = require('./learning.repository');
 const StudyPlannerService = require('./studyPlanner.service');
 const StudyPlannerContentService = require('./studyPlannerContent.service');
 const StudyPlannerSubmissionService =
@@ -266,9 +267,13 @@ const LearningController = {
             req.tenant?.schoolId || null
           );
 
-      // Tạo lịch học 7 ngày từ kết quả Analytics.
+      // Tạo lịch học 7 ngày từ kết quả Analytics kèm Audit Topics đã duyệt.
       const data =
-        StudyPlannerService.createPreview(analytics);
+        await StudyPlannerService.createPreview(
+          analytics,
+          req.user.id,
+          req.tenant?.schoolId || null
+        );
 
       return res.status(200).json({
         success: true,
@@ -602,7 +607,9 @@ const LearningController = {
         success: true,
         message: data.created
           ? 'Study plan created successfully'
-          : 'Existing study plan returned',
+          : data.realigned
+            ? 'Study plan realigned successfully'
+            : 'Existing study plan returned',
         data
       });
 
@@ -653,6 +660,51 @@ const LearningController = {
       );
       return res.status(200).json({ success: true, data });
     } catch (error) {
+      return next(error);
+    }
+  },
+
+  /**
+   * GET /api/learning/review-topics?subjectId=...
+   * Lấy danh sách topic cần ôn được Giảng viên duyệt sau khi chấm bài cho student
+   */
+  async getStudentReviewTopics(req, res, next) {
+    try {
+      if (req.user.role !== 'student') {
+        return res.status(403).json({ success: false, message: 'Student access is required' });
+      }
+
+      const { subjectId } = req.query;
+      const schoolId = req.tenant?.schoolId || null;
+
+      const hasAccess = await LearningRepository.isStudentActiveInSubject(
+        req.user.id,
+        subjectId,
+        schoolId
+      );
+
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not an active member of this subject',
+        });
+      }
+
+      const data = await LearningRepository.findApprovedReviewTopicsByStudent(
+        req.user.id,
+        subjectId,
+        schoolId
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: 'Review topics retrieved successfully',
+        data,
+      });
+    } catch (error) {
+      if (error.message === 'SUBJECT_NOT_FOUND') {
+        return res.status(404).json({ success: false, message: 'Subject not found' });
+      }
       return next(error);
     }
   },

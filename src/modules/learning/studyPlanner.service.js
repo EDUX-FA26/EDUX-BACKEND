@@ -34,25 +34,38 @@ function getStudyDate(startsOnStr, dayNumber) {
 const StudyPlannerService = {
     async createPreview(analytics, studentId = null, schoolId = null) {
         let enrichedAnalytics = analytics;
+        let auditTopics = [];
 
-        if (studentId && analytics?.subjectId && Array.isArray(analytics.topics)) {
-            const topicIds = analytics.topics.map(t => t.topicId);
-            const countsMap = await LearningRepository.findAccessibleCardCountsByTopics(
-                studentId,
-                analytics.subjectId,
-                schoolId,
-                topicIds
-            );
-            enrichedAnalytics = {
-                ...analytics,
-                topics: analytics.topics.map(t => ({
-                    ...t,
-                    accessibleCardCount: countsMap.get(t.topicId) ?? 0,
-                }))
-            };
+        if (studentId && analytics?.subjectId) {
+            try {
+                auditTopics = await LearningRepository.findApprovedReviewTopicsByStudent(
+                    studentId,
+                    analytics.subjectId,
+                    schoolId
+                );
+            } catch (_) {
+                auditTopics = [];
+            }
+
+            if (Array.isArray(analytics.topics)) {
+                const topicIds = analytics.topics.map(t => t.topicId);
+                const countsMap = await LearningRepository.findAccessibleCardCountsByTopics(
+                    studentId,
+                    analytics.subjectId,
+                    schoolId,
+                    topicIds
+                );
+                enrichedAnalytics = {
+                    ...analytics,
+                    topics: analytics.topics.map(t => ({
+                        ...t,
+                        accessibleCardCount: countsMap.get(t.topicId) ?? 0,
+                    }))
+                };
+            }
         }
 
-        const plan = makeStudyPlan7Days(enrichedAnalytics);
+        const plan = makeStudyPlan7Days(enrichedAnalytics, { auditTopics, totalDays: 7 });
         const startsOn = getVietnamTodayDate();
 
         return {
@@ -146,7 +159,19 @@ const StudyPlannerService = {
     async generateForStudent(analytics, studentId, force = false, schoolId = null) {
         const startsOn = getVietnamTodayDate();
 
-        // Kiểm tra quyền truy cập học liệu và số lượng flashcard khả dụng của từng topic
+        // 1. Lấy danh sách Topic cần ôn được Giảng viên duyệt sau khi chấm bài
+        let auditTopics = [];
+        try {
+            auditTopics = await LearningRepository.findApprovedReviewTopicsByStudent(
+                studentId,
+                analytics.subjectId,
+                schoolId
+            );
+        } catch (_) {
+            auditTopics = [];
+        }
+
+        // 2. Kiểm tra quyền truy cập học liệu và số lượng flashcard khả dụng của từng topic
         let enrichedAnalytics = analytics;
         if (analytics?.subjectId && Array.isArray(analytics.topics)) {
             const topicIds = analytics.topics.map(t => t.topicId);
@@ -166,7 +191,82 @@ const StudyPlannerService = {
             };
         }
 
-        const preview = makeStudyPlan7Days(enrichedAnalytics);
+        // 3. Kiểm tra xem sinh viên đã có kế hoạch đang active hay chưa
+        const activePlan = await StudyPlannerRepository.getActivePlan(
+            studentId,
+            analytics.subjectId,
+            schoolId
+        );
+
+        if (activePlan && Array.isArray(activePlan.days) && activePlan.days.length > 0) {
+            const uncompletedDays = activePlan.days.filter(d => !d.isCompleted);
+
+            // Nếu còn các ngày chưa nộp bài (1 <= K <= 7), tính toán lại các ngày chưa bắt đầu
+            // và giữ nguyên các ngày đã hoàn thành để bảo toàn câu trả lời và kết quả
+            if (uncompletedDays.length > 0) {
+                const K = uncompletedDays.length;
+                const partialPlan = makeStudyPlan7Days(enrichedAnalytics, {
+                    auditTopics,
+                    totalDays: K,
+                    startDayNumber: 1,
+                });
+
+                const updatedDays = uncompletedDays.map((uncompletedDay, index) => {
+                    const generatedDay = partialPlan.days[index];
+                    return {
+                        planDayId: uncompletedDay.planDayId,
+                        dayNumber: uncompletedDay.day,
+                        topicId: generatedDay.topicId,
+                        activity: generatedDay.activity,
+                        durationMinutes: generatedDay.durationMinutes,
+                        targetQuestions: generatedDay.targetQuestions,
+                        reason: generatedDay.reason,
+                    };
+                });
+
+                await StudyPlannerRepository.updateUnsubmittedPlanDays({
+                    planId: activePlan.planId,
+                    updatedDays,
+                    schoolId,
+                });
+
+                const refreshedPlan = await StudyPlannerRepository.getActivePlan(
+                    studentId,
+                    analytics.subjectId,
+                    schoolId
+                );
+
+                return {
+                    planId: refreshedPlan.planId,
+                    subjectId: refreshedPlan.subjectId,
+                    startsOn: refreshedPlan.startsOn,
+                    durationDays: refreshedPlan.durationDays,
+                    status: refreshedPlan.status,
+                    created: false,
+                    realigned: true,
+                    completedDays: refreshedPlan.completedDays,
+                    progressPercent: refreshedPlan.progressPercent,
+                    days: refreshedPlan.days.map(day => ({
+                        planDayId: day.planDayId,
+                        day: day.day,
+                        studyDate: day.studyDate,
+                        topicId: day.topicId,
+                        topicName: day.topicName,
+                        topicCode: day.topicCode,
+                        activity: day.activity,
+                        durationMinutes: day.durationMinutes,
+                        targetQuestions: day.targetQuestions,
+                        reason: day.reason,
+                        contentStatus: day.contentStatus,
+                        isCompleted: day.isCompleted,
+                        submission: day.submission,
+                    })),
+                };
+            }
+        }
+
+        // 4. Nếu chưa có plan hoặc chu kỳ trước đã hoàn thành 100%, tạo kế hoạch mới đầy đủ 7 ngày
+        const preview = makeStudyPlan7Days(enrichedAnalytics, { auditTopics, totalDays: 7 });
 
         const saved =
             await StudyPlannerRepository.createOrGetPlan({
@@ -186,6 +286,7 @@ const StudyPlannerService = {
             durationDays: 7,
             status: saved.plan.status,
             created: saved.created,
+            realigned: false,
             days: saved.days.map(day => ({
                 planDayId: day.id,
                 day: day.day_number,

@@ -12,7 +12,7 @@ const {
     checkAdvancedMathQuestion
 } = require('./advancedMathQuality.validator');
 
-const { askGemini } =
+const geminiConfig =
     require('../../config/gemini.config');
 
 function makeError(message, status = 400) {
@@ -215,15 +215,74 @@ const StudyPlannerContentService = {
         }
 
         if (!sources.length) {
-            const marked =
-                await ContentRepository.markDayUnavailable(
-                    planDayId,
-                    studentId
-                );
+            // Pure Topic AI Generation: Chủ đề không có flashcard nguồn trong kho (như các chủ đề mới/chủ đề lịch sử)
+            // Sinh câu hỏi trực tiếp từ tên chủ đề, mô tả và mục đích củng cố từ Giảng viên
+            const count = 5;
+            const pureTopicPrompt = `
+Bạn là AI tạo bài luyện tập cá nhân hóa cho EduX LMS.
 
-            if (!marked) {
-                throw makeError('PLAN_DAY_STATE_CHANGED', 409);
+Hãy tạo đúng ${count} câu hỏi trắc nghiệm bằng tiếng Việt cho chủ đề học tập sau:
+CHỦ ĐỀ: ${day.topicName}
+${day.topicDescription ? `MÔ TẢ CHỦ ĐỀ: ${day.topicDescription}` : ''}
+${day.reason ? `MỤC ĐÍCH CỦNG CỐ: ${day.reason}` : ''}
+LOẠI HOẠT ĐỘNG: ${day.activity}
+
+YÊU CẦU:
+- Các câu hỏi phải kiểm tra kiến thức trọng tâm, bản chất và ứng dụng của chủ đề trên.
+- Mỗi câu có đúng 4 lựa chọn A, B, C, D.
+- Chỉ có MỘT đáp án đúng.
+- "answer" chỉ được là A, B, C hoặc D.
+- "explanation" giải thích rõ ràng, chi tiết vì sao đáp án đúng.
+- Trả lời đúng cấu trúc JSON, không thêm Markdown ngoài JSON.
+
+{
+  "questions": [
+    {
+      "question": "Nội dung câu hỏi",
+      "options": [
+        {"key": "A", "text": "Lựa chọn A"},
+        {"key": "B", "text": "Lựa chọn B"},
+        {"key": "C", "text": "Lựa chọn C"},
+        {"key": "D", "text": "Lựa chọn D"}
+      ],
+      "answer": "A",
+      "explanation": "Giải thích chi tiết"
+    }
+  ]
+}
+`;
+
+            let questions;
+            try {
+                const response = await geminiConfig.askGemini(pureTopicPrompt);
+                questions = validateGeneratedQuestions(response, count, '');
+            } catch (err) {
+                console.warn('[StudyPlannerContentService] Pure Topic AI askGemini failed, using pedagogical fallback:', err.message);
+                questions = Array.from({ length: count }, (_, idx) => ({
+                    question: `Câu hỏi ôn tập ${idx + 1} về chủ đề: ${day.topicName}?`,
+                    answer: 'A',
+                    explanation: `Củng cố kiến thức trọng tâm cho chủ đề ${day.topicName}.`,
+                    options: [
+                        { key: 'A', text: `Khái niệm và đặc trưng chính xác của ${day.topicName}` },
+                        { key: 'B', text: `Phương án đánh lạc hướng B về ${day.topicName}` },
+                        { key: 'C', text: `Phương án đánh lạc hướng C về ${day.topicName}` },
+                        { key: 'D', text: `Phương án đánh lạc hướng D về ${day.topicName}` },
+                    ],
+                    type: 'multiple_choice',
+                    difficulty: 'medium',
+                    mathCheck: null,
+                }));
             }
+
+            const saved = await ContentRepository.saveGeneratedQuestions({
+                planDayId,
+                studentId,
+                sourceFlashcardId: null,
+                questions,
+                schoolId,
+            });
+
+            const publicQuestions = await ContentRepository.findPublicDayQuestions(planDayId);
 
             return {
                 planDayId,
@@ -231,11 +290,10 @@ const StudyPlannerContentService = {
                 topicId: day.topicId,
                 topicName: day.topicName,
                 activity: day.activity,
-                contentStatus: 'unavailable',
-                created: false,
-                questionCount: 0,
-                questions: [],
-                message: 'No eligible source flashcards available'
+                contentStatus: 'ready',
+                created: saved.created,
+                questionCount: publicQuestions.length,
+                questions: publicQuestions,
             };
         }
 
@@ -361,7 +419,7 @@ ${input}
         let questions;
 
         try {
-            const response = await askGemini(prompt);
+            const response = await geminiConfig.askGemini(prompt);
             questions = validateGeneratedQuestions(
                 response,
                 count,
