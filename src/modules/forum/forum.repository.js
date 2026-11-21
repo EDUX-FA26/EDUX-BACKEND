@@ -82,10 +82,14 @@ const ForumRepository = {
     return rows.map((row) => row.id);
   },
 
-  async findAudienceUserIds(postId, authorId) {
+  async findAudienceUserIds(postId, authorId, schoolId) {
     const { rows } = await pool.query(`
       SELECT DISTINCT u.id
       FROM users u
+      JOIN school_memberships sm
+        ON sm.user_id = u.id
+       AND sm.school_id = $3::uuid
+       AND sm.status = 'active'
       WHERE u.is_active = true AND u.id <> $2 AND (
         EXISTS (SELECT 1 FROM forum_posts fp WHERE fp.id = $1 AND fp.visibility = 'PUBLIC')
         OR EXISTS (
@@ -98,7 +102,7 @@ const ForumRepository = {
           JOIN classes c ON c.id = fpc.class_id AND c.lecturer_id = u.id
           WHERE fpc.post_id = $1
         )
-      )`, [postId, authorId]);
+      )`, [postId, authorId, schoolId]);
     return rows.map((row) => row.id);
   },
 

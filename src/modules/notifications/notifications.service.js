@@ -53,7 +53,7 @@ class NotificationsService {
    */
   async getNotificationById(id, tenantOrUserId) {
     const { userId, schoolId } = this._resolveContext(tenantOrUserId);
-    const notification = await NotificationsRepository.findById(id, schoolId);
+    const notification = await NotificationsRepository.findById(id, userId, schoolId);
     if (!notification) {
       throw new Error('NOTIFICATION_NOT_FOUND');
     }
@@ -73,7 +73,7 @@ class NotificationsService {
   async markAsRead(id, tenantOrUserId) {
     const { userId, schoolId } = this._resolveContext(tenantOrUserId);
     // Kiểm tra tồn tại và quyền truy cập trước
-    const notification = await NotificationsRepository.findById(id, schoolId);
+    const notification = await NotificationsRepository.findById(id, userId, schoolId);
     if (!notification) {
       throw new Error('NOTIFICATION_NOT_FOUND');
     }
