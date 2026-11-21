@@ -1,39 +1,46 @@
 const { Pool, types } = require("pg");
 
-// Parse PostgreSQL DATE (OID 1082) directly as 'YYYY-MM-DD' string to avoid local timezone offset drift
 types.setTypeParser(1082, (val) => val);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+
+  ssl:
+    process.env.DB_SSL === "true"
+      ? {
+          rejectUnauthorized: true,
+        }
+      : false,
 });
 
 pool.on("error", (error) => {
-  console.error("❌ Unexpected PostgreSQL error:", error);
+  console.error(
+    "❌ Unexpected PostgreSQL error:",
+    error
+  );
 });
 
 async function connectDB() {
+  const client = await pool.connect();
+
   try {
-    const client = await pool.connect();
+    await client.query("SELECT 1");
     console.log("✅ PostgreSQL connected");
-
+  } finally {
     client.release();
-  } catch (error) {
-    console.error("❌ PostgreSQL connection failed:");
-    console.error(error.message);
-
-    throw error;
   }
 }
 
 async function withTransaction(callback) {
   const client = await pool.connect();
+
   try {
     await client.query("BEGIN");
+
     const result = await callback(client);
+
     await client.query("COMMIT");
+
     return result;
   } catch (error) {
     await client.query("ROLLBACK");
