@@ -34,7 +34,9 @@ const ForumService = {
     // Notify the public audience or only members/lecturers of selected classes.
     // failure must not roll back a successfully-created forum post.
     try {
-      const userIds = await Repo.findAudienceUserIds(post.id, user.id);
+      const userIds = schoolId
+        ? await Repo.findAudienceUserIds(post.id, user.id, schoolId)
+        : [];
       await NotificationsRepository.bulkCreate(userIds.map((userId) => ({
         userId,
         title: 'Bài đăng mới trên diễn đàn',
@@ -44,6 +46,8 @@ const ForumService = {
         type: 'system_announcement',
         related_entity_type: 'forum_post',
         related_entity_id: post.id,
+        notification_scope: 'school',
+        school_id: schoolId,
       })));
     } catch (notificationError) {
       console.error('Forum post notification failed:', notificationError.message);

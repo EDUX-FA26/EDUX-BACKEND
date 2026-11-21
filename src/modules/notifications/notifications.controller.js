@@ -75,8 +75,10 @@ const NotificationsController = {
     try {
       const notification = await NotificationsService.getNotificationById(
         req.params.id,
-        req.user.id,
-        req.tenant.schoolId
+        {
+          userId: req.user.id,
+          schoolId: req.tenant.schoolId,
+        }
       );
       res.status(200).json({ success: true, data: notification });
     } catch (error) {
@@ -98,8 +100,10 @@ const NotificationsController = {
     try {
       const notification = await NotificationsService.markAsRead(
         req.params.id,
-        req.user.id,
-        req.tenant.schoolId
+        {
+          userId: req.user.id,
+          schoolId: req.tenant.schoolId,
+        }
       );
       res.status(200).json({ success: true, data: notification });
     } catch (error) {
