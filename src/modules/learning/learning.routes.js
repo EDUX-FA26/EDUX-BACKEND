@@ -56,6 +56,13 @@ router.get(
 // Phase 4 - Lấy kế hoạch đang chạy + tiến độ 7 ngày
 router.get('/study-plan', ctrl.getActivePlan);
 
+// Phase 4 - Lấy danh sách Topic cần ôn được giảng viên duyệt từ bài nộp
+router.get(
+  '/review-topics',
+  validate(getTopicPerformanceQuery, 'query'),
+  ctrl.getStudentReviewTopics
+);
+
 // Phase 3C - Tạo và lưu lịch học cá nhân hóa
 router.post(
   '/study-plan/generate',

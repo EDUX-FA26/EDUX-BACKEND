@@ -143,7 +143,7 @@ const GradingService = {
    * Backend tự lấy assignment_id, student_id, class_id, lecturer_id
    * từ DB thông qua submission JOIN theo school_id.
    */
-  async createGrade({ submissionId, score, maxScore, feedback, rubrics }, tenant) {
+  async createGrade({ submissionId, score, maxScore, feedback, rubrics, reviewTopics }, tenant) {
     // 1. Lấy submission + context trong trường hiện tại
     const submission = await GradingRepository.findSubmissionById(submissionId, tenant.schoolId);
     if (!submission || submission.submission_status === 'draft') throw new Error('SUBMISSION_NOT_FOUND');
@@ -154,7 +154,7 @@ const GradingService = {
     // 3. Kiểm tra chưa có grade -> nếu đã có thì tự động update thay vì báo lỗi
     const existing = await GradingRepository.findBySubmissionId(submissionId, tenant.schoolId);
     if (existing) {
-      return this.updateGrade(existing.id, { score, maxScore, feedback, rubrics }, tenant);
+      return this.updateGrade(existing.id, { score, maxScore, feedback, rubrics, reviewTopics }, tenant);
     }
 
     // 4. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
@@ -180,7 +180,28 @@ const GradingService = {
     // 7. Cập nhật submission status → 'graded'
     await GradingRepository.markSubmissionGraded(submissionId, tenant.schoolId);
 
-    // 8. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
+    // 8. Tự động lưu/duyệt danh sách review topics vào submission_review_topics
+    try {
+      if (Array.isArray(reviewTopics) && reviewTopics.length > 0) {
+        await this.approveSubmissionReviewTopics(submissionId, { topics: reviewTopics }, tenant);
+      } else {
+        const existingTopics = await GradingRepository.getReviewTopicsBySubmission(submissionId, tenant.schoolId);
+        if (!existingTopics || existingTopics.length === 0) {
+          const evalRec = await GradingRepository.findAiEvaluationBySubmissionId(submissionId, tenant.schoolId);
+          const evalData = typeof evalRec?.evaluation_data === 'string'
+            ? JSON.parse(evalRec.evaluation_data)
+            : evalRec?.evaluation_data;
+          const recTopics = evalData?.recommended_topics || [];
+          if (Array.isArray(recTopics) && recTopics.length > 0) {
+            await this.approveSubmissionReviewTopics(submissionId, { topics: recTopics }, tenant);
+          }
+        }
+      }
+    } catch (syncErr) {
+      console.warn('[createGrade] Auto-sync review topics notice:', syncErr.message);
+    }
+
+    // 9. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
     try {
       const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
       ClassAiAdvisorService.generateAndSaveAdvisory(
@@ -197,7 +218,7 @@ const GradingService = {
   },
 
   // ── UC 38 – Update Grade ───────────────────────────────────────────────────
-  async updateGrade(gradeId, { score, maxScore, feedback, rubrics }, tenant) {
+  async updateGrade(gradeId, { score, maxScore, feedback, rubrics, reviewTopics }, tenant) {
     // 1. Lấy grade trong trường hiện tại
     const grade = await GradingRepository.findById(gradeId, tenant.schoolId);
     if (!grade) throw new Error('GRADE_NOT_FOUND');
@@ -220,6 +241,27 @@ const GradingService = {
 
     if (grade.submission_id) {
       await GradingRepository.markSubmissionGraded(grade.submission_id, tenant.schoolId);
+
+      // Tự động lưu/duyệt danh sách review topics vào submission_review_topics
+      try {
+        if (Array.isArray(reviewTopics) && reviewTopics.length > 0) {
+          await this.approveSubmissionReviewTopics(grade.submission_id, { topics: reviewTopics }, tenant);
+        } else {
+          const existingTopics = await GradingRepository.getReviewTopicsBySubmission(grade.submission_id, tenant.schoolId);
+          if (!existingTopics || existingTopics.length === 0) {
+            const evalRec = await GradingRepository.findAiEvaluationBySubmissionId(grade.submission_id, tenant.schoolId);
+            const evalData = typeof evalRec?.evaluation_data === 'string'
+              ? JSON.parse(evalRec.evaluation_data)
+              : evalRec?.evaluation_data;
+            const recTopics = evalData?.recommended_topics || [];
+            if (Array.isArray(recTopics) && recTopics.length > 0) {
+              await this.approveSubmissionReviewTopics(grade.submission_id, { topics: recTopics }, tenant);
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.warn('[updateGrade] Auto-sync review topics notice:', syncErr.message);
+      }
     }
 
     // Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
@@ -382,6 +424,16 @@ const GradingService = {
           cachedData.has_course_topics = Boolean(auditData.hasCourseTopics);
           if (!cachedData.recommended_topics) {
             cachedData.recommended_topics = [];
+          }
+
+          // Lấy danh sách review topics mới nhất từ bảng submission_review_topics
+          try {
+            const currentReviewTopics = await GradingRepository.getReviewTopicsBySubmission(submissionId, tenant.schoolId);
+            if (currentReviewTopics && currentReviewTopics.length > 0) {
+              cachedData.recommended_topics = currentReviewTopics;
+            }
+          } catch (tErr) {
+            console.warn('[ART-AI] Failed to load current review topics for cached evaluation:', tErr.message);
           }
 
           console.log(`[ART-AI] Returning locked evaluation snapshot from DB for submission ${submissionId}`);
@@ -707,7 +759,7 @@ Sinh 3–5 câu hỏi vấn đáp Viva để giảng viên phỏng vấn kiểm 
         const rawScore = Number(result?.audit_integrity?.match_percentage);
         const safeTransparencyScore = !isAiRequired ? 100.0 : (Number.isFinite(rawScore) ? Math.max(0, Math.min(100, rawScore)) : 95.0);
 
-        await GradingRepository.saveAiEvaluation({
+        const savedEval = await GradingRepository.saveAiEvaluation({
           school_id: tenant.schoolId,
           submission_id: submissionId,
           submission_version_id: auditData.latestVersion.id,
@@ -725,12 +777,123 @@ Sinh 3–5 câu hỏi vấn đáp Viva để giảng viên phỏng vấn kiểm 
           overall_verdict: result?.overall_verdict || result?.ai_verdict || ''
         });
         console.log(`[ART-AI] Saved locked evaluation snapshot to DB for submission ${submissionId} (risk_level: "${safeRiskLevel}")`);
+
+        // Lưu các topic đề xuất vào bảng submission_review_topics ở trạng thái pending_review (chờ Giảng viên duyệt)
+        if (Array.isArray(result?.recommended_topics) && result.recommended_topics.length > 0) {
+          try {
+            const savedTopics = await GradingRepository.saveSubmissionReviewTopics({
+              school_id: tenant.schoolId,
+              submission_id: submissionId,
+              submission_version_id: auditData.latestVersion.id,
+              ai_evaluation_id: savedEval?.id || null,
+              student_id: auditData.submission.student_id,
+              class_id: auditData.submission.class_id,
+              subject_id: auditData.submission.subject_id,
+              topics: result.recommended_topics,
+              source: 'ai',
+              status: 'pending_review',
+            });
+            if (savedTopics && savedTopics.length > 0) {
+              result.recommended_topics = savedTopics;
+            }
+            console.log(`[ART-AI] Saved ${savedTopics.length} recommended review topics (pending_review) for submission ${submissionId}`);
+          } catch (rErr) {
+            console.warn('[ART-AI] Failed to save submission review topics:', rErr.message);
+          }
+        }
       }
     } catch (saveErr) {
       console.warn('[ART-AI] Failed to save evaluation snapshot to DB:', saveErr.message);
     }
 
     return result;
+  },
+
+  /**
+   * Lấy danh sách topic cần ôn của bài nộp
+   */
+  async getSubmissionReviewTopics(submissionId, tenant) {
+    const submission = await GradingRepository.findSubmissionById(submissionId, tenant.schoolId);
+    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+    assertLecturer(tenant, submission.lecturer_id);
+
+    return await GradingRepository.getReviewTopicsBySubmission(submissionId, tenant.schoolId);
+  },
+
+  /**
+   * Giảng viên duyệt hoặc cập nhật danh sách topic cần ôn cho sinh viên
+   */
+  async approveSubmissionReviewTopics(submissionId, { topics = [] }, tenant) {
+    const submission = await GradingRepository.findSubmissionById(submissionId, tenant.schoolId);
+    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+    assertLecturer(tenant, submission.lecturer_id);
+
+    if (!Array.isArray(topics) || topics.length === 0) {
+      throw new Error('TOPICS_REQUIRED');
+    }
+
+    // 1. Kiểm tra các topic_id gửi lên phải thuộc đúng môn học (khớp theo id hoặc tên/code)
+    const auditData = await GradingRepository.getSubmissionAuditData(submissionId, tenant.schoolId);
+    const validTopicById = new Map();
+    const validTopicByName = new Map();
+    for (const t of (auditData?.courseTopics || [])) {
+      if (t.id) validTopicById.set(t.id, t);
+      if (t.name) validTopicByName.set(t.name.trim().toLowerCase(), t);
+      if (t.code) validTopicByName.set(t.code.trim().toLowerCase(), t);
+    }
+
+    const validatedTopics = [];
+    for (const item of topics) {
+      let topicId = item.topic_id || item.id || item.topicId;
+      let matched = topicId ? validTopicById.get(topicId) : null;
+      if (!matched && (item.name || item.topic_name || item.title)) {
+        const nameKey = String(item.name || item.topic_name || item.title).trim().toLowerCase();
+        matched = validTopicByName.get(nameKey);
+        if (matched) topicId = matched.id;
+      }
+      if (!matched || !topicId) {
+        continue;
+      }
+      validatedTopics.push({
+        topic_id: topicId,
+        priority: ['high', 'medium', 'low'].includes(String(item.priority).toLowerCase())
+          ? String(item.priority).toLowerCase()
+          : 'medium',
+        reason: String(item.reason || item.comment || '').trim() || `Giảng viên yêu cầu củng cố kiến thức: ${matched.name}.`,
+        status: item.status === 'rejected' ? 'rejected' : 'approved',
+      });
+    }
+
+    if (validatedTopics.length === 0) {
+      throw new Error('NO_VALID_TOPICS_FOR_SUBJECT');
+    }
+
+    const targetStudentId = submission.student_id || auditData?.submission?.student_id;
+    const targetClassId = submission.class_id || auditData?.submission?.class_id;
+    const targetSubjectId = submission.subject_id || auditData?.submission?.subject_id;
+
+    // 2. Lưu hoặc cập nhật các topic này vào submission_review_topics
+    await GradingRepository.saveSubmissionReviewTopics({
+      school_id: tenant.schoolId,
+      submission_id: submissionId,
+      student_id: targetStudentId,
+      class_id: targetClassId,
+      subject_id: targetSubjectId,
+      topics: validatedTopics,
+      source: 'lecturer',
+      status: 'approved',
+      reviewerId: tenant.userId,
+    });
+
+    // 3. Đánh dấu đã được duyệt bởi giảng viên
+    await GradingRepository.updateSubmissionReviewTopics({
+      submissionId,
+      schoolId: tenant.schoolId,
+      reviewerId: tenant.userId,
+      topics: validatedTopics,
+    });
+
+    return await GradingRepository.getReviewTopicsBySubmission(submissionId, tenant.schoolId);
   },
 };
 

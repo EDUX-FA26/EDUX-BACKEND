@@ -1147,6 +1147,76 @@ const LearningRepository = {
     rows.forEach(r => countMap.set(r.topic_id, Number(r.accessible_card_count) || 0));
     return countMap;
   },
+
+  /**
+   * Lấy danh sách Topic cần ôn được Giảng viên duyệt sau khi chấm bài cho student
+   */
+  async findApprovedReviewTopicsByStudent(studentId, subjectId, schoolId = null) {
+    const where = [
+      'srt.student_id = $1',
+      'srt.subject_id = $2',
+      `srt.status = 'approved'`,
+    ];
+    const params = [studentId, subjectId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`srt.school_id = $${params.length}`);
+    }
+
+    const query = `
+      SELECT 
+        srt.id,
+        srt.submission_id AS "submissionId",
+        srt.topic_id AS "topicId",
+        srt.topic_id,
+        t.name AS "topicName",
+        t.name AS "topic_name",
+        t.code AS "topicCode",
+        t.code AS "topic_code",
+        t.description AS "topicDescription",
+        srt.priority,
+        srt.reason,
+        srt.source,
+        srt.status,
+        srt.reviewed_by AS "reviewedBy",
+        srt.reviewed_at AS "reviewedAt",
+        srt.created_at AS "createdAt",
+        srt.updated_at AS "updatedAt"
+      FROM submission_review_topics srt
+      JOIN topics t ON t.id = srt.topic_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY 
+        CASE srt.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        srt.created_at DESC
+    `;
+    const { rows } = await pool.query(query, params);
+    return rows;
+  },
+
+  /**
+   * Đánh dấu các topic review đã được học/ôn tập xong (consumed) sau khi nộp bài
+   */
+  async markReviewTopicsConsumed(studentId, topicId, schoolId = null) {
+    const where = [
+      'student_id = $1',
+      'topic_id = $2',
+      `status = 'approved'`,
+    ];
+    const params = [studentId, topicId];
+    if (schoolId) {
+      params.push(schoolId);
+      where.push(`school_id = $${params.length}`);
+    }
+
+    const query = `
+      UPDATE submission_review_topics
+      SET status = 'consumed', updated_at = NOW()
+      WHERE ${where.join(' AND ')}
+      RETURNING id, student_id, topic_id, status
+    `;
+    const { rows } = await pool.query(query, params);
+    return rows;
+  },
 };
 
 module.exports = LearningRepository;

@@ -517,6 +517,27 @@ async function evaluateRubricWithGemini({ assignmentInfo, sourceCode, gitHistory
   // BƯỚC 2: Xây dựng System Instruction động theo danh sách tiêu chí Active
   const systemInstruction = buildDynamicGradingSystemInstruction(finalActiveRubrics, aiDeclarationRequired && !noAiUsed, noAiUsed);
 
+  const topicsSection = (Array.isArray(courseTopics) && courseTopics.length > 0)
+    ? `
+--- DANH SÁCH CHỦ ĐỀ MÔN HỌC CHUẨN (CANONICAL TOPICS - TỔNG CỘNG ${courseTopics.length} CHỦ ĐỀ) ---
+${courseTopics.map(t => `• ID: "${t.id}" | Mã: "${t.code || 'N/A'}" | Tên: "${t.name}"${t.description ? ` | Mô tả: ${t.description.slice(0, 100)}` : ''}`).join('\n')}
+`
+    : `
+--- DANH SÁCH CHỦ ĐỀ MÔN HỌC ---
+Môn học hiện chưa cấu hình danh sách chủ đề chuẩn (Canonical Topics). Trong kết quả trả về, trường "recommended_topics" BẮT BUỘC là mảng rỗng [].
+`;
+
+  const topicsInstruction = `
+- ĐỀ XUẤT CHỦ ĐỀ CẦN CỦNG CỐ ("recommended_topics"):
+  + Dựa trên lỗi sai, điểm yếu kỹ thuật hoặc phần kiến thức sinh viên còn lúng túng trong bài làm, hãy chọn từ 1 đến tối đa 3 chủ đề (Topic) phù hợp nhất từ DANH SÁCH CHỦ ĐỀ MÔN HỌC CHUẨN ở trên.
+  + TUYỆT ĐỐI CHỈ chọn topic có ID nằm trong danh sách được cung cấp. Không tự sinh ID lạ.
+  + Với mỗi topic, chỉ định rõ:
+    * "topic_id": ID UUID chính xác của topic
+    * "priority": "high" (rất yếu / lỗi cơ bản) hoặc "medium" (cần cải thiện)
+    * "reason": Giải thích ngắn gọn (dưới 150 ký tự) vì sao bài làm này cần củng cố chủ đề này.
+  + Nếu bài làm tốt không có lỗ hổng hoặc môn học không có danh sách chủ đề, trả về mảng rỗng [].
+`;
+
   const prompt = noAiUsed
     ? `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây.
@@ -525,7 +546,7 @@ ${noAiNote ? `Ghi chú phương pháp / tiến trình tự thực hiện của s
 
 --- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
 ${finalActiveRubrics.map(c => `• ${c.criterion_key} (${c.criteria_name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
-
+${topicsSection}
 --- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
 [1. YÊU CẦU ĐỀ BÀI SE/IT]:
 ${assignmentInfo || "Xây dựng ứng dụng phần mềm theo đặc tả yêu cầu."}
@@ -551,6 +572,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
   + Cách tổ chức module, xử lý ngoại lệ và ca biên của code.
   + Hỏi trực diện lý do sinh viên code theo cách này ở các đoạn code quan trọng để Giảng viên trực tiếp phỏng vấn kiểm chứng sinh viên thực sự tự viết code 100%.
 - Trong "audit_integrity", trả về: ai_transparency_index: "A+", risk_level: "LOW_RISK", match_percentage: 100, reflection_depth: "High", penalty_applied: false, penalty_reason: "Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva."
+${topicsInstruction}
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
 `
     : (!aiDeclarationRequired
@@ -559,7 +581,7 @@ Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần 
 
 --- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
 ${finalActiveRubrics.map(c => `• ${c.criterion_key} (${c.criteria_name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
-
+${topicsSection}
 --- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
 [1. YÊU CẦU ĐỀ BÀI SE/IT]:
 ${assignmentInfo || "Xây dựng ứng dụng phần mềm theo đặc tả yêu cầu."}
@@ -582,6 +604,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 - Điểm awarded_score của mỗi tiêu chí KHÔNG ĐƯỢC vượt quá max_score quy định của tiêu chí đó (nằm trong khoảng từ 0.0 đến max_score).
 - Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0).
 - Nhận xét ("comment") và câu hỏi Viva ("viva_questions") tập trung hoàn toàn vào kỹ thuật lập trình, thuật toán, kiến trúc và kiểm thử biên của code.
+${topicsInstruction}
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
 `
     : `
@@ -589,7 +612,7 @@ Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần 
 
 --- DANH SÁCH TIÊU CHÍ RUBRIC ĐƯỢC THIẾT LẬP (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
 ${finalActiveRubrics.map(c => `• ${c.criterion_key} (${c.criteria_name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
-
+${topicsSection}
 --- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
 [1. YÊU CẦU ĐỀ BÀI SE/IT]:
 ${assignmentInfo || "Xây dựng ứng dụng phần mềm theo đặc tả yêu cầu."}
@@ -611,6 +634,7 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 - TUYỆT ĐỐI KHÔNG đánh giá, không trừ điểm hay đề cập đến bất kỳ tiêu chí nào khác nằm ngoài danh sách này.
 - Điểm awarded_score của mỗi tiêu chí KHÔNG ĐƯỢC vượt quá max_score quy định của tiêu chí đó (nằm trong khoảng từ 0.0 đến max_score).
 - Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0).
+${topicsInstruction}
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
 `);
 
@@ -675,6 +699,19 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
             expected_answer_criteria: { type: Type.STRING }
           },
           required: ["id", "rubric_criterion", "target_file", "target_code_snippet", "question", "expected_answer_criteria"]
+        }
+      },
+      recommended_topics: {
+        type: Type.ARRAY,
+        description: "Danh sách 0-3 chủ đề môn học sinh viên cần củng cố lại kiến thức, chọn chính xác từ danh sách Canonical Topics",
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            topic_id: { type: Type.STRING, description: "ID UUID của topic trong danh sách course_topics" },
+            priority: { type: Type.STRING, enum: ["high", "medium", "low"] },
+            reason: { type: Type.STRING, description: "Lý do vì sao sinh viên cần củng cố chủ đề này" }
+          },
+          required: ["topic_id", "priority", "reason"]
         }
       },
       overall_verdict: {
@@ -784,7 +821,32 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 
   guardrailed.course_topics = courseTopics || [];
   guardrailed.has_course_topics = Array.isArray(courseTopics) && courseTopics.length > 0;
-  guardrailed.recommended_topics = guardrailed.has_course_topics ? (guardrailed.recommended_topics || []) : [];
+
+  // Lọc và chuẩn hóa recommended_topics: chỉ giữ lại topic có ID thực tế trong courseTopics
+  if (guardrailed.has_course_topics && Array.isArray(guardrailed.recommended_topics)) {
+    const topicMap = new Map(courseTopics.map(t => [t.id, t]));
+    guardrailed.recommended_topics = guardrailed.recommended_topics
+      .filter(r => {
+        const tid = r.topic_id || r.id || r.topicId;
+        return tid && topicMap.has(tid);
+      })
+      .slice(0, 3)
+      .map(r => {
+        const tid = r.topic_id || r.id || r.topicId;
+        const matched = topicMap.get(tid);
+        return {
+          topic_id: tid,
+          topic_name: matched.name,
+          topic_code: matched.code,
+          priority: ['high', 'medium', 'low'].includes(String(r.priority).toLowerCase())
+            ? String(r.priority).toLowerCase()
+            : 'medium',
+          reason: String(r.reason || '').trim() || `Cần củng cố kiến thức về ${matched.name}.`
+        };
+      });
+  } else {
+    guardrailed.recommended_topics = [];
+  }
 
   return sanitizeObjectStrings(guardrailed);
 }
@@ -1286,13 +1348,15 @@ function generatePedagogicalFallbackResult({ assignmentInfo = '', sourceCode = '
     recommended_topics: Array.isArray(courseTopics) && courseTopics.length > 0
       ? courseTopics.slice(0, 2).map((t, idx) => ({
           id: t.id,
+          topic_id: t.id,
           name: t.name,
+          topic_name: t.name,
           description: t.description,
           priority: idx === 0 ? 'high' : 'medium',
           priority_label: idx === 0 ? 'Ưu tiên cao' : 'Khuyến nghị',
           reason: idx === 0
-            ? 'Cần củng cố về xử lý thứ tự tính toán và validation các giá trị biên.'
-            : 'Cần ôn tập về tối ưu hóa truy vấn cơ sở dữ liệu và cấu trúc giải thuật.'
+            ? 'Cần củng cố về cấu trúc và giải thuật trong bài làm.'
+            : 'Cần ôn tập thêm về tối ưu hóa và xử lý ngoại lệ.'
         }))
       : [],
   };

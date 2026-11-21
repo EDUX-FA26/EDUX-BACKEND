@@ -402,6 +402,77 @@ const StudyPlannerRepository = {
       days,
     };
   },
+
+  /**
+   * Cập nhật các ngày học chưa nộp bài (unsubmitted days) trong kế hoạch hiện có.
+   * Giữ nguyên các ngày đã hoàn thành và câu trả lời lịch sử.
+   * Xóa câu hỏi nháp chưa làm của các ngày được cập nhật để sinh mới cho topic mới.
+   */
+  async updateUnsubmittedPlanDays({ planId, updatedDays, schoolId = null }) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const updated = [];
+      for (const day of updatedDays) {
+        // Kiểm tra xem ngày này đã nộp bài chưa
+        const subCheck = await client.query(
+          `SELECT 1 FROM study_plan_day_submissions WHERE plan_day_id = $1 LIMIT 1`,
+          [day.planDayId]
+        );
+        if (subCheck.rows.length > 0) {
+          // Đã hoàn thành, bỏ qua để bảo toàn kết quả
+          continue;
+        }
+
+        // Xóa câu hỏi nháp cũ chưa làm của ngày này
+        await client.query(
+          `DELETE FROM study_plan_questions WHERE plan_day_id = $1`,
+          [day.planDayId]
+        );
+
+        // Cập nhật thông tin ngày học
+        const result = await client.query(
+          `UPDATE study_plan_days
+           SET 
+             topic_id = $1,
+             activity = $2,
+             duration_minutes = $3,
+             target_questions = $4,
+             reason = $5,
+             content_status = 'pending'
+           WHERE id = $6 AND plan_id = $7
+           RETURNING *`,
+          [
+            day.topicId,
+            day.activity,
+            day.durationMinutes,
+            day.targetQuestions,
+            day.reason,
+            day.planDayId,
+            planId,
+          ]
+        );
+
+        if (result.rows[0]) {
+          updated.push(result.rows[0]);
+        }
+      }
+
+      await client.query(
+        `UPDATE study_plans SET updated_at = NOW() WHERE id = $1`,
+        [planId]
+      );
+
+      await client.query('COMMIT');
+      return updated;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
 };
 
 module.exports = StudyPlannerRepository;

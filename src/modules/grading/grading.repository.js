@@ -11,6 +11,7 @@ const GradingRepository = {
     const query = `
       SELECT
         s.id                  AS submission_id,
+        s.id,
         s.school_id,
         s.student_id,
         s.assignment_id,
@@ -19,7 +20,8 @@ const GradingRepository = {
         a.class_id,
         a.max_score           AS assignment_max_score,
         a.ai_declaration_required AS assignment_ai_declaration_required,
-        c.lecturer_id
+        c.lecturer_id,
+        c.subject_id
       FROM submissions s
       JOIN assignments a ON s.assignment_id = a.id AND a.school_id = s.school_id
       JOIN classes     c ON a.class_id      = c.id AND c.school_id = s.school_id
@@ -370,9 +372,13 @@ const GradingRepository = {
     if (submissionData.subject_id) {
       try {
         const topicQuery = `
-          SELECT id, subject_id, name, description, parent_id, is_active
+          SELECT id, subject_id, name, code, description, parent_id, is_active
           FROM topics
-          WHERE subject_id = $1 AND is_active = TRUE AND school_id = $2
+          WHERE subject_id = $1 
+            AND is_active = TRUE 
+            AND (school_id = $2 OR school_id IS NULL)
+            AND (status = 'approved' OR status IS NULL)
+            AND (review_required = FALSE OR review_required IS NULL)
           ORDER BY name ASC
         `;
         const { rows: tRows } = await pool.query(topicQuery, [submissionData.subject_id, schoolId]);
@@ -390,6 +396,222 @@ const GradingRepository = {
       courseTopics,
       hasCourseTopics: courseTopics.length > 0,
     };
+  },
+
+  /**
+   * Lưu các topic được đề xuất củng cố từ AI hoặc Giảng viên vào submission_review_topics
+   */
+  async saveSubmissionReviewTopics({
+    school_id,
+    submission_id,
+    submission_version_id = null,
+    ai_evaluation_id = null,
+    student_id,
+    class_id,
+    subject_id,
+    topics = [],
+    source = 'ai',
+    status = 'pending_review',
+    reviewerId = null,
+  }) {
+    if (!Array.isArray(topics) || topics.length === 0) return [];
+
+    // Tự động giải quyết metadata nếu caller chưa truyền đầy đủ
+    if ((!class_id || !subject_id || !student_id || !school_id) && submission_id) {
+      try {
+        const sRes = await pool.query(
+          `SELECT s.student_id, a.class_id, c.subject_id, s.school_id
+           FROM submissions s
+           JOIN assignments a ON s.assignment_id = a.id
+           JOIN classes c ON a.class_id = c.id
+           WHERE s.id = $1 LIMIT 1`,
+          [submission_id]
+        );
+        if (sRes.rows[0]) {
+          student_id = student_id || sRes.rows[0].student_id;
+          class_id = class_id || sRes.rows[0].class_id;
+          subject_id = subject_id || sRes.rows[0].subject_id;
+          school_id = school_id || sRes.rows[0].school_id;
+        }
+      } catch (_) {}
+    }
+
+    if (!submission_version_id && submission_id) {
+      try {
+        const vRes = await pool.query(
+          `SELECT id FROM submission_versions WHERE submission_id = $1 AND is_latest = TRUE LIMIT 1`,
+          [submission_id]
+        );
+        submission_version_id = vRes.rows[0]?.id || null;
+      } catch (_) {}
+    }
+
+    const results = [];
+    for (const item of topics) {
+      const topicId = item.topic_id || item.id || item.topicId;
+      if (!topicId) continue;
+
+      const priority = ['high', 'medium', 'low'].includes(String(item.priority).toLowerCase())
+        ? String(item.priority).toLowerCase()
+        : 'medium';
+      const reason = String(item.reason || item.comment || '').trim();
+      const currentStatus = item.status || status || 'pending_review';
+
+      try {
+        const existRes = await pool.query(
+          `SELECT id, status, reviewed_at FROM submission_review_topics 
+           WHERE submission_id = $1 AND topic_id = $2 LIMIT 1`,
+          [submission_id, topicId]
+        );
+
+        if (existRes.rows[0]) {
+          const existingRow = existRes.rows[0];
+          const finalStatus = ['approved', 'consumed'].includes(existingRow.status) ? existingRow.status : currentStatus;
+          const finalReviewedAt = (finalStatus === 'approved' && !existingRow.reviewed_at) ? new Date() : existingRow.reviewed_at;
+
+          const updateQuery = `
+            UPDATE submission_review_topics
+            SET 
+              submission_version_id = COALESCE($1, submission_version_id),
+              ai_evaluation_id = COALESCE($2, ai_evaluation_id),
+              priority = $3,
+              reason = $4,
+              source = $5,
+              status = $6,
+              reviewed_by = COALESCE($7, reviewed_by),
+              reviewed_at = $8,
+              updated_at = NOW()
+            WHERE id = $9
+            RETURNING *
+          `;
+          const { rows } = await pool.query(updateQuery, [
+            submission_version_id,
+            ai_evaluation_id,
+            priority,
+            reason,
+            source,
+            finalStatus,
+            reviewerId,
+            finalReviewedAt,
+            existingRow.id,
+          ]);
+          if (rows[0]) results.push(rows[0]);
+        } else {
+          const insertReviewedAt = currentStatus === 'approved' ? new Date() : null;
+          const insertQuery = `
+            INSERT INTO submission_review_topics
+              (school_id, submission_id, submission_version_id, ai_evaluation_id,
+               student_id, class_id, subject_id, topic_id,
+               priority, reason, source, status, reviewed_by, reviewed_at, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+            RETURNING *
+          `;
+          const { rows } = await pool.query(insertQuery, [
+            school_id,
+            submission_id,
+            submission_version_id,
+            ai_evaluation_id,
+            student_id,
+            class_id,
+            subject_id,
+            topicId,
+            priority,
+            reason,
+            source,
+            currentStatus,
+            reviewerId,
+            insertReviewedAt,
+          ]);
+          if (rows[0]) results.push(rows[0]);
+        }
+      } catch (err) {
+        console.error(`[saveSubmissionReviewTopics] Failed to insert/update topic ${topicId}:`, err.message);
+      }
+    }
+    return results;
+  },
+
+  /**
+   * Lấy danh sách topic review của một bài nộp (kèm thông tin tên topic)
+   */
+  async getReviewTopicsBySubmission(submissionId, schoolId) {
+    const query = `
+      SELECT 
+        srt.id,
+        srt.submission_id AS "submissionId",
+        srt.topic_id AS "topicId",
+        srt.topic_id,
+        t.name AS "topicName",
+        t.name AS "topic_name",
+        t.code AS "topicCode",
+        t.code AS "topic_code",
+        t.description AS "topicDescription",
+        srt.priority,
+        srt.reason,
+        srt.source,
+        srt.status,
+        srt.reviewed_by AS "reviewedBy",
+        srt.reviewed_at AS "reviewedAt",
+        srt.created_at AS "createdAt",
+        srt.updated_at AS "updatedAt"
+      FROM submission_review_topics srt
+      JOIN topics t ON t.id = srt.topic_id AND (t.school_id = srt.school_id OR t.school_id IS NULL)
+      WHERE srt.submission_id = $1 AND srt.school_id = $2
+      ORDER BY 
+        CASE srt.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        srt.created_at ASC
+    `;
+    const { rows } = await pool.query(query, [submissionId, schoolId]);
+    return rows;
+  },
+
+  /**
+   * Giảng viên duyệt / cập nhật danh sách topic cần ôn cho bài nộp
+   */
+  async updateSubmissionReviewTopics({
+    submissionId,
+    schoolId,
+    reviewerId,
+    topics = [],
+  }) {
+    const results = [];
+    for (const item of topics) {
+      const topicId = item.topic_id || item.id || item.topicId;
+      if (!topicId) continue;
+
+      const priority = ['high', 'medium', 'low'].includes(String(item.priority).toLowerCase())
+        ? String(item.priority).toLowerCase()
+        : 'medium';
+      const reason = String(item.reason || '').trim();
+      const status = item.status === 'rejected' ? 'rejected' : 'approved';
+
+      const query = `
+        UPDATE submission_review_topics
+        SET 
+          priority = $1,
+          reason = $2,
+          status = $3,
+          source = 'lecturer',
+          reviewed_by = $4,
+          reviewed_at = NOW(),
+          updated_at = NOW()
+        WHERE submission_id = $5 
+          AND topic_id = $6 
+          AND school_id = $7
+        RETURNING *
+      `;
+      const { rows } = await pool.query(query, [
+        priority,
+        reason,
+        status,
+        reviewerId,
+        submissionId,
+        topicId,
+        schoolId,
+      ]);
+      if (rows[0]) results.push(rows[0]);
+    }
+    return results;
   },
 };
 

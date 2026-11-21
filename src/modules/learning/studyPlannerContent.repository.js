@@ -10,9 +10,11 @@ const StudyPlannerContentRepository = {
          spd.day_number AS "day",
          spd.topic_id AS "topicId",
          t.name AS "topicName",
+         t.description AS "topicDescription",
          spd.activity,
          spd.target_questions AS "targetQuestions",
          spd.content_status AS "contentStatus",
+         spd.reason,
          sp.subject_id AS "subjectId"
        FROM study_plan_days spd
        JOIN study_plans sp ON sp.id = spd.plan_id
