@@ -371,57 +371,88 @@ const SubmissionRepository = {
   /**
    * Giảng viên xem toàn bộ bài nộp của 1 assignment (BẮT BUỘC loại trừ bài nháp status = 'draft')
    */
-  async findManyByAssignmentId(assignmentId, schoolId, { page = 1, limit = 10, status } = {}) {
+  async findManyByAssignmentId(assignmentId, schoolId, { page = 1, limit = 100, status } = {}) {
     // Nếu filter chỉ định rõ ràng status === 'draft', trả về rỗng vì giảng viên không được xem draft
-    if (status === 'draft') {
+    if (status && String(status).toLowerCase() === 'draft') {
       return { data: [], total: 0 };
     }
 
-    const offset = (page - 1) * limit;
+    const parsedLimit = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+    const parsedPage = Math.max(Number(page) || 1, 1);
+    const offset = (parsedPage - 1) * parsedLimit;
+
     let whereClauses = [`s.assignment_id = $1`, `s.school_id = $2`, `s.status != 'draft'`];
     let values = [assignmentId, schoolId];
     let idx = 3;
 
     if (status) {
-      whereClauses.push(`s.status = $${idx++}`);
-      values.push(status);
+      const statuses = String(status).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (statuses.length === 1) {
+        whereClauses.push(`LOWER(s.status) = $${idx++}`);
+        values.push(statuses[0]);
+      } else if (statuses.length > 1) {
+        whereClauses.push(`LOWER(s.status) = ANY($${idx++})`);
+        values.push(statuses);
+      }
     }
 
     const whereString = `WHERE ${whereClauses.join(' AND ')}`;
 
     const countQuery = `SELECT COUNT(DISTINCT s.student_id) FROM submissions s ${whereString}`;
     const { rows: countRows } = await pool.query(countQuery, values);
-    const total = parseInt(countRows[0].count, 10);
+    const total = parseInt(countRows[0]?.count || 0, 10);
 
     const query = `
       SELECT * FROM (
         SELECT DISTINCT ON (s.student_id)
-          s.*,
+          s.id,
+          s.uuid,
+          s.school_id,
+          s.assignment_id,
+          s.student_id,
+          s.latest_version_no,
+          CASE 
+            WHEN (g.score IS NOT NULL OR s.final_score IS NOT NULL OR LOWER(s.status) IN ('graded', 'published')) THEN 'graded'
+            ELSE s.status
+          END AS status,
+          s.submitted_at,
+          s.last_submitted_at,
+          COALESCE(s.published_at, g.graded_at) AS published_at,
+          s.no_ai_used,
+          s.no_ai_note,
+          s.created_at,
+          s.updated_at,
           up.full_name as student_name,
           smp.student_code AS student_code,
           u.email as student_email,
+          sv.id as version_id,
           sv.files as latest_files,
           sv.note as latest_note,
           g.id as grade_id,     
-          g.score,                
-          g.feedback             
+          COALESCE(g.score, s.final_score) as score,
+          g.max_score,
+          g.feedback,
+          g.rubrics,
+          COALESCE(g.graded_at, s.published_at) as graded_at
         FROM submissions s
         JOIN users u ON s.student_id = u.id
         LEFT JOIN user_profiles up ON u.id = up.user_id
         LEFT JOIN school_member_profiles smp
-  ON smp.user_id = s.student_id
- AND smp.school_id = s.school_id
+          ON smp.user_id = s.student_id
+         AND smp.school_id = s.school_id
         LEFT JOIN LATERAL (
-          SELECT files, note 
+          SELECT id, files, note, version_no, submitted_at, is_latest
           FROM submission_versions 
-          WHERE submission_id = s.id AND school_id = s.school_id
+          WHERE submission_id = s.id 
+            AND (school_id = s.school_id OR school_id IS NULL)
           ORDER BY is_latest DESC, version_no DESC, submitted_at DESC 
           LIMIT 1
         ) sv ON TRUE
         LEFT JOIN LATERAL (
-          SELECT id, score, feedback
+          SELECT id, score, max_score, feedback, rubrics, graded_at, graded_by
           FROM grades
-          WHERE submission_id = s.id AND school_id = s.school_id
+          WHERE (submission_id = s.id OR (assignment_id = s.assignment_id AND student_id = s.student_id))
+            AND (school_id = s.school_id OR school_id IS NULL)
           ORDER BY created_at DESC
           LIMIT 1
         ) g ON TRUE
@@ -431,7 +462,7 @@ const SubmissionRepository = {
       ORDER BY t.submitted_at DESC NULLS LAST
       LIMIT $${idx++} OFFSET $${idx++}
     `;
-    values.push(limit, offset);
+    values.push(parsedLimit, offset);
 
     const { rows } = await pool.query(query, values);
     return { data: rows, total };
