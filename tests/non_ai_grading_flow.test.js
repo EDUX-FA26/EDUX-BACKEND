@@ -104,3 +104,62 @@ test('generatePedagogicalFallbackResult: generates pure technical fallback resul
   assert.ok(fallback.viva_questions.every((q) => !q.question.toLowerCase().includes('khai báo ai')));
 });
 
+test('applyScoringGuardrails for noAiUsed=true: zeros out AI criteria, clamps score <= 10.0, includes Q&A reminder in verdict', () => {
+  const rubrics = [
+    { criterion_key: 'PROBLEM_ABSTRACTION', criteria_name: 'Problem Abstraction', weight_percent: 30, max_score: 3.0 },
+    { criterion_key: 'IMPLEMENTATION_QUALITY', criteria_name: 'Implementation Quality', weight_percent: 40, max_score: 4.0 },
+    { criterion_key: 'CRITICAL_EVALUATION', criteria_name: 'Critical Evaluation', weight_percent: 30, max_score: 3.0 },
+  ];
+
+  // Giả lập AI trả về điểm quá trần (4.5/3.0, 5.0/4.0, 3.5/3.0)
+  const mockOverMaxResult = {
+    grading_breakdown: [
+      { criterion_key: 'PROBLEM_ABSTRACTION', awarded_score: 4.5, comment: 'Thiết kế vượt trần' },
+      { criterion_key: 'IMPLEMENTATION_QUALITY', awarded_score: 5.0, comment: 'Code vượt trần' },
+      { criterion_key: 'CRITICAL_EVALUATION', awarded_score: 3.5, comment: 'Kiểm thử vượt trần' },
+    ],
+    rubric_scores: {
+      problem_abstraction: 4.5,
+      implementation_quality: 5.0,
+      critical_evaluation: 3.5,
+      ai_interaction: 1.5,
+      reflection: 1.0,
+    },
+    overall_verdict: 'Bài làm rất tốt đối chiếu với yêu cầu đề bài Spring Boot OOP.',
+  };
+
+  const guarded = applyScoringGuardrails(mockOverMaxResult, rubrics, false, true);
+
+  // Điểm từng tiêu chí phải bị ép trần
+  assert.equal(guarded.grading_breakdown[0].awarded_score, 3.0);
+  assert.equal(guarded.grading_breakdown[1].awarded_score, 4.0);
+  assert.equal(guarded.grading_breakdown[2].awarded_score, 3.0);
+
+  // Tổng điểm tuyệt đối không bao giờ vượt quá 10.0
+  assert.equal(guarded.total_score_10, 10.0);
+  assert.equal(guarded.total_score, 10.0);
+
+  // Tiêu chí AI phải bị khóa về 0
+  assert.equal(guarded.rubric_scores.ai_interaction, 0);
+  assert.equal(guarded.rubric_scores.reflection, 0);
+
+  // Nhận xét overall_verdict bắt buộc có ghi chú nhắc Q&A / Viva
+  assert.ok(guarded.overall_verdict.includes('Q&A') || guarded.overall_verdict.includes('Viva') || guarded.overall_verdict.includes('vấn đáp'));
+});
+
+test('generatePedagogicalFallbackResult for noAiUsed=true: generates Code Ownership viva and score <= 10.0', () => {
+  const fallback = generatePedagogicalFallbackResult({
+    assignmentInfo: 'Xây dựng OrderService Spring Boot',
+    sourceCode: 'public class OrderService {}',
+    noAiUsed: true,
+  });
+
+  assert.equal(fallback.grading_breakdown.length, 3);
+  assert.ok(fallback.total_score_10 <= 10.0);
+  assert.equal(fallback.rubric_scores.ai_interaction, 0);
+  assert.equal(fallback.rubric_scores.reflection, 0);
+  assert.equal(fallback.audit_integrity.penalty_applied, false);
+  assert.ok(fallback.viva_questions.length >= 3);
+  assert.ok(fallback.overall_verdict.includes('Q&A') || fallback.overall_verdict.includes('Viva') || fallback.overall_verdict.includes('vấn đáp'));
+});
+

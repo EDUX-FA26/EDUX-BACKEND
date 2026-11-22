@@ -242,6 +242,27 @@ const SubmissionController = {
     }
   },
 
+  async getSubmissionFileContent(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { fileId } = req.query;
+      const result = await SubmissionService.getSubmissionFileContent(id, fileId, req.tenant);
+      res.status(200).json({
+        success: true,
+        data: result,
+        content: result.content,
+        language: result.language,
+        fileName: result.fileName
+      });
+    } catch (error) {
+      if (error.message === 'FORBIDDEN') return res.status(403).json({ success: false, message: 'Access denied' });
+      if (error.message === 'SUBMISSION_NOT_FOUND') return res.status(404).json({ success: false, message: 'Submission not found' });
+      if (error.message === 'FILE_NOT_FOUND') return res.status(404).json({ success: false, message: 'File not found' });
+      if (error.message === 'UNSUPPORTED_FILE_TYPE') return res.status(400).json({ success: false, message: 'Unsupported file type for text preview' });
+      next(error);
+    }
+  },
+
   async reviewSubmission(req, res, next) {
     try {
       const { id } = req.params;

@@ -122,6 +122,9 @@ const GradingController = {
       if (error.message === 'FORBIDDEN') {
         return res.status(403).json({ success: false, message: 'Access denied' });
       }
+      if (error.message && error.message.includes('Không đọc được nội dung tệp bài nộp để AI đánh giá')) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
       next(error);
     }
   },
@@ -138,6 +141,9 @@ const GradingController = {
       }
       if (error.message === 'FORBIDDEN') {
         return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+      if (error.message && error.message.includes('Không đọc được nội dung tệp bài nộp để AI đánh giá')) {
+        return res.status(400).json({ success: false, message: error.message });
       }
       next(error);
     }

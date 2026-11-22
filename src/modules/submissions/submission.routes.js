@@ -127,6 +127,13 @@ router.post(
   SubmissionController.submitAssignment
 );
 
+// Lấy nội dung text của file nộp (proxy đọc trực tiếp từ S3/SeaweedFS, tránh lỗi CORS, hỗ trợ utf-8)
+router.get(
+  '/:id/file-content',
+  authorizeSchoolRoles('school_admin', 'lecturer', 'student'),
+  SubmissionController.getSubmissionFileContent
+);
+
 // Xem chi tiết 1 bài nộp (có query ?include_history=true)
 router.get(
   '/:id',

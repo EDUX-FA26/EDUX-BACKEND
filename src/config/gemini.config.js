@@ -433,6 +433,15 @@ function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequire
     }
   });
 
+  // Nếu sinh viên tự làm 100% không dùng AI: Khóa điểm các tiêu chí AI về 0 để không bị cộng dồn vượt quá trần
+  if (noAiUsed) {
+    rubric_scores.ai_interaction = 0;
+    rubric_scores.reflection = 0;
+    rubric_scores.metacognitive_reflection = 0;
+    rubric_scores.algorithmic_thinking = 0;
+    rubric_scores.algorithmic = 0;
+  }
+
   const rawRisk = aiRawResult?.risk_level || aiRawResult?.audit_integrity?.risk_level;
   let normalizedRisk = 'low';
   if (typeof rawRisk === 'string') {
@@ -483,12 +492,25 @@ function applyScoringGuardrails(aiRawResult, activeRubrics, aiDeclarationRequire
     };
   }
 
-  const verdict =
-    aiRawResult?.overall_verdict ||
-    aiRawResult?.ai_verdict ||
-    (!aiDeclarationRequired
-      ? `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric chuyên môn. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm kỹ năng lập trình.`
-      : `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric được kích hoạt. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm.`);
+  let verdict;
+  if (noAiUsed) {
+    const rawVerdict = aiRawResult?.overall_verdict || aiRawResult?.ai_verdict || '';
+    const qnaNote = 'Lưu ý: Giảng viên nên kết hợp hỏi đáp trực tiếp (Q&A / Viva) với sinh viên để xác thực mức độ hiểu bài và tự chủ kiến thức trước khi chốt điểm chính thức.';
+    if (rawVerdict) {
+      verdict = (rawVerdict.includes('Q&A') || rawVerdict.includes('Viva') || rawVerdict.includes('vấn đáp') || rawVerdict.includes('hỏi đáp'))
+        ? rawVerdict
+        : `${rawVerdict}\n\n📌 ${qnaNote}`;
+    } else {
+      verdict = `Kết luận thanh tra & chuyên môn (Zero-AI): Sinh viên tự thực hiện 100% bài làm mà không sử dụng công cụ AI. Đề xuất ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric chuyên môn. Mã nguồn đã được phân tích đối chiếu với yêu cầu đề bài về tính đúng đắn kỹ thuật, cấu trúc OOP và xử lý ngoại lệ.\n\n📌 ${qnaNote}`;
+    }
+  } else {
+    verdict =
+      aiRawResult?.overall_verdict ||
+      aiRawResult?.ai_verdict ||
+      (!aiDeclarationRequired
+        ? `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric chuyên môn. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm kỹ năng lập trình.`
+        : `Kết luận chuyên môn: Bài làm đạt ${finalTotalScore}/10 điểm theo ${activeRubrics.length} tiêu chí Rubric được kích hoạt. Mã nguồn đã hoàn thiện khung sườn chức năng chính. Khuyến nghị Giảng viên sử dụng bộ câu hỏi vấn đáp Viva để kiểm chứng thêm.`);
+  }
 
   return {
     ...aiRawResult,
@@ -598,10 +620,12 @@ Môn học hiện chưa cấu hình danh sách chủ đề chuẩn (Canonical To
   const prompt = noAiUsed
     ? `
 Bạn hãy thẩm định bài nộp thuộc chuyên ngành Kỹ thuật Phần mềm (SE) / CNTT (IT) dưới đây.
-SINH VIÊN ĐÃ CAM KẾT TỰ THỰC HIỆN 100% BÀI LÀM MÀ KHÔNG SỬ DỤNG AI (ZERO-AI / NO AI USED).
+SINH VIÊN ĐÃ CAM KẾT TỰ THỰC HIỆN 100% BÀI LÀM MÀ KHÔNG SỬ DỤNG CÔNG CỤ AI (ZERO-AI / NO AI USED).
+Sinh viên khai báo tự thực hiện 100% bài tập này mà không sử dụng công cụ AI. Không có nhật ký tương tác AI để đánh giá quá trình prompt.
+Hãy tập trung phân tích trực tiếp nội dung bài nộp (OrderService.java / nội dung bài làm) đối chiếu với yêu cầu đề bài (tính đúng đắn kỹ thuật, cấu trúc OOP, xử lý ngoại lệ, mức độ hoàn thiện) để đề xuất điểm số công bằng trên thang 10. Đồng thời lưu ý giảng viên nên kết hợp hỏi đáp trực tiếp (Q&A / Viva) với sinh viên để xác thực mức độ hiểu bài và tự chủ kiến thức trước khi chốt điểm chính thức.
 ${noAiNote ? `Ghi chú phương pháp / tiến trình tự thực hiện của sinh viên: "${noAiNote}".` : "Sinh viên tự nghiên cứu và phát triển mã nguồn 100%."}
 
---- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE) ---
+--- DANH SÁCH TIÊU CHÍ RUBRIC CHUYÊN MÔN (${finalActiveRubrics.length} TIÊU CHÍ ACTIVE - TỔNG 10.0 ĐIỂM) ---
 ${finalActiveRubrics.map(c => `• ${c.criterion_key} (${c.criteria_name}): Trọng số ${c.weight_percent}%, Tối đa ${c.max_score} điểm`).join('\n')}
 ${topicsSection}
 --- THÔNG TIN ĐỐI SOÁT CHÉO THỰC TẾ ---
@@ -623,12 +647,13 @@ ${oralExamLogs || "Chưa có bản ghi phỏng vấn Viva."}
 --- HƯỚNG DẪN QUY CHUẨN ĐIỂM SỐ & PHẢN HỒI ---
 - Bạn CHỈ chấm điểm cho đúng ${finalActiveRubrics.length} tiêu chí active trên trong mảng "grading_breakdown".
 - Điểm awarded_score của mỗi tiêu chí KHÔNG ĐƯỢC vượt quá max_score quy định của tiêu chí đó (nằm trong khoảng từ 0.0 đến max_score).
-- Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0).
+- Điểm total_score_10 là tổng điểm awarded_score của các tiêu chí active (thang 10.0, tuyệt đối không vượt quá 10.0).
 - BỘ CÂU HỎI VẤN ĐÁP VIVA ("viva_questions"): BẮT BUỘC TẠO TỪ 3 ĐẾN 5 CÂU HỎI CHẾ ĐỘ "CODE OWNERSHIP VERIFICATION" (Kiểm tra quyền tác giả mã nguồn) xoay quanh:
   + Kiến trúc hàm, luồng dữ liệu và lý do lựa chọn cấu trúc giải thuật của sinh viên.
   + Cách tổ chức module, xử lý ngoại lệ và ca biên của code.
   + Hỏi trực diện lý do sinh viên code theo cách này ở các đoạn code quan trọng để Giảng viên trực tiếp phỏng vấn kiểm chứng sinh viên thực sự tự viết code 100%.
 - Trong "audit_integrity", trả về: ai_transparency_index: "A+", risk_level: "LOW_RISK", match_percentage: 100, reflection_depth: "High", penalty_applied: false, penalty_reason: "Sinh viên cam kết tự làm 100% (Zero-AI); xác thực năng lực qua phỏng vấn Viva."
+- Trong "overall_verdict": BẮT BUỘC hiển thị rõ nhận định đối chiếu bài nộp với yêu cầu đề bài (tính đúng đắn kỹ thuật, cấu trúc OOP, xử lý ngoại lệ, mức độ hoàn thiện) và ghi chú nhắc giảng viên Q&A xác thực với sinh viên trước khi bấm Công bố điểm.
 ${topicsInstruction}
 - Trả về kết quả hoàn toàn bằng tiếng Việt có dấu.
 `
@@ -848,7 +873,7 @@ ${topicsInstruction}
   // Nếu toàn bộ pool model đều bị 503 hoặc quá tải, kích hoạt khung thẩm định sư phạm dự phòng
   if (!response || !response.text) {
     console.error(`[Gemini Audit] Toàn bộ các model (${candidateModels.join(', ')}) đều quá tải/503. Kích hoạt Khung Thẩm Định Sư Phạm Dự Phòng.`);
-    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired, courseTopics });
+    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired, noAiUsed, noAiNote, courseTopics });
   }
 
   let parsed;
@@ -856,11 +881,11 @@ ${topicsInstruction}
     parsed = JSON.parse(response.text);
   } catch (parseErr) {
     console.warn(`[Gemini Audit] Lỗi parse JSON từ Gemini response: ${parseErr.message}. Kích hoạt fallback.`);
-    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired, courseTopics });
+    return generatePedagogicalFallbackResult({ assignmentInfo, sourceCode, aiAuditSummary, activeRubrics: finalActiveRubrics, rubricConfigs: finalActiveRubrics, aiDeclarationRequired, noAiUsed, noAiNote, courseTopics });
   }
 
   // Áp dụng Guardrails để kiểm tra, ép trần max_score và tính tổng thang 10.0
-  const guardrailed = applyScoringGuardrails(parsed, finalActiveRubrics, aiDeclarationRequired);
+  const guardrailed = applyScoringGuardrails(parsed, finalActiveRubrics, aiDeclarationRequired && !noAiUsed, noAiUsed);
 
   // Chuẩn hóa viva_questions nếu có
   if (Array.isArray(guardrailed.viva_questions)) {
