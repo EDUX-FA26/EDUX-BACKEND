@@ -140,7 +140,23 @@ const AssignmentRepository = {
         s.name as subject_name,
         s.code as subject_code,
         sem.name as semester_name,
-        u.full_name as creator_name
+        u.full_name as creator_name,
+        (
+          SELECT COUNT(DISTINCT sub.student_id)::int
+          FROM submissions sub
+          WHERE sub.assignment_id = a.id
+            AND sub.school_id = a.school_id
+            AND sub.status != 'draft'
+        ) AS submission_count,
+        COALESCE(
+          a.graded_count,
+          (
+            SELECT COUNT(DISTINCT g.student_id)::int
+            FROM grades g
+            WHERE g.assignment_id = a.id
+              AND g.school_id = a.school_id
+          )
+        )::int AS graded_count
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
       JOIN subjects s ON c.subject_id = s.id
@@ -234,7 +250,23 @@ const AssignmentRepository = {
         c.semester_id,
         s.id as subject_id,
         s.name as subject_name,
-        s.code as subject_code
+        s.code as subject_code,
+        (
+          SELECT COUNT(DISTINCT sub.student_id)::int
+          FROM submissions sub
+          WHERE sub.assignment_id = a.id
+            AND sub.school_id = a.school_id
+            AND sub.status != 'draft'
+        ) AS submission_count,
+        COALESCE(
+          a.graded_count,
+          (
+            SELECT COUNT(DISTINCT g.student_id)::int
+            FROM grades g
+            WHERE g.assignment_id = a.id
+              AND g.school_id = a.school_id
+          )
+        )::int AS graded_count
       FROM assignments a
       JOIN classes c ON a.class_id = c.id
       JOIN subjects s ON c.subject_id = s.id

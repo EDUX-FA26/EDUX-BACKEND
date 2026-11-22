@@ -36,7 +36,7 @@ const GradingRepository = {
   /**
    * Tạo grade mới
    */
-  async create({ school_id, submission_id, assignment_id, student_id, class_id, score, max_score, feedback, graded_by, rubrics }) {
+  async create({ school_id, submission_id, assignment_id, student_id, class_id, score, max_score, feedback, graded_by, rubrics }, client = pool) {
     const query = `
       INSERT INTO grades
         (school_id, submission_id, assignment_id, student_id, class_id,
@@ -44,12 +44,125 @@ const GradingRepository = {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
       RETURNING *
     `;
-    const { rows } = await pool.query(query, [
+    const { rows } = await client.query(query, [
       school_id, submission_id, assignment_id, student_id, class_id,
       score, max_score, feedback, graded_by,
       rubrics ? JSON.stringify(rubrics) : null,
     ]);
     return rows[0];
+  },
+
+  /**
+   * Gom toàn bộ thao tác Publish Grade vào 1 Database Transaction nguyên tử (Atomic Transaction):
+   * - Lưu điểm (score / final_score), max_score, feedback, rubrics
+   * - Cập nhật trạng thái bài nộp (status = 'graded', published_at = NOW(), final_score = score)
+   * - Cập nhật phiên bản bài nộp (submission_version.updated_at = NOW())
+   * - Cập nhật thống kê bài tập (assignments.graded_count)
+   */
+  async saveGradeAndPublishAtomic({
+    school_id,
+    submission_id,
+    assignment_id,
+    student_id,
+    class_id,
+    score,
+    max_score,
+    feedback,
+    graded_by,
+    rubrics,
+  }) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Lock submission row để đảm bảo tính nguyên tử
+      const subCheck = await client.query(
+        `SELECT id, assignment_id, student_id, status FROM submissions WHERE id = $1 AND school_id = $2 FOR UPDATE`,
+        [submission_id, school_id]
+      );
+      if (subCheck.rows.length === 0) {
+        throw new Error('SUBMISSION_NOT_FOUND');
+      }
+
+      // 2. Kiểm tra xem đã có grade cho submission này chưa (lock row nếu có)
+      const gradeCheck = await client.query(
+        `SELECT id FROM grades WHERE submission_id = $1 AND school_id = $2 FOR UPDATE`,
+        [submission_id, school_id]
+      );
+
+      let savedGrade;
+      const rubricsJson = rubrics ? JSON.stringify(rubrics) : null;
+
+      if (gradeCheck.rows.length > 0) {
+        // Update grade
+        const updateGradeQuery = `
+          UPDATE grades
+          SET score = $1, max_score = $2, feedback = $3, rubrics = $4,
+              graded_by = $5, graded_at = NOW(), updated_at = NOW()
+          WHERE id = $6 AND school_id = $7
+          RETURNING *
+        `;
+        const { rows } = await client.query(updateGradeQuery, [
+          score, max_score, feedback ?? '', rubricsJson,
+          graded_by, gradeCheck.rows[0].id, school_id
+        ]);
+        savedGrade = rows[0];
+      } else {
+        // Insert grade
+        const insertGradeQuery = `
+          INSERT INTO grades
+            (school_id, submission_id, assignment_id, student_id, class_id,
+             score, max_score, feedback, graded_by, graded_at, rubrics, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10, NOW(), NOW())
+          RETURNING *
+        `;
+        const { rows } = await client.query(insertGradeQuery, [
+          school_id, submission_id, assignment_id, student_id, class_id,
+          score, max_score, feedback ?? '', graded_by, rubricsJson
+        ]);
+        savedGrade = rows[0];
+      }
+
+      // 3. Cập nhật submission status = 'graded', published_at = NOW(), final_score = score
+      await client.query(
+        `UPDATE submissions
+         SET status = 'graded',
+             published_at = NOW(),
+             final_score = $1,
+             updated_at = NOW()
+         WHERE id = $2 AND school_id = $3`,
+        [score, submission_id, school_id]
+      );
+
+      // 4. Cập nhật phiên bản bài nộp (submission_versions)
+      await client.query(
+        `UPDATE submission_versions
+         SET updated_at = NOW()
+         WHERE submission_id = $1 AND school_id = $2 AND is_latest = TRUE`,
+        [submission_id, school_id]
+      );
+
+      // 5. Cập nhật thống kê bài tập (graded_count trong assignments)
+      await client.query(
+        `UPDATE assignments
+         SET graded_count = (
+           SELECT COUNT(DISTINCT g.student_id)::int
+           FROM grades g
+           WHERE g.assignment_id = $1 AND g.school_id = $2
+         ),
+         updated_at = NOW()
+         WHERE id = $1 AND school_id = $2`,
+        [assignment_id, school_id]
+      );
+
+      await client.query('COMMIT');
+      return savedGrade;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 
   /**

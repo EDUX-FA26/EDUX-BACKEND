@@ -288,11 +288,11 @@ const SubmissionController = {
         });
       }
 
-      const result = await SubmissionService.getAssignmentSubmissions(assignmentId, req.query, req.tenant);
-      
-      const page = Number(req.query.page) || 1;
-      const limit = Number(req.query.limit) || 10;
+      const page = Math.max(Number(req.query.page) || 1, 1);
+      const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 1000);
 
+      const result = await SubmissionService.getAssignmentSubmissions(assignmentId, { ...req.query, page, limit }, req.tenant);
+      
       res.status(200).json({
         success: true,
         data: result.data,

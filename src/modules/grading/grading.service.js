@@ -142,6 +142,7 @@ const GradingService = {
    * Chỉ nhận submissionId từ frontend.
    * Backend tự lấy assignment_id, student_id, class_id, lecturer_id
    * từ DB thông qua submission JOIN theo school_id.
+   * Gom toàn bộ việc lưu điểm và trạng thái vào 1 Atomic Database Transaction.
    */
   async createGrade({ submissionId, score, maxScore, feedback, rubrics, reviewTopics }, tenant) {
     // 1. Lấy submission + context trong trường hiện tại
@@ -151,20 +152,17 @@ const GradingService = {
     // 2. Kiểm tra quyền (lecturer của class đó hoặc school_admin của trường)
     assertLecturer(tenant, submission.lecturer_id);
 
-    // 3. Kiểm tra chưa có grade -> nếu đã có thì tự động update thay vì báo lỗi
-    const existing = await GradingRepository.findBySubmissionId(submissionId, tenant.schoolId);
-    if (existing) {
-      return this.updateGrade(existing.id, { score, maxScore, feedback, rubrics, reviewTopics }, tenant);
-    }
-
-    // 4. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
+    // 3. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
     const resolvedMaxScore = maxScore ?? submission.assignment_max_score ?? 10;
 
-    // 5. Validate score <= max_score
+    // 4. Validate score <= max_score
     if (score > resolvedMaxScore) throw new Error('SCORE_EXCEEDS_MAX');
 
-    // 6. Tạo grade
-    const grade = await GradingRepository.create({
+    // 5. Gom toàn bộ thao tác Publish Grade vào 1 Database Transaction nguyên tử:
+    //    Lưu điểm (score, max_score, feedback, rubrics),
+    //    cập nhật trạng thái bài nộp (status = 'graded', published_at = NOW(), final_score = score),
+    //    cập nhật submission_version, và cập nhật graded_count trong assignments
+    const grade = await GradingRepository.saveGradeAndPublishAtomic({
       school_id: tenant.schoolId,
       submission_id: submissionId,
       assignment_id: submission.assignment_id,
@@ -177,10 +175,7 @@ const GradingService = {
       rubrics: rubrics ?? null,
     });
 
-    // 7. Cập nhật submission status → 'graded'
-    await GradingRepository.markSubmissionGraded(submissionId, tenant.schoolId);
-
-    // 8. Tự động lưu/duyệt danh sách review topics vào submission_review_topics
+    // 6. Tự động lưu/duyệt danh sách review topics vào submission_review_topics (chạy độc lập, không block điểm)
     try {
       if (Array.isArray(reviewTopics) && reviewTopics.length > 0) {
         await this.approveSubmissionReviewTopics(submissionId, { topics: reviewTopics }, tenant);
@@ -201,18 +196,36 @@ const GradingService = {
       console.warn('[createGrade] Auto-sync review topics notice:', syncErr.message);
     }
 
-    // 9. Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
-    try {
-      const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
-      ClassAiAdvisorService.generateAndSaveAdvisory(
-        submission.class_id,
-        {
-          id: submission.assignment_id,
-          title: submission.assignment_title || 'Bài tập'
-        },
-        tenant.schoolId
-      ).catch(e => console.warn('[createGrade] Background advisor snapshot generation failed:', e.message));
-    } catch (e) {}
+    // 7. TÁCH CÁC TÁC VỤ AI VÀ THÔNG BÁO CHẠY NGẦM HOÀN TOÀN KHỎI LUỒNG HTTP RESPONSE:
+    setImmediate(async () => {
+      try {
+        const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
+        await ClassAiAdvisorService.generateAndSaveAdvisory(
+          submission.class_id,
+          {
+            id: submission.assignment_id,
+            title: submission.assignment_title || 'Bài tập'
+          },
+          tenant.schoolId
+        );
+      } catch (e) {
+        console.warn('[createGrade] Background advisor snapshot generation failed:', e.message);
+      }
+    });
+
+    setImmediate(async () => {
+      try {
+        const notify = require('../../utils/notify');
+        await notify.gradePublished({
+          userId: submission.student_id,
+          assignmentTitle: submission.assignment_title || 'Bài tập',
+          score,
+          submissionId,
+        });
+      } catch (notifErr) {
+        console.warn('[createGrade] Background notification failed:', notifErr.message);
+      }
+    });
 
     return grade;
   },
@@ -227,22 +240,27 @@ const GradingService = {
     assertLecturer(tenant, grade.lecturer_id);
 
     // 3. Nếu đổi score, validate không vượt max_score
-    const effectiveMax = maxScore ?? grade.max_score;
+    const effectiveMax = maxScore ?? grade.max_score ?? 10;
     const effectiveScore = score ?? grade.score;
     if (effectiveScore > effectiveMax) throw new Error('SCORE_EXCEEDS_MAX');
 
-    // 4. Update
-    const updated = await GradingRepository.update(gradeId, tenant.schoolId, {
-      score: score,
-      max_score: maxScore,
-      feedback: feedback,
-      rubrics: rubrics,
+    // 4. Gom toàn bộ thao tác Update Grade vào 1 Database Transaction nguyên tử:
+    //    Cập nhật điểm, nhận xét, trạng thái bài nộp, version và graded_count
+    const updated = await GradingRepository.saveGradeAndPublishAtomic({
+      school_id: tenant.schoolId,
+      submission_id: grade.submission_id,
+      assignment_id: grade.assignment_id,
+      student_id: grade.student_id,
+      class_id: grade.class_id,
+      score: effectiveScore,
+      max_score: effectiveMax,
+      feedback: feedback !== undefined ? feedback : (grade.feedback ?? ''),
+      graded_by: tenant.userId,
+      rubrics: rubrics !== undefined ? rubrics : (grade.rubrics ?? null),
     });
 
+    // 5. Tự động lưu/duyệt danh sách review topics vào submission_review_topics
     if (grade.submission_id) {
-      await GradingRepository.markSubmissionGraded(grade.submission_id, tenant.schoolId);
-
-      // Tự động lưu/duyệt danh sách review topics vào submission_review_topics
       try {
         if (Array.isArray(reviewTopics) && reviewTopics.length > 0) {
           await this.approveSubmissionReviewTopics(grade.submission_id, { topics: reviewTopics }, tenant);
@@ -264,18 +282,36 @@ const GradingService = {
       }
     }
 
-    // Tự động kích hoạt tổng hợp dữ liệu và sinh snapshot AI Advisor trong nền (non-blocking)
-    try {
-      const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
-      ClassAiAdvisorService.generateAndSaveAdvisory(
-        grade.class_id,
-        {
-          id: grade.assignment_id,
-          title: grade.assignment_title || 'Bài tập'
-        },
-        tenant.schoolId
-      ).catch(e => console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message));
-    } catch (e) {}
+    // 6. TÁCH CÁC TÁC VỤ AI VÀ THÔNG BÁO CHẠY NGẦM HOÀN TOÀN KHỎI LUỒNG HTTP RESPONSE:
+    setImmediate(async () => {
+      try {
+        const ClassAiAdvisorService = require('../classes/classAiAdvisor.service');
+        await ClassAiAdvisorService.generateAndSaveAdvisory(
+          grade.class_id,
+          {
+            id: grade.assignment_id,
+            title: grade.assignment_title || 'Bài tập'
+          },
+          tenant.schoolId
+        );
+      } catch (e) {
+        console.warn('[updateGrade] Background advisor snapshot generation failed:', e.message);
+      }
+    });
+
+    setImmediate(async () => {
+      try {
+        const notify = require('../../utils/notify');
+        await notify.gradePublished({
+          userId: grade.student_id,
+          assignmentTitle: grade.assignment_title || 'Bài tập',
+          score: effectiveScore,
+          submissionId: grade.submission_id,
+        });
+      } catch (notifErr) {
+        console.warn('[updateGrade] Background notification failed:', notifErr.message);
+      }
+    });
 
     return updated;
   },
