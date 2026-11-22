@@ -1,3 +1,4 @@
+const path = require('path');
 const { pool } = require('../../config/db.config');
 const SubmissionRepository = require('./submission.repository');
 const AssignmentRepository = require('../assignments/assignment.repository');
@@ -8,6 +9,81 @@ const { v4: uuidv4 } = require('uuid');
 const { normalizeAuditData } = require('../../utils/aiAuditHelper');
 const { preSubmissionSanityCheckWithGemini } = require('../../config/gemini.config');
 const { decodeUtf8Filename, sanitizeStorageFilename, formatContentDisposition, getMimeType } = require('../../utils/file.util');
+
+const TEXT_CODE_EXTENSIONS = new Set([
+  'java', 'py', 'js', 'jsx', 'ts', 'tsx', 'c', 'cpp', 'cs', 'go', 'rs', 'php', 'rb',
+  'sql', 'html', 'css', 'json', 'xml', 'yaml', 'yml', 'md', 'txt', 'csv'
+]);
+
+function getLanguageFromFilename(fileName = '') {
+  const ext = (path.extname(fileName) || '').toLowerCase().replace('.', '');
+  const map = {
+    java: 'java',
+    py: 'python',
+    js: 'javascript',
+    jsx: 'javascript',
+    ts: 'typescript',
+    tsx: 'typescript',
+    c: 'c',
+    cpp: 'cpp',
+    cs: 'csharp',
+    go: 'go',
+    rs: 'rust',
+    php: 'php',
+    rb: 'ruby',
+    sql: 'sql',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    xml: 'xml',
+    yaml: 'yaml',
+    yml: 'yaml',
+    md: 'markdown',
+    txt: 'plaintext',
+    csv: 'csv',
+    docx: 'docx',
+    pdf: 'pdf',
+  };
+  return map[ext] || 'plaintext';
+}
+
+async function extractTextFromStorageKey(fileKey, fileName) {
+  if (!fileKey) return null;
+  const ext = (path.extname(fileName || fileKey) || '').toLowerCase().replace('.', '');
+  const isCodeOrText = TEXT_CODE_EXTENSIONS.has(ext);
+  const isDocx = ext === 'docx';
+  const isPdf = ext === 'pdf';
+
+  if (!isCodeOrText && !isDocx && !isPdf) return null;
+
+  const command = new GetObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: fileKey,
+  });
+  const res = await s3.send(command);
+  const chunks = [];
+  for await (const chunk of res.Body) {
+    chunks.push(chunk);
+  }
+  const buffer = Buffer.concat(chunks);
+
+  if (isDocx) {
+    try {
+      const AdmZip = require('adm-zip');
+      const zip = new AdmZip(buffer);
+      const docXml = zip.getEntry('word/document.xml');
+      if (docXml) {
+        const xml = docXml.getData().toString('utf-8');
+        return xml.replace(/<w:p[^>]*>/g, '\n').replace(/<[^>]+>/g, '').trim();
+      }
+    } catch (err) {
+      console.warn('[extractTextFromStorageKey] docx extraction failed:', err.message);
+    }
+  }
+
+  // Standard text/code file: decode utf-8
+  return buffer.toString('utf-8');
+}
 
 /**
  * Kiểm tra bài nộp đã được chấm điểm chính thức hay chưa.
@@ -478,6 +554,35 @@ const SubmissionService = {
           } catch (e) {}
         }
       });
+
+      // Tự động trích xuất nội dung text cho file mã nguồn / tài liệu < 2MB của phiên bản mới nhất
+      if (submission.versions.length > 0 && submission.versions[0].files) {
+        try {
+          const latestFiles = typeof submission.versions[0].files === 'string'
+            ? JSON.parse(submission.versions[0].files)
+            : submission.versions[0].files;
+          if (Array.isArray(latestFiles) && latestFiles.length > 0) {
+            const firstFile = latestFiles[0];
+            const cleanName = decodeUtf8Filename(firstFile.name || firstFile.filename || '');
+            const ext = (path.extname(cleanName) || '').toLowerCase().replace('.', '');
+            const isTextOrCode = TEXT_CODE_EXTENSIONS.has(ext);
+            const fileSize = Number(firstFile.size) || 0;
+            if (isTextOrCode && firstFile.key && (fileSize === 0 || fileSize < 2 * 1024 * 1024)) {
+              try {
+                const textContent = await extractTextFromStorageKey(firstFile.key, cleanName);
+                if (textContent !== null) {
+                  firstFile.textContent = textContent;
+                  submission.fileTextContent = textContent;
+                  submission.file_text_content = textContent;
+                  submission.versions[0].files = latestFiles;
+                }
+              } catch (e) {
+                // Non-blocking fallback
+              }
+            }
+          }
+        } catch (e) {}
+      }
     }
 
     // Phân quyền
@@ -592,6 +697,71 @@ const SubmissionService = {
       file_name: cleanFileName,
       file_type: foundFile.type,
       file_size: foundFile.size,
+    };
+  },
+
+  /**
+   * Đọc nội dung text của file nộp từ SeaweedFS/S3 trực tiếp (proxy tránh CORS, UTF-8 decode)
+   */
+  async getSubmissionFileContent(submissionId, fileId, tenant) {
+    const submission = await SubmissionRepository.findById(submissionId, true, tenant.schoolId);
+    if (!submission) throw new Error('SUBMISSION_NOT_FOUND');
+
+    if (tenant.role === 'student' && submission.student_id !== tenant.userId) {
+      throw new Error('FORBIDDEN');
+    }
+
+    if (tenant.role === 'lecturer' || tenant.role === 'school_admin') {
+      if (submission.status === 'draft') {
+        throw new Error('SUBMISSION_NOT_FOUND');
+      }
+      if (tenant.role === 'lecturer') {
+        const assignment = await AssignmentRepository.findById(submission.assignment_id, tenant.schoolId);
+        if (!assignment || assignment.lecturer_id !== tenant.userId) {
+          throw new Error('FORBIDDEN');
+        }
+      }
+    } else if (tenant.role !== 'student') {
+      throw new Error('FORBIDDEN');
+    }
+
+    // Tìm file trong toàn bộ versions
+    let foundFile = null;
+    if (fileId) {
+      for (const version of (submission.versions || [])) {
+        const files = typeof version.files === 'string' ? JSON.parse(version.files) : version.files;
+        const f = Array.isArray(files) ? files.find(x => x.id === fileId) : null;
+        if (f) {
+          foundFile = f;
+          break;
+        }
+      }
+    } else if (submission.versions && submission.versions.length > 0) {
+      // Nếu không chỉ định fileId, lấy file code/text đầu tiên của version mới nhất
+      const latestVer = submission.versions[0];
+      const files = typeof latestVer.files === 'string' ? JSON.parse(latestVer.files) : latestVer.files;
+      if (Array.isArray(files) && files.length > 0) {
+        foundFile = files.find(f => {
+          const ext = (path.extname(f.name || f.filename || '') || '').toLowerCase().replace('.', '');
+          return TEXT_CODE_EXTENSIONS.has(ext);
+        }) || files[0];
+      }
+    }
+
+    if (!foundFile || !foundFile.key) throw new Error('FILE_NOT_FOUND');
+
+    const cleanFileName = decodeUtf8Filename(foundFile.name || foundFile.filename || 'file');
+    const textContent = await extractTextFromStorageKey(foundFile.key, cleanFileName);
+
+    if (textContent === null) {
+      throw new Error('UNSUPPORTED_FILE_TYPE');
+    }
+
+    return {
+      content: textContent,
+      language: getLanguageFromFilename(cleanFileName),
+      fileName: cleanFileName,
+      size: foundFile.size || textContent.length,
     };
   },
 

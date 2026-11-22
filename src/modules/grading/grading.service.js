@@ -131,6 +131,87 @@ async function extractSubmissionFiles(filesList) {
     }
   }
 
+  // Nếu không có file ZIP, kiểm tra danh sách file code / text đơn lẻ (ví dụ OrderService.java, .py, .js, .txt, .md, .docx...)
+  const CODE_DOC_REGEX = /\.(java|py|js|ts|tsx|jsx|c|cpp|cs|go|rs|php|rb|html|css|json|md|txt|sql|xml|yaml|yml|docx)$/i;
+  const standaloneFiles = (filesList || []).filter(f => 
+    CODE_DOC_REGEX.test(f.name || f.filename || f.key || '') && f.key
+  );
+
+  if (standaloneFiles.length > 0) {
+    try {
+      const fileTree = [];
+      const codeContents = [];
+
+      for (const f of standaloneFiles) {
+        const fileName = f.name || f.filename || f.key;
+        try {
+          const command = new GetObjectCommand({ Bucket: S3_BUCKET, Key: f.key });
+          const res = await s3.send(command);
+          const chunks = [];
+          for await (const chunk of res.Body) {
+            chunks.push(chunk);
+          }
+          const buffer = Buffer.concat(chunks);
+          let text = '';
+          if (fileName.toLowerCase().endsWith('.docx')) {
+            try {
+              const zip = new AdmZip(buffer);
+              const docXml = zip.getEntry('word/document.xml');
+              if (docXml) {
+                text = docXml.getData().toString('utf-8').replace(/<w:p[^>]*>/g, '\n').replace(/<[^>]+>/g, '').trim();
+              }
+            } catch (e) {}
+          } else {
+            text = buffer.toString('utf-8');
+          }
+
+          if (text) {
+            fileTree.push({
+              path: fileName,
+              size: buffer.length
+            });
+
+            const imports = [];
+            const classes = [];
+            const functions = [];
+
+            text.split('\n').forEach(line => {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('import ') || trimmed.startsWith('from ') || trimmed.startsWith('package ')) {
+                imports.push(trimmed);
+              }
+              const classMatch = trimmed.match(/^(?:public\s+|protected\s+|private\s+)?(?:abstract\s+|final\s+)?class\s+([A-Za-z0-9_]+)/) ||
+                                 trimmed.match(/^(?:export\s+)?class\s+([A-Za-z0-9_]+)/);
+              if (classMatch) classes.push(classMatch[1]);
+              const funcMatch = trimmed.match(/(?:public|protected|private|static|\s)+[\w<>\[\]]+\s+([A-Za-z0-9_]+)\s*\([^)]*\)\s*\{?/) ||
+                                trimmed.match(/^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*\(/) ||
+                                trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(/);
+              if (funcMatch) functions.push(funcMatch[1]);
+            });
+
+            codeContents.push({
+              path: fileName,
+              size: buffer.length,
+              imports: imports.slice(0, 20),
+              classes: classes.slice(0, 15),
+              functions: functions.slice(0, 25),
+              sampleContent: text.slice(0, 8000),
+              fullContent: text
+            });
+          }
+        } catch (fErr) {
+          console.warn(`[extractSubmissionFiles] Lỗi đọc file ${fileName}:`, fErr.message);
+        }
+      }
+
+      if (codeContents.length > 0) {
+        return { fileTree, codeContents, gitHistory: null };
+      }
+    } catch (err) {
+      console.warn('Lỗi đọc các file đơn lẻ của bài nộp:', err.message);
+    }
+  }
+
   return null;
 }
 
@@ -155,8 +236,8 @@ const GradingService = {
     // 3. max_score: ưu tiên dùng giá trị gửi lên, fallback về assignment.max_score
     const resolvedMaxScore = maxScore ?? submission.assignment_max_score ?? 10;
 
-    // 4. Validate score <= max_score
-    if (score > resolvedMaxScore) throw new Error('SCORE_EXCEEDS_MAX');
+    // 4. Validate và khóa trần điểm tuyệt đối trong khoảng [0, max_score]
+    const clampedScore = Math.min(resolvedMaxScore, Math.max(0, Number(Number(score || 0).toFixed(2))));
 
     // 5. Gom toàn bộ thao tác Publish Grade vào 1 Database Transaction nguyên tử:
     //    Lưu điểm (score, max_score, feedback, rubrics),
@@ -168,7 +249,7 @@ const GradingService = {
       assignment_id: submission.assignment_id,
       student_id: submission.student_id,
       class_id: submission.class_id,
-      score,
+      score: clampedScore,
       max_score: resolvedMaxScore,
       feedback: feedback ?? '',
       graded_by: tenant.userId,
@@ -239,10 +320,9 @@ const GradingService = {
     // 2. Kiểm tra quyền
     assertLecturer(tenant, grade.lecturer_id);
 
-    // 3. Nếu đổi score, validate không vượt max_score
+    // 3. Nếu đổi score, validate và khóa trần không vượt max_score
     const effectiveMax = maxScore ?? grade.max_score ?? 10;
-    const effectiveScore = score ?? grade.score;
-    if (effectiveScore > effectiveMax) throw new Error('SCORE_EXCEEDS_MAX');
+    const effectiveScore = score !== undefined ? Math.min(effectiveMax, Math.max(0, Number(Number(score).toFixed(2)))) : grade.score;
 
     // 4. Gom toàn bộ thao tác Update Grade vào 1 Database Transaction nguyên tử:
     //    Cập nhật điểm, nhận xét, trạng thái bài nộp, version và graded_count
@@ -558,22 +638,44 @@ const GradingService = {
         ? filesList.map((f, i) => `- Tệp ${i + 1}: ${f.name || f.filename || 'Tập tin'} (${f.size || 0} bytes)`).join('\n')
         : 'Không tìm thấy tệp đính kèm.';
 
+      const clientCode = clientContext.fileTextContent || clientContext.codeSnippet;
       sourceCode = [
         `[DANH SÁCH TẬP TIN]:`,
         filesDescription,
         '',
         `[MÃ NGUỒN]:`,
-        clientContext.codeSnippet || 'Mã nguồn đã được gửi qua client editor.'
+        clientCode || 'Mã nguồn đã được gửi qua client editor.'
       ].join('\n');
 
       gitHistoryStr = 'Không tìm thấy thư mục .git trong bài nộp.';
     }
 
-    // Kiểm tra cờ Cam kết không dùng AI (Zero-AI / 100% tự thực hiện)
+    // Chặn chấm ảo (Hallucination Guardrail): Nếu cả file trong storage và text client đều rỗng -> Báo lỗi, không cho AI bịa điểm
+    const hasExtractedCode = Boolean(extractedData && extractedData.codeContents && extractedData.codeContents.length > 0);
+    const hasClientCode = Boolean(
+      (clientContext.fileTextContent && clientContext.fileTextContent.trim().length > 15) ||
+      (clientContext.codeSnippet && clientContext.codeSnippet.trim().length > 15 && !clientContext.codeSnippet.includes('Mã nguồn đã được gửi qua client editor'))
+    );
+
+    if (!hasExtractedCode && !hasClientCode) {
+      throw new Error('Không đọc được nội dung tệp bài nộp để AI đánh giá, vui lòng kiểm tra tệp hoặc chấm thủ công');
+    }
+
+    // Kiểm tra cờ Cam kết không dùng AI (Zero-AI / 100% tự thực hiện) hoặc không có bản ghi khai báo AI nào
     const normalizedAudit = normalizeAuditData(
       auditData.latestVersion?.note ||
       clientContext.aiAuditData ||
       clientContext.aiDeclarations
+    );
+
+    const scopes = normalizedAudit?.scopes || [];
+    const hasDeclaredAnyAi = Boolean(
+      (scopes.length > 0 && scopes.some(s => {
+        const decs = s.declarations || {};
+        return Object.values(decs).some(d => (d?.prompt || d?.prompt_used || d?.reflection || '').trim().length > 0);
+      })) ||
+      (Array.isArray(auditData.aiInteractions) && auditData.aiInteractions.length > 0) ||
+      (Array.isArray(clientContext.aiDeclarations) && clientContext.aiDeclarations.some(d => (d?.prompt || d?.studentReflection || '').trim().length > 0))
     );
 
     const isNoAiUsed = Boolean(
@@ -582,7 +684,8 @@ const GradingService = {
       auditData.submission?.noAiUsed === true ||
       clientContext.no_ai_used === true ||
       clientContext.noAiUsed === true ||
-      (normalizedAudit && (normalizedAudit.no_ai_used === true || normalizedAudit.noAiUsed === true))
+      (normalizedAudit && (normalizedAudit.no_ai_used === true || normalizedAudit.noAiUsed === true)) ||
+      !hasDeclaredAnyAi
     );
     const noAiNote =
       auditData.submission?.no_ai_note ||
@@ -603,10 +706,11 @@ const GradingService = {
 
     if (isNoAiUsed) {
       aiAuditSummary = `[CAM KẾT LIÊM CHÍNH HỌC THUẬT: ZERO-AI / TỰ THỰC HIỆN 100%]:
-Sinh viên cam kết tự thực hiện 100% bài làm mà không sử dụng bất kỳ công cụ AI hỗ trợ nào.
-${noAiNote ? `Ghi chú tiến trình / phương pháp tự thực hiện của sinh viên: "${noAiNote}".` : 'Sinh viên không để lại ghi chú thêm.'}
+Sinh viên cam kết tự thực hiện 100% bài làm mà không sử dụng bất kỳ công cụ AI hỗ trợ nào. Không có nhật ký tương tác AI để đánh giá quá trình prompt.
+${noAiNote ? `Ghi chú tiến trình / phương pháp tự thực hiện của sinh viên: "${noAiNote}".` : 'Sinh viên tự nghiên cứu và hoàn thành mã nguồn.'}
 Chế độ thẩm định: Kích hoạt Code Ownership Verification (Kiểm tra quyền tác giả mã nguồn độc lập).
-Sinh 3–5 câu hỏi vấn đáp Viva để giảng viên phỏng vấn kiểm tra mức độ nắm vững cấu trúc giải thuật, kiến trúc hàm, luồng dữ liệu, xử lý ngoại lệ và ca biên của code.`;
+Tập trung phân tích trực tiếp nội dung bài nộp đối chiếu với yêu cầu đề bài (tính đúng đắn kỹ thuật, cấu trúc OOP, xử lý ngoại lệ, mức độ hoàn thiện) để đề xuất điểm số công bằng trên thang 10.
+Sinh 3–5 câu hỏi vấn đáp Viva để giảng viên phỏng vấn kiểm tra mức độ nắm vững cấu trúc giải thuật, kiến trúc hàm, luồng dữ liệu, xử lý ngoại lệ và ca biên của code trước khi chốt điểm chính thức.`;
     } else if (isAiRequired) {
       const scopes = normalizedAudit?.scopes || [];
 
