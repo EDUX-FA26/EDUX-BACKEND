@@ -122,12 +122,19 @@ class AuthService {
 
     const emailDomain = profile.email.split("@").pop().toLowerCase();
     const workspaceDomain = profile.hd?.toLowerCase();
-    if (
-      !workspaceDomain ||
-      !allowedDomains.includes(workspaceDomain) ||
-      !allowedDomains.includes(emailDomain)
-    ) {
-      const error = new Error("Chỉ tài khoản Google Workspace do nhà trường cấp mới được đăng nhập");
+
+    const isAllowedWorkspace =
+      !!workspaceDomain &&
+      allowedDomains.includes(workspaceDomain) &&
+      allowedDomains.includes(emailDomain);
+
+    const isPersonalGmail =
+      emailDomain === "gmail.com" && !workspaceDomain;
+
+    if (!isAllowedWorkspace && !isPersonalGmail) {
+      const error = new Error(
+        "Tài khoản Google không được phép đăng nhập"
+      );
       error.status = 403;
       throw error;
     }
